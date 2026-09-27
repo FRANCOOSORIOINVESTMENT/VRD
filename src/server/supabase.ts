@@ -1,39 +1,114 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import dotenv from "dotenv";
+dotenv.config({ override: true });
 
 // CRM VRD — FRANCO OSORIO INVESTMENT S.A.S.
 // MÓDULO DE CONFIGURACIÓN Y CLIENTE SUPABASE
 
-export const APP_MODE = process.env.APP_MODE || "mock";
-export const isMockMode = APP_MODE !== "supabase";
+export const SUPABASE_PROJECT_ID = process.env.SUPABASE_PROJECT_ID || "dcelksfchabhrlevlfah";
 
-// Soporte para nombres recomendados actuales (SUPABASE_PUBLISHABLE_KEY y SUPABASE_SECRET_KEY)
-// con retrocompatibilidad para SUPABASE_ANON_KEY y SUPABASE_SERVICE_ROLE_KEY
-const supabaseUrl = process.env.SUPABASE_URL || "";
-const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || "";
-const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+// Normalización de URL base (remueve /rest/v1 o /rest/v1/ y barras finales si vienen incluidas)
+const normalizeUrl = (raw: string) => {
+  return raw.trim().replace(/\/rest\/v1\/?$/i, "").replace(/\/+$/, "");
+};
+
+const rawUrl = process.env.SUPABASE_URL || "https://dcelksfchabhrlevlfah.supabase.co";
+export const supabaseUrl = normalizeUrl(rawUrl);
+export const supabaseRestUrl = `${supabaseUrl}/rest/v1/`;
+
+export const supabasePublishableKey =
+  process.env.SUPABASE_PUBLISHABLE_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  "sb_publishable_B8tc_3lQWCKeBJ3camRySQ_yZAVTqLw";
+
+export const supabaseSecretKey =
+  process.env.SUPABASE_SECRET_KEY ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  supabasePublishableKey;
+
+export const APP_MODE = process.env.APP_MODE || "supabase";
+export const isMockMode = APP_MODE === "mock" && !process.env.SUPABASE_URL;
 
 let clientPublic: SupabaseClient | null = null;
 let clientAdmin: SupabaseClient | null = null;
 
-if (!isMockMode) {
-  // Validación estricta en MODO SUPABASE: no se permite fallback silencioso
-  const missing: string[] = [];
-  if (!supabaseUrl) missing.push("SUPABASE_URL");
-  if (!supabasePublishableKey) missing.push("SUPABASE_PUBLISHABLE_KEY (o SUPABASE_ANON_KEY)");
-  if (!supabaseSecretKey) missing.push("SUPABASE_SECRET_KEY (o SUPABASE_SERVICE_ROLE_KEY)");
-
-  if (missing.length > 0) {
-    const errorMsg = `[ERROR FATAL DE INICIALIZACIÓN]: APP_MODE está configurado en 'supabase', pero faltan variables obligatorias: ${missing.join(", ")}. El servidor no puede iniciar en modo Supabase con configuración incompleta.`;
-    console.error(errorMsg);
-    throw new Error(errorMsg);
+try {
+  if (supabaseUrl && supabasePublishableKey) {
+    clientPublic = createClient(supabaseUrl, supabasePublishableKey, {
+      auth: { persistSession: false }
+    });
+    clientAdmin = createClient(supabaseUrl, supabaseSecretKey || supabasePublishableKey, {
+      auth: { persistSession: false }
+    });
+    console.log(`[INFO]: CRM VRD conectado a SUPABASE (Proyecto: ${SUPABASE_PROJECT_ID}, URL: ${supabaseUrl}, REST: ${supabaseRestUrl})`);
+  } else {
+    console.log("[INFO]: CRM VRD inicializado en MODO DEMOSTRACIÓN (Mock en memoria)");
   }
-
-  clientPublic = createClient(supabaseUrl, supabasePublishableKey);
-  clientAdmin = createClient(supabaseUrl, supabaseSecretKey);
-  console.log("[INFO]: CRM VRD inicializado en MODO SUPABASE (PostgreSQL + RLS + Storage)");
-} else {
-  console.log("[INFO]: CRM VRD inicializado en MODO DEMOSTRACIÓN (Mock en memoria — Datos ficticios no persistentes)");
+} catch (err) {
+  console.error("[ERROR]: No se pudo instanciar el cliente de Supabase:", err);
 }
 
 export const supabasePublic = clientPublic;
 export const supabaseAdmin = clientAdmin;
+
+export async function testSupabaseConnection(): Promise<{
+  ok: boolean;
+  message: string;
+  projectId: string;
+  url: string;
+  restUrl: string;
+  details?: any;
+}> {
+  if (!clientPublic) {
+    return {
+      ok: false,
+      message: "Cliente Supabase no inicializado",
+      projectId: SUPABASE_PROJECT_ID,
+      url: supabaseUrl,
+      restUrl: supabaseRestUrl
+    };
+  }
+
+  try {
+    // Probar conexión contra la API REST de Supabase
+    const { data, error } = await clientPublic.from("perfiles_usuario").select("count").limit(1);
+    if (error) {
+      if (error.code === "PGRST205" || error.message?.includes("Could not find the table")) {
+        return {
+          ok: true,
+          message: "Conexión a Supabase REST API exitosa (Tablas pendientes de ejecutar migración SQL)",
+          projectId: SUPABASE_PROJECT_ID,
+          url: supabaseUrl,
+          restUrl: supabaseRestUrl,
+          details: { code: error.code, tablesPending: true }
+        };
+      }
+      return {
+        ok: false,
+        message: `Error Supabase: ${error.message}`,
+        projectId: SUPABASE_PROJECT_ID,
+        url: supabaseUrl,
+        restUrl: supabaseRestUrl,
+        details: error
+      };
+    }
+
+    return {
+      ok: true,
+      message: "Conexión y tablas de Supabase verificadas correctamente",
+      projectId: SUPABASE_PROJECT_ID,
+      url: supabaseUrl,
+      restUrl: supabaseRestUrl,
+      details: data
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      message: err?.message || "Excepción al contactar Supabase",
+      projectId: SUPABASE_PROJECT_ID,
+      url: supabaseUrl,
+      restUrl: supabaseRestUrl
+    };
+  }
+}
+

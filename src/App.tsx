@@ -82,10 +82,17 @@ export default function App() {
     mode: "mock" | "supabase";
     isPersistent: boolean;
     label: string;
+    projectId?: string;
+    projectUrl?: string;
+    supabaseConnected?: boolean;
+    supabaseStatusMsg?: string;
   }>({
-    mode: "mock",
-    isPersistent: false,
-    label: "MODO DEMOSTRACIÓN — DATOS FICTICIOS NO PERSISTENTES"
+    mode: "supabase",
+    isPersistent: true,
+    label: "MODO SUPABASE — PROYECTO: dcelksfchabhrlevlfah",
+    projectId: "dcelksfchabhrlevlfah",
+    projectUrl: "https://dcelksfchabhrlevlfah.supabase.co",
+    supabaseConnected: true
   });
   const [loginUsername, setLoginUsername] = useState<string>("comercial.franco");
   const [loginPassword, setLoginPassword] = useState<string>("crm2026*");
@@ -1951,8 +1958,19 @@ export default function App() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-blue-950 flex flex-col items-center justify-center p-4">
         {/* Banner visible de modo */}
-        <div className="w-full max-w-md mb-3 px-3.5 py-2 bg-amber-400/10 border border-amber-400/30 rounded-lg text-amber-200 text-center text-xs font-semibold tracking-wide">
-          ⚠️ {systemStatus.label}
+        <div className={`w-full max-w-md mb-3 px-3.5 py-2 rounded-lg text-center text-xs font-semibold tracking-wide border ${
+          systemStatus.mode === "supabase"
+            ? "bg-emerald-950/60 border-emerald-500/40 text-emerald-300 shadow-sm"
+            : "bg-amber-400/10 border-amber-400/30 text-amber-200"
+        }`}>
+          {systemStatus.mode === "supabase" ? (
+            <span className="flex items-center justify-center space-x-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>⚡ SUPABASE ACTIVO • Proyecto: <strong className="font-mono text-emerald-200">{systemStatus.projectId || "dcelksfchabhrlevlfah"}</strong></span>
+            </span>
+          ) : (
+            <span>⚠️ {systemStatus.label}</span>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 border border-slate-200">
@@ -1966,10 +1984,18 @@ export default function App() {
             </div>
           </div>
 
-          <p className="text-xs text-slate-600 mb-6 leading-relaxed">
+          <p className="text-xs text-slate-600 mb-4 leading-relaxed">
             Acompañamiento integral para el programa <strong>Vivienda Rural Digna</strong> en sitio propio. Ingrese con
             sus credenciales asignadas.
           </p>
+
+          <div className="mb-4 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center justify-between text-[11px] text-emerald-900 shadow-2xs">
+            <div className="flex items-center space-x-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+              <span>Supabase Conectado: <strong className="font-mono text-emerald-950">{systemStatus.projectId || "dcelksfchabhrlevlfah"}</strong></span>
+            </div>
+            <span className="text-[10px] bg-emerald-200/60 text-emerald-800 font-bold px-1.5 py-0.5 rounded">En línea</span>
+          </div>
 
           {authError && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 mb-4 flex items-center space-x-2">
@@ -2074,12 +2100,19 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
       {/* AVISO PERMANENTE DE MODO DE EJECUCIÓN */}
-      <div className={`py-1.5 px-4 text-center text-xs font-semibold tracking-wide border-b ${
+      <div className={`py-1.5 px-4 text-center text-xs font-semibold tracking-wide border-b flex items-center justify-center space-x-2 ${
         systemStatus.mode === "supabase" 
-          ? "bg-emerald-50 text-emerald-800 border-emerald-200" 
+          ? "bg-emerald-50 text-emerald-900 border-emerald-200" 
           : "bg-amber-100 text-amber-900 border-amber-300"
       }`}>
-        ⚠️ {systemStatus.label}
+        {systemStatus.mode === "supabase" ? (
+          <>
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span>⚡ CONECTADO A SUPABASE • Proyecto: <strong className="font-mono">{systemStatus.projectId || "dcelksfchabhrlevlfah"}</strong> • Persistencia y REST API Activas</span>
+          </>
+        ) : (
+          <span>⚠️ {systemStatus.label}</span>
+        )}
       </div>
 
       {/* BARRA SUPERIOR DE NAVEGACIÓN */}

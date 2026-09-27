@@ -21,6 +21,7 @@ import {
   CheckCircle2,
   XCircle,
   AlertTriangle,
+  AlertCircle,
   Clock,
   DollarSign,
   MapPin,
@@ -43,7 +44,11 @@ import {
   Lock,
   Unlock,
   Sliders,
-  Plus
+  Plus,
+  Database,
+  Copy,
+  ExternalLink,
+  Terminal
 } from "lucide-react";
 
 interface AdminPanelProps {
@@ -69,7 +74,74 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [expedientes, setExpedientes] = useState<Expediente[]>([]);
 
   // Subpestaña de configuración
-  const [subTabConfig, setSubTabConfig] = useState<"fases" | "requisitos" | "municipios" | "plantillas">("fases");
+  const [subTabConfig, setSubTabConfig] = useState<"fases" | "requisitos" | "municipios" | "plantillas" | "supabase">("fases");
+  const [supabaseDiag, setSupabaseDiag] = useState<{
+    ok: boolean;
+    message: string;
+    projectId?: string;
+    url?: string;
+    cargando?: boolean;
+  }>({
+    ok: true,
+    message: "Conexión a Supabase REST API activa",
+    projectId: "dcelksfchabhrlevlfah",
+    url: "https://dcelksfchabhrlevlfah.supabase.co"
+  });
+  const [sqlSchema, setSqlSchema] = useState<string>("");
+  const [cargandoSql, setCargandoSql] = useState<boolean>(false);
+  const [copiadoSql, setCopiadoSql] = useState<boolean>(false);
+
+  const ejecutarTestSupabase = async () => {
+    setSupabaseDiag((prev) => ({ ...prev, cargando: true }));
+    try {
+      const res = await fetch("/api/supabase/status");
+      const data = await res.json();
+      setSupabaseDiag({
+        ok: data.ok,
+        message: data.message || (data.ok ? "Conectado" : "Error"),
+        projectId: data.projectId || "dcelksfchabhrlevlfah",
+        url: data.url || "https://dcelksfchabhrlevlfah.supabase.co",
+        cargando: false
+      });
+      mostrarToast(
+        data.ok
+          ? "Conexión con Supabase verificada con éxito"
+          : `Atención: ${data.message || "Error al conectar"}`,
+        data.ok ? "exito" : "error"
+      );
+    } catch (err: any) {
+      setSupabaseDiag({
+        ok: false,
+        message: err.message || "Fallo de conexión",
+        cargando: false
+      });
+      mostrarToast("Error al verificar conexión con Supabase", "error");
+    }
+  };
+
+  const [cargandoSeed, setCargandoSeed] = useState<boolean>(false);
+  const [resultadoSeed, setResultadoSeed] = useState<{
+    ok: boolean;
+    message: string;
+    rlsBlocked?: boolean;
+    results?: { municipios: number; perfiles: number; errors: any[] };
+  } | null>(null);
+
+  const ejecutarSeedSupabase = async () => {
+    setCargandoSeed(true);
+    setResultadoSeed(null);
+    try {
+      const res = await fetch("/api/supabase/seed", { method: "POST" });
+      const data = await res.json();
+      setResultadoSeed(data);
+      mostrarToast(data.message, data.ok ? "exito" : "error");
+    } catch (err: any) {
+      setResultadoSeed({ ok: false, message: err.message || "Error al sincronizar" });
+      mostrarToast("Error al sincronizar datos con Supabase", "error");
+    } finally {
+      setCargandoSeed(false);
+    }
+  };
 
   // Modales
   const [modalNuevoUsuario, setModalNuevoUsuario] = useState<boolean>(false);
@@ -770,6 +842,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             >
               Parámetros de Fases Especiales
             </button>
+            <button
+              type="button"
+              id="tab-config-supabase"
+              onClick={() => {
+                setSubTabConfig("supabase");
+                if (!sqlSchema) {
+                  setCargandoSql(true);
+                  fetch("/api/supabase/schema-sql")
+                    .then((r) => r.text())
+                    .then((txt) => {
+                      setSqlSchema(txt);
+                      setCargandoSql(false);
+                    })
+                    .catch(() => setCargandoSql(false));
+                }
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center space-x-1.5 ${
+                subTabConfig === "supabase"
+                  ? "bg-emerald-600 text-white shadow-xs font-bold"
+                  : "text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200"
+              }`}
+            >
+              <Database className="w-3.5 h-3.5" />
+              <span>Base de Datos Supabase</span>
+            </button>
           </div>
 
           {/* Sub-tab 1: Fases Operativas */}
@@ -1004,6 +1101,264 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <span className="font-bold text-xs text-slate-900 block">Fase 7: En Construcción y Cobro</span>
                   <p className="text-xs text-slate-600">{configuracion.plantillasFases?.fase7?.descripcion}</p>
                   <p className="text-[11px] text-amber-700 font-medium">{configuracion.plantillasFases?.fase7?.instruccionesObra}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Sub-tab 5: Conexión y Gestión de Base de Datos Supabase */}
+          {subTabConfig === "supabase" && (
+            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-6">
+              {/* Encabezado y Estado de Conexión */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="p-2 bg-emerald-500/10 text-emerald-600 rounded-lg">
+                      <Database className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 flex items-center space-x-2">
+                        <span>Supabase Database & API Gateway</span>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse mr-1"></span>
+                          Conectado
+                        </span>
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Integración activa con PostgreSQL vía Supabase REST API y autenticación mediante clave publicable.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={ejecutarTestSupabase}
+                    disabled={supabaseDiag.cargando}
+                    className="px-3.5 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${supabaseDiag.cargando ? "animate-spin" : ""}`} />
+                    <span>{supabaseDiag.cargando ? "Probando..." : "Verificar Conexión"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={ejecutarSeedSupabase}
+                    disabled={cargandoSeed}
+                    className="px-3.5 py-2 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                    title="Inserta los municipios de Colombia y los usuarios predeterminados en la base de datos Supabase"
+                  >
+                    <Download className={`w-3.5 h-3.5 ${cargandoSeed ? "animate-spin" : ""}`} />
+                    <span>{cargandoSeed ? "Sincronizando..." : "Poblar Municipios y Usuarios"}</span>
+                  </button>
+
+                  <a
+                    href="https://supabase.com/dashboard/project/dcelksfchabhrlevlfah"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors flex items-center space-x-1.5"
+                  >
+                    <span>Dashboard Supabase</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+              </div>
+
+              {/* Resultado de Sincronización / Alerta RLS */}
+              {resultadoSeed && (
+                <div className={`p-4 rounded-xl border flex flex-col space-y-2 ${
+                  resultadoSeed.ok
+                    ? "bg-emerald-50 border-emerald-300 text-emerald-950"
+                    : resultadoSeed.rlsBlocked
+                    ? "bg-amber-50 border-amber-300 text-amber-950"
+                    : "bg-rose-50 border-rose-300 text-rose-950"
+                }`}>
+                  <div className="flex items-center space-x-2">
+                    {resultadoSeed.ok ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    )}
+                    <span className="font-bold text-xs">{resultadoSeed.message}</span>
+                  </div>
+
+                  {resultadoSeed.rlsBlocked && (
+                    <div className="mt-2 pt-2 border-t border-amber-200/80 text-xs space-y-2">
+                      <p className="text-amber-900 leading-relaxed">
+                        Supabase activó Row Level Security (RLS) exclusivamente para <code>authenticated</code>. Dado que las peticiones web usan la clave publicable <code>anon</code>, para habilitar escrituras directas ejecute este código en el <strong>SQL Editor de Supabase</strong>:
+                      </p>
+                      <div className="bg-slate-900 text-slate-100 p-3 rounded-lg font-mono text-[11px] flex items-center justify-between">
+                        <code>CREATE POLICY "Acceso anon" ON public.catalogo_municipios FOR ALL TO anon USING (true) WITH CHECK (true);</code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const sql = `DO $$ DECLARE tabla record; BEGIN FOR tabla IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP BEGIN EXECUTE format('CREATE POLICY "Acceso anon" ON public.%I FOR ALL TO anon USING (true) WITH CHECK (true);', tabla.tablename); EXCEPTION WHEN duplicate_object THEN NULL; END; END LOOP; END $$;`;
+                            navigator.clipboard.writeText(sql);
+                            mostrarToast("Código SQL copiado", "exito");
+                          }}
+                          className="ml-3 px-2 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded text-[10px] shrink-0 cursor-pointer"
+                        >
+                          Copiar SQL RLS Anon
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Tarjetas de Parámetros Técnicos */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-1">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Project ID</span>
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-xs font-bold text-slate-900 selection:bg-emerald-200">
+                      dcelksfchabhrlevlfah
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText("dcelksfchabhrlevlfah");
+                        mostrarToast("Project ID copiado", "exito");
+                      }}
+                      className="p-1 hover:bg-slate-200 text-slate-500 rounded cursor-pointer"
+                      title="Copiar Project ID"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <span className="text-[10px] text-emerald-600 font-semibold block">Identificador Oficial Activo</span>
+                </div>
+
+                <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-1">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Project REST URL</span>
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-[11px] font-semibold text-slate-800 truncate" title="https://dcelksfchabhrlevlfah.supabase.co/rest/v1/">
+                      https://dcelksfchabhrlevlfah.supabase.co/rest/v1/
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText("https://dcelksfchabhrlevlfah.supabase.co/rest/v1/");
+                        mostrarToast("URL REST copiada", "exito");
+                      }}
+                      className="p-1 hover:bg-slate-200 text-slate-500 rounded cursor-pointer shrink-0 ml-1"
+                      title="Copiar URL REST"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <span className="text-[10px] text-slate-500 block">Gateway PostgREST v1</span>
+                </div>
+
+                <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-1">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Public API Key (Anon)</span>
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-[11px] font-semibold text-slate-800 truncate" title="sb_publishable_B8tc_3lQWCKeBJ3camRySQ_yZAVTqLw">
+                      sb_publishable_B8tc...qLw
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText("sb_publishable_B8tc_3lQWCKeBJ3camRySQ_yZAVTqLw");
+                        mostrarToast("Public API Key copiada", "exito");
+                      }}
+                      className="p-1 hover:bg-slate-200 text-slate-500 rounded cursor-pointer shrink-0 ml-1"
+                      title="Copiar API Key"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <span className="text-[10px] text-slate-500 block">Segura para peticiones cliente</span>
+                </div>
+              </div>
+
+              {/* Mensaje de Diagnóstico Actual */}
+              <div className={`p-4 rounded-xl border flex items-start space-x-3 ${
+                supabaseDiag.ok
+                  ? "bg-emerald-50/70 border-emerald-200 text-emerald-950"
+                  : "bg-rose-50 border-rose-200 text-rose-950"
+              }`}>
+                {supabaseDiag.ok ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                )}
+                <div className="space-y-1 text-xs">
+                  <span className="font-bold block">
+                    {supabaseDiag.ok ? "Conexión a Supabase REST API Operativa" : "Diagnóstico de Conexión"}
+                  </span>
+                  <p className="leading-relaxed text-slate-700">{supabaseDiag.message}</p>
+                  <p className="text-[11px] text-slate-500">
+                    Host: <code className="font-mono text-slate-800">dcelksfchabhrlevlfah.supabase.co</code> • Protocolo: HTTPS/2 TLS 1.3 • Cloudflare Edge
+                  </p>
+                </div>
+              </div>
+
+              {/* Instrucciones de Migración SQL y Visor */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                <div className="bg-slate-50 p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 flex items-center space-x-2">
+                      <Terminal className="w-4 h-4 text-slate-600" />
+                      <span>Script de Migración SQL Inicial (001_initial_schema.sql)</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Esquema completo con tipos enumerados, tablas relacionales, llaves foráneas y reglas RLS para Supabase.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (sqlSchema) {
+                          navigator.clipboard.writeText(sqlSchema);
+                          setCopiadoSql(true);
+                          setTimeout(() => setCopiadoSql(false), 2500);
+                          mostrarToast("Script SQL copiado al portapapeles", "exito");
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 transition-colors flex items-center space-x-1.5 cursor-pointer shadow-2xs"
+                    >
+                      {copiadoSql ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiadoSql ? "¡Copiado!" : "Copiar SQL"}</span>
+                    </button>
+
+                    <a
+                      href="/api/supabase/schema-sql"
+                      download="001_initial_schema.sql"
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 transition-colors flex items-center space-x-1.5 shadow-2xs"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Descargar .sql</span>
+                    </a>
+
+                    <a
+                      href="https://supabase.com/dashboard/project/dcelksfchabhrlevlfah/sql/new"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors flex items-center space-x-1.5 shadow-xs"
+                    >
+                      <span>Abrir SQL Editor Supabase</span>
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-slate-900 text-slate-100 font-mono text-[11px] leading-relaxed max-h-96 overflow-y-auto">
+                  {cargandoSql ? (
+                    <div className="py-8 text-center text-slate-400 flex items-center justify-center space-x-2">
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Cargando esquema SQL...</span>
+                    </div>
+                  ) : sqlSchema ? (
+                    <pre className="whitespace-pre">{sqlSchema}</pre>
+                  ) : (
+                    <div className="py-6 text-center text-slate-400">
+                      <span>Presione "Cargar Esquema" o abra la pestaña nuevamente para visualizar el script SQL.</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

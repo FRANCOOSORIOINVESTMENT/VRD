@@ -1,8 +1,19 @@
+import dotenv from "dotenv";
+dotenv.config({ override: true });
 import express, { Request, Response, NextFunction } from "express";
 import cookieParser from "cookie-parser";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { mockDb, CUENTAS_FICTICIAS } from "./src/server/mockDb";
+import {
+  testSupabaseConnection,
+  SUPABASE_PROJECT_ID,
+  supabaseUrl,
+  supabasePublic,
+  supabaseAdmin,
+  isMockMode
+} from "./src/server/supabase";
 import {
   calcularCodigoVisible,
   RolUsuario,
@@ -677,15 +688,130 @@ async function startServer() {
   // RUTAS DE LA API (HITO 1)
   // ==========================================
 
-  // 0. ESTADO DEL SISTEMA (MODO DE OPERACIÓN)
-  app.get("/api/system/status", (req: Request, res: Response) => {
+  // 0. ESTADO DEL SISTEMA (MODO DE OPERACIÓN Y SUPABASE)
+  app.get("/api/system/status", async (req: Request, res: Response) => {
+    const isSupabase = process.env.APP_MODE === "supabase" || Boolean(process.env.SUPABASE_URL);
+    let supabaseStatus = { ok: false, message: "No configurado", projectId: SUPABASE_PROJECT_ID, url: supabaseUrl };
+    if (isSupabase) {
+      try {
+        supabaseStatus = await testSupabaseConnection();
+      } catch (e: any) {
+        supabaseStatus = { ok: false, message: e.message, projectId: SUPABASE_PROJECT_ID, url: supabaseUrl };
+      }
+    }
+
     res.json({
-      mode: process.env.APP_MODE === "supabase" ? "supabase" : "mock",
-      isPersistent: process.env.APP_MODE === "supabase",
-      label: process.env.APP_MODE === "supabase" 
-        ? "MODO SUPABASE — PERSISTENCIA ACTIVA" 
+      mode: isSupabase ? "supabase" : "mock",
+      isPersistent: isSupabase,
+      projectId: SUPABASE_PROJECT_ID,
+      projectUrl: supabaseUrl,
+      supabaseConnected: supabaseStatus.ok,
+      supabaseStatusMsg: supabaseStatus.message,
+      label: isSupabase 
+        ? `MODO SUPABASE — PROYECTO: ${SUPABASE_PROJECT_ID}` 
         : "MODO DEMOSTRACIÓN — DATOS FICTICIOS NO PERSISTENTES"
     });
+  });
+
+  // 0.1 DIAGNÓSTICO DETALLADO SUPABASE
+  app.get("/api/supabase/status", async (req: Request, res: Response) => {
+    try {
+      const status = await testSupabaseConnection();
+      res.json({
+        ...status,
+        projectId: SUPABASE_PROJECT_ID,
+        url: supabaseUrl,
+        mode: process.env.APP_MODE || "supabase"
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // 0.2 OBTENER ESQUEMA SQL PARA EJECUTAR EN SUPABASE SQL EDITOR
+  app.get("/api/supabase/schema-sql", (req: Request, res: Response) => {
+    try {
+      const sqlPath = path.join(process.cwd(), "src", "db", "001_initial_schema.sql");
+      if (fs.existsSync(sqlPath)) {
+        const sqlContent = fs.readFileSync(sqlPath, "utf-8");
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.send(sqlContent);
+      } else {
+        res.status(404).send("-- Archivo de esquema no encontrado");
+      }
+    } catch (e: any) {
+      res.status(500).send(`-- Error al leer esquema: ${e.message}`);
+    }
+  });
+
+  // 0.3 POBLAR O SINCRONIZAR DATOS BASE (MUNICIPIOS Y PERFILES) HACIA SUPABASE
+  app.post("/api/supabase/seed", async (req: Request, res: Response) => {
+    if (!supabaseAdmin) {
+      res.status(400).json({ ok: false, error: "Cliente Supabase no configurado" });
+      return;
+    }
+
+    try {
+      const results: { municipios: number; perfiles: number; errors: any[] } = {
+        municipios: 0,
+        perfiles: 0,
+        errors: []
+      };
+
+      // 1. Catálogo de Municipios
+      const municipiosToInsert = CATALOGO_MUNICIPIOS.map((m) => ({
+        codigo_completo: m.codigoCompleto,
+        departamento_codigo: m.departamentoCodigo,
+        municipio_codigo: m.municipioCodigo,
+        departamento_nombre: m.departamentoNombre,
+        municipio_nombre: m.municipioNombre,
+        fuente: "Codificación de Municipios por Departamento PDF"
+      }));
+
+      const { error: munError } = await supabaseAdmin
+        .from("catalogo_municipios")
+        .upsert(municipiosToInsert, { onConflict: "codigo_completo" });
+
+      if (munError) {
+        results.errors.push({ tabla: "catalogo_municipios", error: munError.message, code: munError.code });
+      } else {
+        results.municipios = municipiosToInsert.length;
+      }
+
+      // 2. Perfiles de Usuario
+      const perfilesToInsert = mockDb.perfiles.map((p) => ({
+        username: p.username,
+        email: p.email,
+        nombre_completo: p.nombreCompleto,
+        rol: p.rol,
+        activo: p.activo
+      }));
+
+      const { error: perfError } = await supabaseAdmin
+        .from("perfiles_usuario")
+        .upsert(perfilesToInsert, { onConflict: "username" });
+
+      if (perfError) {
+        results.errors.push({ tabla: "perfiles_usuario", error: perfError.message, code: perfError.code });
+      } else {
+        results.perfiles = perfilesToInsert.length;
+      }
+
+      const rlsBlocked = results.errors.some((e) => e.code === "42501");
+
+      res.json({
+        ok: results.errors.length === 0,
+        results,
+        rlsBlocked,
+        message: rlsBlocked
+          ? "La política RLS de Supabase bloqueó la inserción porque la clave anon no tiene permiso de escritura directo. Para habilitar escrituras con la clave pública, ejecute el script SQL complementario en el SQL Editor de Supabase o configure la clave service_role."
+          : results.errors.length > 0
+          ? "Ocurrieron advertencias al sincronizar"
+          : `Sincronización exitosa: ${results.municipios} municipios y ${results.perfiles} perfiles base registrados en Supabase.`
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
   });
 
   // 1. AUTENTICACIÓN
@@ -988,6 +1114,58 @@ async function startServer() {
         creadoEn: ahoraIso
       };
       mockDb.notas.unshift(primeraNota);
+    }
+
+    // PERSISTENCIA DIRECTA EN SUPABASE (Base de datos PostgreSQL en vivo)
+    if (supabaseAdmin) {
+      (async () => {
+        try {
+          // Resolver el UUID del comercial en Supabase
+          const { data: usuarioDb } = await supabaseAdmin
+            .from("perfiles_usuario")
+            .select("id")
+            .eq("username", req.user!.username)
+            .maybeSingle();
+
+          const comercialId = usuarioDb?.id;
+          if (comercialId) {
+            const { data: inserted, error: sbError } = await supabaseAdmin
+              .from("interesados")
+              .insert([{
+                nombre_contacto: nuevo.nombreContacto,
+                telefono: nuevo.telefono,
+                tiene_whatsapp: nuevo.tieneWhatsapp,
+                correo: nuevo.correo || null,
+                departamento_codigo: nuevo.departamentoCodigo,
+                municipio_codigo: nuevo.municipioCodigo,
+                vereda: nuevo.vereda || null,
+                origen_contacto: nuevo.origenContacto,
+                resumen_necesidad: nuevo.resumenNecesidad || null,
+                comercial_asignado_id: comercialId,
+                estado_comercial: nuevo.estadoComercial
+              }])
+              .select("id")
+              .maybeSingle();
+
+            if (!sbError && inserted?.id) {
+              console.log(`[SUPABASE]: Hogar de captación persistido exitosamente en Supabase (UUID: ${inserted.id})`);
+              if (nuevo.resumenNecesidad) {
+                await supabaseAdmin.from("notas_conversaciones").insert([{
+                  interesado_id: inserted.id,
+                  autor_id: comercialId,
+                  persona_contactada: nuevo.nombreContacto,
+                  canal: nuevo.origenContacto || "contacto_inicial",
+                  contenido: `Detalles de captación inicial: ${nuevo.resumenNecesidad}`
+                }]);
+              }
+            } else if (sbError) {
+              console.error("[SUPABASE]: Error al insertar interesado en Supabase:", sbError.message);
+            }
+          }
+        } catch (err: any) {
+          console.error("[SUPABASE]: Excepción al guardar en Supabase:", err?.message);
+        }
+      })();
     }
 
     res.status(201).json(nuevo);
@@ -1321,6 +1499,131 @@ async function startServer() {
         n.expedienteId = nuevoExpId;
       }
     });
+
+    // PERSISTENCIA DE LA CONVERSIÓN EN SUPABASE (PostgreSQL)
+    if (supabaseAdmin) {
+      (async () => {
+        try {
+          // 1. Obtener UUID del comercial en Supabase
+          const { data: usuarioDb } = await supabaseAdmin
+            .from("perfiles_usuario")
+            .select("id")
+            .eq("username", req.user!.username)
+            .maybeSingle();
+          const comercialUuid = usuarioDb?.id;
+
+          // 2. Insertar o actualizar persona postulante
+          const { data: personaDb } = await supabaseAdmin
+            .from("personas")
+            .upsert(
+              [
+                {
+                  tipo_identificacion: personaPostulante.tipoIdentificacion,
+                  numero_identificacion: personaPostulante.numeroIdentificacion,
+                  nombres:
+                    personaPostulante.primerNombre +
+                    (personaPostulante.segundoNombre ? " " + personaPostulante.segundoNombre : ""),
+                  primer_apellido: personaPostulante.primerApellido,
+                  segundo_apellido: personaPostulante.segundoApellido || null,
+                  telefono_principal: personaPostulante.telefonoPrincipal,
+                  correo: personaPostulante.correo || null
+                }
+              ],
+              { onConflict: "tipo_identificacion,numero_identificacion" }
+            )
+            .select("id")
+            .maybeSingle();
+
+          // 3. Insertar hogar
+          const { data: hogarDb } = await supabaseAdmin
+            .from("hogares")
+            .insert([{ observaciones: `Hogar creado para expediente ${nuevoExp.codigoVisible}` }])
+            .select("id")
+            .maybeSingle();
+
+          if (hogarDb?.id && personaDb?.id) {
+            await supabaseAdmin.from("integrantes_hogar").insert([
+              {
+                hogar_id: hogarDb.id,
+                persona_id: personaDb.id,
+                parentesco: "postulante_principal",
+                es_postulante_principal: true
+              }
+            ]);
+          }
+
+          // 4. Insertar predio
+          const { data: predioDb } = await supabaseAdmin
+            .from("predios")
+            .insert([
+              {
+                departamento_codigo: nuevoExp.predioVivienda.departamentoCodigo,
+                municipio_codigo: nuevoExp.predioVivienda.municipioCodigo,
+                vereda: nuevoExp.predioVivienda.vereda,
+                nombre_o_direccion: nuevoExp.predioVivienda.nombreODireccion,
+                es_predio_vivienda_principal: true
+              }
+            ])
+            .select("id")
+            .maybeSingle();
+
+          // 5. Insertar expediente
+          if (personaDb?.id && hogarDb?.id && predioDb?.id && comercialUuid) {
+            const { data: expDb, error: expErr } = await supabaseAdmin
+              .from("expedientes")
+              .insert([
+                {
+                  postulante_id: personaDb.id,
+                  hogar_id: hogarDb.id,
+                  predio_vivienda_id: predioDb.id,
+                  codigo_visible: nuevoExp.codigoVisible,
+                  estado_general: "en_tramite",
+                  comercial_origen_id: comercialUuid,
+                  responsable_general_id: comercialUuid,
+                  fase_actual: 1
+                }
+              ])
+              .select("id")
+              .maybeSingle();
+
+            if (!expErr && expDb?.id) {
+              console.log(`[SUPABASE]: Expediente creado en Supabase con UUID ${expDb.id} (Código: ${nuevoExp.codigoVisible})`);
+
+              // Actualizar estado del interesado en Supabase
+              await supabaseAdmin
+                .from("interesados")
+                .update({
+                  estado_comercial: "convertido_a_expediente",
+                  convertido_a_expediente_id: expDb.id
+                })
+                .eq("telefono", interesado.telefono);
+
+              // 6. Insertar los 3 requisitos de Fase 1
+              const { data: plantillas } = await supabaseAdmin
+                .from("plantillas_requisito")
+                .select("id, codigo_requisito")
+                .eq("fase", 1);
+
+              if (plantillas && plantillas.length > 0) {
+                const reqsToInsert = plantillas.map((p: any) => ({
+                  expediente_id: expDb.id,
+                  plantilla_id: p.id,
+                  fase: 1,
+                  persona_id: p.codigo_requisito === "F1-03" ? personaDb.id : null,
+                  predio_id: p.codigo_requisito === "F1-01" || p.codigo_requisito === "F1-02" ? predioDb.id : null,
+                  estado: "pendiente_carga"
+                }));
+                await supabaseAdmin.from("requisitos_caso").insert(reqsToInsert);
+              }
+            } else if (expErr) {
+              console.error("[SUPABASE]: Error al crear expediente en Supabase:", expErr.message);
+            }
+          }
+        } catch (err: any) {
+          console.error("[SUPABASE]: Error al persistir conversión en Supabase:", err?.message);
+        }
+      })();
+    }
 
     res.status(201).json({
       success: true,
