@@ -39,8 +39,10 @@ import {
   FileSpreadsheet,
   Phone,
   KeyRound,
-  Printer
+  Printer,
+  RefreshCw
 } from "lucide-react";
+import { supabase } from "./utils/supabaseClient";
 import {
   PerfilUsuario,
   Expediente,
@@ -328,6 +330,62 @@ export default function App() {
   const [nuevoResponsableId, setNuevoResponsableId] = useState<string>("");
   const [motivoReasignacion, setMotivoReasignacion] = useState<string>("");
   const [guardandoReasignacion, setGuardandoReasignacion] = useState<boolean>(false);
+  const [sincronizando, setSincronizando] = useState<boolean>(false);
+
+  // Sincronización en Tiempo Real con Supabase (WebSockets + Polling en Segundo Plano)
+  useEffect(() => {
+    if (!currentUser) return;
+
+    // 1. Suscripción por WebSockets (Supabase Realtime)
+    let channel: any = null;
+    if (supabase) {
+      try {
+        channel = supabase
+          .channel("realtime-cambios-crm")
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "expedientes" },
+            () => {
+              cargarExpedientes();
+              if (expedienteSeleccionadoId) {
+                cargarDetalleExpediente(expedienteSeleccionadoId);
+              }
+            }
+          )
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "interesados" },
+            () => {
+              if (currentUser.rol === "comercial" || currentUser.rol === "administrador") {
+                cargarInteresados();
+              }
+            }
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn("[REALTIME]: No se pudo iniciar suscripción websocket:", err);
+      }
+    }
+
+    // 2. Sincronización continua de fondo (Heartbeat cada 12 segundos y al volver a la pestaña)
+    const sincronizarFondo = () => {
+      cargarExpedientes();
+      if (currentUser.rol === "comercial" || currentUser.rol === "administrador") {
+        cargarInteresados();
+      }
+    };
+
+    window.addEventListener("focus", sincronizarFondo);
+    const intervalo = setInterval(sincronizarFondo, 12000);
+
+    return () => {
+      window.removeEventListener("focus", sincronizarFondo);
+      clearInterval(intervalo);
+      if (channel && supabase) {
+        supabase.removeChannel(channel);
+      }
+    };
+  }, [currentUser, expedienteSeleccionadoId]);
 
   // Comprobación de sesión inicial y estado del sistema
   useEffect(() => {
@@ -2225,6 +2283,29 @@ export default function App() {
         </div>
 
         <div className="flex items-center space-x-3">
+          {/* Botón de Sincronización Manual Directa con Supabase */}
+          <button
+            type="button"
+            onClick={async () => {
+              setSincronizando(true);
+              try {
+                await Promise.all([
+                  cargarExpedientes(),
+                  currentUser.rol === "comercial" || currentUser.rol === "administrador" ? cargarInteresados() : Promise.resolve(),
+                  expedienteSeleccionadoId ? cargarDetalleExpediente(expedienteSeleccionadoId) : Promise.resolve()
+                ]);
+                mostrarToast("Datos actualizados directamente desde Supabase PostgreSQL.");
+              } finally {
+                setSincronizando(false);
+              }
+            }}
+            title="Sincronizar datos directamente con Supabase PostgreSQL"
+            className="flex items-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100/80 px-2.5 py-1.5 rounded-xl border border-emerald-200 text-emerald-800 transition-colors text-xs font-semibold cursor-pointer shadow-xs"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 shrink-0 ${sincronizando ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">Sincronizar DB</span>
+          </button>
+
           {/* CAMBIADOR RÁPIDO DE USUARIO / ROL (HERRAMIENTA EXCLUSIVA DEL ADMINISTRADOR) */}
           {currentUser.rol === "administrador" && (
             <div className="flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200/80 px-2.5 py-1.5 rounded-xl border border-slate-200 transition-colors">

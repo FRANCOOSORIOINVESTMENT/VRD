@@ -28,6 +28,9 @@ import {
   NotaConversacion,
   PLANTILLAS_FASE_2,
   Expediente,
+  Persona,
+  Predio,
+  Hogar,
   EstadoRequisito,
   Documento,
   SolicitudRetiroCedula,
@@ -130,6 +133,140 @@ async function startServer() {
       }
       next();
     };
+  }
+
+  // Helper para inicializar los requisitos obligatorios de Fase 1
+  function inicializarRequisitosFase1(exp: Expediente) {
+    const yaTieneF1 = mockDb.requisitosCaso.some((r) => r.expedienteId === exp.id && r.fase === 1);
+    if (yaTieneF1) return;
+
+    const titularPersonaId = exp.postulante?.id || `per-${exp.id}`;
+    const titularNombre = exp.postulante
+      ? `${exp.postulante.nombres || exp.postulante.primerNombre || 'Postulante'} ${exp.postulante.primerApellido || ''}`.trim()
+      : "Titular Principal";
+
+    const reqTradicion: RequisitoCaso = {
+      id: `req-f1-01-${exp.id}`,
+      expedienteId: exp.id,
+      codigoRequisito: "F1-01",
+      nombre: "Certificado de Tradición y Libertad",
+      descripcion: "Antigüedad máxima de 90 días calendario respecto a la revisión.",
+      fase: 1,
+      predioId: exp.predioVivienda?.id || `pre-${exp.id}`,
+      estado: "pendiente_carga",
+      esObligatorio: true,
+      esAdicional: false
+    };
+
+    const reqPredial: RequisitoCaso = {
+      id: `req-f1-02-${exp.id}`,
+      expedienteId: exp.id,
+      codigoRequisito: "F1-02",
+      nombre: "Impuesto Predial Unificado",
+      descripcion: "Vigencia del año en curso. Aceptado pagado o sin pagar.",
+      fase: 1,
+      predioId: exp.predioVivienda?.id || `pre-${exp.id}`,
+      estado: "pendiente_carga",
+      esObligatorio: true,
+      esAdicional: false
+    };
+
+    const reqCedulaPostulante: RequisitoCaso = {
+      id: `req-f1-03-${exp.id}-${titularPersonaId}`,
+      expedienteId: exp.id,
+      codigoRequisito: "F1-03",
+      nombre: `Cédula del Postulante: ${titularNombre}`,
+      descripcion: "Documento de identidad legible del postulante principal.",
+      fase: 1,
+      personaId: titularPersonaId,
+      personaNombre: titularNombre,
+      estado: "pendiente_carga",
+      esObligatorio: true,
+      esAdicional: false
+    };
+
+    mockDb.requisitosCaso.push(reqTradicion, reqPredial, reqCedulaPostulante);
+  }
+
+  // Mapeador robusto de filas de Supabase a modelo canónico de Expediente
+  function mapearFilaSupabaseAExpediente(row: any): Expediente {
+    const postData = row.postulante || {};
+    const predData = row.predio || {};
+    const hogarData = row.hogar || {};
+    const comData = row.comercial || {};
+    const respData = row.responsable || {};
+
+    const postulante: Persona = {
+      id: postData.id || `per-${row.id}`,
+      tipoIdentificacion: postData.tipo_identificacion || "CC",
+      numeroIdentificacion: postData.numero_identificacion || "00000000",
+      primerNombre: postData.nombres ? String(postData.nombres).split(" ")[0] : (postData.primer_nombre || "Titular"),
+      primerApellido: postData.primer_apellido || "Registrado en DB",
+      segundoApellido: postData.segundo_apellido || undefined,
+      nombres: postData.nombres || `${postData.primer_apellido || 'Titular'}`,
+      telefonoPrincipal: postData.telefono_principal || "",
+      correo: postData.correo || undefined
+    };
+
+    const predioVivienda: Predio = {
+      id: predData.id || `pre-${row.id}`,
+      departamentoCodigo: predData.departamento_codigo || "25",
+      municipioCodigo: predData.municipio_codigo || "25899",
+      vereda: predData.vereda || "Rural",
+      nombreODireccion: predData.nombre_o_direccion || "Lote sin dirección registrada",
+      matriculaInmobiliaria: predData.matricula_inmobiliaria,
+      referenciaCatastral: predData.referencia_catastral,
+      esPredioViviendaPrincipal: Boolean(predData.es_predio_vivienda_principal !== false)
+    };
+
+    const integrantes = Array.isArray(hogarData.integrantes) && hogarData.integrantes.length > 0
+      ? hogarData.integrantes.map((intRow: any) => ({
+          id: intRow.id,
+          hogarId: hogarData.id || `hog-${row.id}`,
+          parentesco: intRow.parentesco || "postulante_principal",
+          esPostulantePrincipal: Boolean(intRow.es_postulante_principal),
+          persona: {
+            id: intRow.persona?.id || `per-${intRow.id}`,
+            tipoIdentificacion: intRow.persona?.tipo_identificacion || "CC",
+            numeroIdentificacion: intRow.persona?.numero_identificacion || "",
+            primerApellido: intRow.persona?.primer_apellido || "",
+            nombres: intRow.persona?.nombres || ""
+          }
+        }))
+      : [
+          {
+            id: `int-${row.id}`,
+            hogarId: hogarData.id || `hog-${row.id}`,
+            parentesco: "postulante_principal",
+            esPostulantePrincipal: true,
+            persona: postulante
+          }
+        ];
+
+    const hogar: Hogar = {
+      id: hogarData.id || `hog-${row.id}`,
+      observaciones: hogarData.observaciones,
+      integrantes
+    };
+
+    return {
+      id: row.id,
+      codigoVisible: row.codigo_visible || `EXP-${String(row.id).slice(0, 8).toUpperCase()}`,
+      interesadoOrigenId: row.interesado_origen_id,
+      estadoGeneral: row.estado_general || "en_tramite",
+      faseActual: Number(row.fase_actual || 1),
+      comercialOrigenId: row.comercial_origen_id || comData.id || "usr-comercial-01",
+      comercialOrigenNombre: comData.nombre_completo || "Gestor Rural",
+      responsableGeneralId: row.responsable_general_id || respData.id || "usr-supervisor-01",
+      responsableGeneralNombre: respData.nombre_completo || "Dra. Helena Ramírez",
+      fechaPrimerContacto: row.fecha_primer_contacto || row.creado_en,
+      fechaIngresoFase1: row.fecha_ingreso_fase1 || row.creado_en,
+      creadoEn: row.creado_en,
+      actualizadoEn: row.actualizado_en || row.creado_en,
+      postulante,
+      predioVivienda,
+      hogar
+    } as Expediente;
   }
 
   // Helper para inicializar los 11 documentos oficiales de Fase 2
@@ -1289,76 +1426,47 @@ async function startServer() {
           `)
           .order("creado_en", { ascending: false });
 
-        if (!sbErr && dbRows && dbRows.length > 0) {
+        if (!sbErr && Array.isArray(dbRows)) {
+          const idsEnDb = new Set(dbRows.map((r: any) => r.id));
+          const codigosEnDb = new Set(dbRows.map((r: any) => r.codigo_visible).filter(Boolean));
+
           for (const row of dbRows) {
-            const existe = mockDb.expedientes.some(
+            const index = mockDb.expedientes.findIndex(
               (e) => e.id === row.id || (row.codigo_visible && e.codigoVisible === row.codigo_visible)
             );
-            if (!existe && row.postulante) {
-              const post = row.postulante;
-              const pred = row.predio || {};
-              const hog = row.hogar || {};
-              const com = row.comercial || {};
-              const resp = row.responsable || {};
-
-              const nuevoExp: Expediente = {
-                id: row.id,
-                codigoVisible: row.codigo_visible,
-                interesadoOrigenId: row.interesado_origen_id,
-                estadoGeneral: row.estado_general || "en_tramite",
-                faseActual: Number(row.fase_actual || 1),
-                comercialOrigenId: row.comercial_origen_id || com.id || "usr-comercial-01",
-                comercialOrigenNombre: com.nombre_completo || "Gestor Rural",
-                responsableGeneralId: row.responsable_general_id || resp.id || "usr-supervisor-01",
-                responsableGeneralNombre: resp.nombre_completo || "Dra. Helena Ramírez",
-                fechaPrimerContacto: row.fecha_primer_contacto || row.creado_en,
-                fechaIngresoFase1: row.fecha_ingreso_fase1 || row.creado_en,
-                creadoEn: row.creado_en,
-                actualizadoEn: row.actualizado_en,
-                postulante: {
-                  id: post.id || `per-${row.id}`,
-                  tipoIdentificacion: post.tipo_identificacion || "CC",
-                  numeroIdentificacion: post.numero_identificacion,
-                  primerNombre: post.nombres ? String(post.nombres).split(" ")[0] : "",
-                  primerApellido: post.primer_apellido || "",
-                  segundoApellido: post.segundo_apellido,
-                  nombres: post.nombres || `${post.primer_apellido}`,
-                  telefonoPrincipal: post.telefono_principal,
-                  correo: post.correo
-                },
-                predioVivienda: {
-                  id: pred.id || `pre-${row.id}`,
-                  departamentoCodigo: pred.departamento_codigo || "25",
-                  municipioCodigo: pred.municipio_codigo || "25899",
-                  vereda: pred.vereda || "Rural",
-                  nombreODireccion: pred.nombre_o_direccion || "Lote sin dirección registrada",
-                  matriculaInmobiliaria: pred.matricula_inmobiliaria,
-                  referenciaCatastral: pred.referencia_catastral,
-                  esPredioViviendaPrincipal: true
-                },
-                hogar: {
-                  id: hog.id || `hog-${row.id}`,
-                  observaciones: hog.observaciones,
-                  integrantes: [
-                    {
-                      id: `int-${row.id}`,
-                      hogarId: hog.id || `hog-${row.id}`,
-                      parentesco: "postulante_principal",
-                      esPostulantePrincipal: true,
-                      persona: {
-                        id: post.id || `per-${row.id}`,
-                        tipoIdentificacion: post.tipo_identificacion || "CC",
-                        numeroIdentificacion: post.numero_identificacion,
-                        primerApellido: post.primer_apellido || "",
-                        nombres: post.nombres || ""
-                      }
-                    }
-                  ]
-                }
-              };
+            if (index !== -1) {
+              // 1.1 Si ya existe, sincronizar campos actualizados desde la base de datos
+              const expExistente = mockDb.expedientes[index];
+              if (row.fase_actual) expExistente.faseActual = Number(row.fase_actual);
+              if (row.estado_general) expExistente.estadoGeneral = row.estado_general;
+              if (row.actualizado_en) expExistente.actualizadoEn = row.actualizado_en;
+              if (row.postulante) {
+                if (row.postulante.telefono_principal) expExistente.postulante.telefonoPrincipal = row.postulante.telefono_principal;
+                if (row.postulante.correo) expExistente.postulante.correo = row.postulante.correo;
+                if (row.postulante.nombres) expExistente.postulante.nombres = row.postulante.nombres;
+                if (row.postulante.primer_apellido) expExistente.postulante.primerApellido = row.postulante.primer_apellido;
+              }
+              if (row.predio) {
+                if (row.predio.vereda) expExistente.predioVivienda.vereda = row.predio.vereda;
+                if (row.predio.nombre_o_direccion) expExistente.predioVivienda.nombreODireccion = row.predio.nombre_o_direccion;
+              }
+            } else {
+              // 1.2 Si fue creado directamente en la base de datos Supabase, incorporarlo inmediatamente
+              const nuevoExp = mapearFilaSupabaseAExpediente(row);
+              inicializarRequisitosFase1(nuevoExp);
+              if (nuevoExp.faseActual >= 2) inicializarRequisitosFase2(nuevoExp);
+              if (nuevoExp.faseActual >= 4) inicializarFase4(nuevoExp);
+              if (nuevoExp.faseActual >= 5) inicializarFase5Licencia(nuevoExp);
+              if (nuevoExp.faseActual >= 6) inicializarFase6Postulacion(nuevoExp);
+              if (nuevoExp.faseActual >= 7) inicializarFase7(nuevoExp);
               mockDb.expedientes.unshift(nuevoExp);
             }
           }
+
+          // 1.3 Si un expediente fue borrado en la base de datos Supabase, eliminarlo de la memoria local
+          mockDb.expedientes = mockDb.expedientes.filter((e) => {
+            return idsEnDb.has(e.id) || codigosEnDb.has(e.codigoVisible);
+          });
         }
       } catch (dbErr: any) {
         console.error("[EXPEDIENTES HIDRATACIÓN ERROR]:", dbErr?.message);
@@ -1424,12 +1532,29 @@ async function startServer() {
           .select(`*, contactos_apoyo(*)`)
           .order("creado_en", { ascending: false });
 
-        if (!sbErr && dbRows && dbRows.length > 0) {
+        if (!sbErr && Array.isArray(dbRows)) {
+          const idsEnDb = new Set(dbRows.map((r: any) => r.id));
+
           for (const row of dbRows) {
-            const existe = mockDb.interesados.some(
+            const index = mockDb.interesados.findIndex(
               (i) => i.id === row.id || (i.telefono === row.telefono && i.nombreContacto === row.nombre_contacto)
             );
-            if (!existe) {
+            if (index !== -1) {
+              // 1.1 Sincronizar campos actualizados directamente desde Supabase
+              const iExistente = mockDb.interesados[index];
+              if (row.nombre_contacto) iExistente.nombreContacto = row.nombre_contacto;
+              if (row.telefono) iExistente.telefono = row.telefono;
+              if (row.tiene_whatsapp !== undefined) iExistente.tieneWhatsapp = Boolean(row.tiene_whatsapp);
+              if (row.correo !== undefined) iExistente.correo = row.correo || undefined;
+              if (row.departamento_codigo) iExistente.departamentoCodigo = row.departamento_codigo;
+              if (row.municipio_codigo) iExistente.municipioCodigo = row.municipio_codigo;
+              if (row.vereda) iExistente.vereda = row.vereda;
+              if (row.origen_contacto) iExistente.origenContacto = row.origen_contacto;
+              if (row.resumen_necesidad !== undefined) iExistente.resumenNecesidad = row.resumen_necesidad || "";
+              if (row.estado_comercial) iExistente.estadoComercial = row.estado_comercial;
+              if (row.convertido_a_expediente_id) iExistente.convertidoAExpedienteId = row.convertido_a_expediente_id;
+            } else {
+              // 1.2 Insertar nuevo interesado creado directamente en Supabase
               const fechaRegMs = new Date(row.creado_en).getTime();
               const fechaCaducidad = new Date(fechaRegMs + 45 * 24 * 60 * 60 * 1000).toISOString();
               mockDb.interesados.unshift({
@@ -1471,6 +1596,9 @@ async function startServer() {
               });
             }
           }
+
+          // 1.3 Eliminar interesados que ya no existan en Supabase
+          mockDb.interesados = mockDb.interesados.filter((i) => idsEnDb.has(i.id));
         }
       } catch (dbErr: any) {
         console.error("[INTERESADOS HIDRATACIÓN ERROR]:", dbErr?.message);
@@ -2129,8 +2257,49 @@ async function startServer() {
   });
 
   // 6. DETALLE DE UN EXPEDIENTE Y SUS REQUISITOS
-  app.get("/api/expedientes/:id", requireAuth(), (req: AuthRequest, res: Response) => {
-    const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
+  app.get("/api/expedientes/:id", requireAuth(), async (req: AuthRequest, res: Response) => {
+    let exp = mockDb.expedientes.find((e) => e.id === req.params.id || e.codigoVisible === req.params.id);
+
+    // Si no está en memoria y Supabase está activo, buscarlo directamente en la base de datos
+    if (!exp && supabaseAdmin) {
+      try {
+        const { data: row } = await supabaseAdmin
+          .from("expedientes")
+          .select(`
+            *,
+            postulante:personas!expedientes_postulante_id_fkey(*),
+            predio:predios!expedientes_predio_vivienda_id_fkey(*),
+            hogar:hogares!expedientes_hogar_id_fkey(
+              id,
+              observaciones,
+              integrantes:integrantes_hogar(
+                id,
+                parentesco,
+                es_postulante_principal,
+                persona:personas(*)
+              )
+            ),
+            comercial:perfiles_usuario!expedientes_comercial_origen_id_fkey(id, nombre_completo, username, rol),
+            responsable:perfiles_usuario!expedientes_responsable_general_id_fkey(id, nombre_completo, username, rol)
+          `)
+          .or(`id.eq.${req.params.id},codigo_visible.eq.${req.params.id}`)
+          .maybeSingle();
+
+        if (row) {
+          exp = mapearFilaSupabaseAExpediente(row);
+          inicializarRequisitosFase1(exp);
+          if (exp.faseActual >= 2) inicializarRequisitosFase2(exp);
+          if (exp.faseActual >= 4) inicializarFase4(exp);
+          if (exp.faseActual >= 5) inicializarFase5Licencia(exp);
+          if (exp.faseActual >= 6) inicializarFase6Postulacion(exp);
+          if (exp.faseActual >= 7) inicializarFase7(exp);
+          mockDb.expedientes.unshift(exp);
+        }
+      } catch (err: any) {
+        console.error("[EXPEDIENTES DETALLE HIDRATACIÓN ERROR]:", err?.message);
+      }
+    }
+
     if (!exp) {
       res.status(404).json({ error: "Expediente no encontrado." });
       return;
