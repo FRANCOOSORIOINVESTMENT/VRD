@@ -48,7 +48,8 @@ import {
   Database,
   Copy,
   ExternalLink,
-  Terminal
+  Terminal,
+  Trash2
 } from "lucide-react";
 
 interface AdminPanelProps {
@@ -140,6 +141,37 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       mostrarToast("Error al sincronizar datos con Supabase", "error");
     } finally {
       setCargandoSeed(false);
+    }
+  };
+
+  const [cargandoLimpieza, setCargandoLimpieza] = useState<boolean>(false);
+
+  const ejecutarLimpiarExpedientes = async () => {
+    const seguro = window.confirm(
+      "¿Está seguro de eliminar TODOS los expedientes e interesados de prueba? Esta acción vaciará completamente los registros tanto en memoria como en Supabase PostgreSQL para iniciar la operación oficial desde cero."
+    );
+    if (!seguro) return;
+
+    setCargandoLimpieza(true);
+    try {
+      const res = await fetch("/api/admin/limpiar-expedientes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${currentUser.id}`
+        }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        mostrarToast("Todos los expedientes de prueba han sido eliminados con éxito.", "success");
+        cargarDatos();
+      } else {
+        mostrarToast(data.error || "Error al limpiar expedientes", "error");
+      }
+    } catch (err: any) {
+      mostrarToast("Error de conexión al limpiar expedientes", "error");
+    } finally {
+      setCargandoLimpieza(false);
     }
   };
 
@@ -1151,6 +1183,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   >
                     <Download className={`w-3.5 h-3.5 ${cargandoSeed ? "animate-spin" : ""}`} />
                     <span>{cargandoSeed ? "Sincronizando..." : "Poblar Municipios y Usuarios"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={ejecutarLimpiarExpedientes}
+                    disabled={cargandoLimpieza}
+                    className="px-3.5 py-2 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                    title="Elimina todos los expedientes e interesados de prueba tanto en PostgreSQL como en memoria para operar desde cero"
+                  >
+                    <Trash2 className={`w-3.5 h-3.5 ${cargandoLimpieza ? "animate-spin" : ""}`} />
+                    <span>{cargandoLimpieza ? "Borrando..." : "Borrar Expedientes de Prueba"}</span>
                   </button>
 
                   <a

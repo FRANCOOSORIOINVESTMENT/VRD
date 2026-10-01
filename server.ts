@@ -6,6 +6,9 @@ import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { mockDb, CUENTAS_FICTICIAS } from "./src/server/mockDb";
+import { hashPassword, comparePassword, crearUsuarioInicial } from "./src/server/authUtils";
+import uploadRouter from "./src/routes/upload.routes";
+import { verificarBucketStorage, persistirArchivoEnStorage, STORAGE_BUCKET_NAME } from "./src/config/supabase";
 import {
   testSupabaseConnection,
   SUPABASE_PROJECT_ID,
@@ -67,7 +70,12 @@ import { CATALOGO_MUNICIPIOS } from "./src/data/municipios";
 import { normalizarTextoNombre, construirNombreCompleto } from "./src/utils/normalizacion";
 
 interface AuthRequest extends Request {
-  user?: (typeof CUENTAS_FICTICIAS)[0];
+  user?: PerfilUsuario & {
+    passwordHash?: string;
+    password_hash?: string;
+    requiereCambioPassword?: boolean;
+    requiere_cambio_password?: boolean;
+  };
 }
 
 async function startServer() {
@@ -77,6 +85,14 @@ async function startServer() {
 
   app.use(express.json({ limit: "25mb" }));
   app.use(cookieParser());
+
+  // Rutas modulares para subida directa de archivos a Supabase Storage (máximo 25MB)
+  app.use("/api/documentos", uploadRouter);
+
+  // Verificación no bloqueante del bucket Supabase Storage
+  verificarBucketStorage()
+    .then((status) => console.log(`[STORAGE]: ${status.mensaje}`))
+    .catch((err) => console.error("[STORAGE]: Fallo comprobando bucket:", err?.message));
 
   // Middleware de resolución y verificación de sesión basada en headers (Bearer/x-user-id) y cookies HttpOnly
   app.use((req: AuthRequest, res: Response, next: NextFunction) => {
@@ -331,6 +347,34 @@ async function startServer() {
       (m) => m.codigoCompleto === codigo || m.municipioCodigo === codigo
     );
     return muni ? muni.municipioNombre : "Municipal";
+  }
+
+  function normalizarCodigoMunicipio(codigo?: string): string {
+    if (!codigo) return "25200"; // Cogua
+    const limpio = String(codigo).trim();
+    // 1. Coincidencia directa con código de 5 dígitos (DPMPP)
+    const matchDirecto = CATALOGO_MUNICIPIOS.find((m) => m.codigoCompleto === limpio);
+    if (matchDirecto) return matchDirecto.codigoCompleto;
+
+    // 2. Coincidencia con código de 3 dígitos (ej: "200", "899")
+    const match3 = CATALOGO_MUNICIPIOS.find((m) => m.municipioCodigo === limpio);
+    if (match3) return match3.codigoCompleto;
+
+    // 3. Prefijo "25" si enviaron 3 dígitos
+    if (limpio.length === 3) {
+      const con25 = "25" + limpio;
+      const matchCon25 = CATALOGO_MUNICIPIOS.find((m) => m.codigoCompleto === con25);
+      if (matchCon25) return matchCon25.codigoCompleto;
+    }
+
+    // 4. Coincidencia por nombre
+    const matchNombre = CATALOGO_MUNICIPIOS.find(
+      (m) => m.municipioNombre.toLowerCase() === limpio.toLowerCase()
+    );
+    if (matchNombre) return matchNombre.codigoCompleto;
+
+    // Por defecto retornar municipio válido oficial (Cogua 25200)
+    return "25200";
   }
 
   // Helper para inicializar Fase 5: Seguimiento de Trámite de Licencia de Construcción
@@ -684,6 +728,48 @@ async function startServer() {
     }
   }
 
+  /**
+   * Sincronización y actualización permanente del expediente en Supabase (PostgreSQL).
+   * Refleja fases, estados, avances técnicos, aprobaciones y cierres.
+   */
+  async function sincronizarExpedienteEnSupabase(exp: Expediente) {
+    if (!supabaseAdmin) return;
+    try {
+      const payload: Record<string, any> = {
+        fase_actual: exp.faseActual,
+        estado_general: exp.estadoGeneral,
+        bloqueado_por_revision: exp.bloqueadoPorRevision || false,
+        fase_en_revision: exp.faseEnRevision || null,
+        motivo_devolucion_fase: exp.motivoDevolucionFase || null,
+        revision_fases: exp.revisionFases || {},
+        estado_fase1: exp.estadoFase1 || "en_preparacion",
+        estado_fase2: exp.estadoFase2 || "en_preparacion",
+        observacion_devolucion_fase2: exp.observacionDevolucionFase2 || null,
+        validacion_compensar: exp.validacionCompensar || null,
+        gestion_fase4: exp.gestionFase4 || null,
+        tramite_licencia: exp.tramiteLicencia || null,
+        postulacion_subsidio: exp.postulacionSubsidio || null,
+        gestion_fase7: exp.gestionFase7 || null,
+        solicitud_rechazo: exp.solicitudRechazo || null,
+        historial_solicitudes_rechazo: exp.historialSolicitudesRechazo || [],
+        actualizado_en: new Date().toISOString()
+      };
+
+      const { error } = await supabaseAdmin
+        .from("expedientes")
+        .update(payload)
+        .eq("codigo_visible", exp.codigoVisible);
+
+      if (error) {
+        console.error(`[SUPABASE]: Error actualizando expediente ${exp.codigoVisible}:`, error.message);
+      } else {
+        console.log(`[SUPABASE]: Expediente ${exp.codigoVisible} sincronizado en PostgreSQL (Fase ${exp.faseActual}).`);
+      }
+    } catch (e: any) {
+      console.error("[SUPABASE]: Excepción sincronizando expediente:", e?.message);
+    }
+  }
+
   // ==========================================
   // RUTAS DE LA API (HITO 1)
   // ==========================================
@@ -814,24 +900,86 @@ async function startServer() {
     }
   });
 
-  // 1. AUTENTICACIÓN
-  app.post("/api/auth/login", (req: Request, res: Response) => {
+  // 1. AUTENTICACIÓN SEGURA CON BCRYPT
+  app.post("/api/auth/login", async (req: Request, res: Response) => {
     const { username, password } = req.body;
     if (!username || !password) {
       res.status(400).json({ error: "Debe ingresar nombre de usuario y contraseña." });
       return;
     }
 
-    // Resolución segura username -> perfil
-    const user = mockDb.perfiles.find(
-      (u) => u.username.toLowerCase() === String(username).toLowerCase() && u.activo
+    const cleanUsername = String(username).toLowerCase().trim();
+
+    // 1. Buscar usuario en mockDb
+    let user = mockDb.perfiles.find(
+      (u) => u.username.toLowerCase() === cleanUsername && u.activo
     );
 
-    if (!user || user.passwordHash !== password) {
+    // Si Supabase está disponible, verificar o sincronizar datos del usuario
+    if (supabaseAdmin) {
+      try {
+        const { data: dbUser } = await supabaseAdmin
+          .from("perfiles_usuario")
+          .select("*")
+          .eq("username", cleanUsername)
+          .eq("activo", true)
+          .maybeSingle();
+
+        if (dbUser) {
+          if (!user) {
+            user = {
+              id: dbUser.id,
+              username: dbUser.username,
+              email: dbUser.email,
+              nombreCompleto: dbUser.nombre_completo,
+              rol: dbUser.rol,
+              activo: dbUser.activo,
+              creadoEn: dbUser.creado_en || new Date().toISOString(),
+              passwordHash: dbUser.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
+              password_hash: dbUser.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
+              requiereCambioPassword: Boolean(dbUser.requiere_cambio_password),
+              requiere_cambio_password: Boolean(dbUser.requiere_cambio_password)
+            };
+            mockDb.perfiles.push(user);
+          } else {
+            if (dbUser.password_hash) {
+              user.passwordHash = dbUser.password_hash;
+              user.password_hash = dbUser.password_hash;
+            }
+            if (typeof dbUser.requiere_cambio_password === "boolean") {
+              user.requiereCambioPassword = dbUser.requiere_cambio_password;
+              user.requiere_cambio_password = dbUser.requiere_cambio_password;
+            }
+          }
+        }
+      } catch (err: any) {
+        console.error("[AUTH]: Error al consultar usuario en Supabase:", err?.message);
+      }
+    }
+
+    if (!user) {
       // Mensaje genérico para prevenir enumeración de usuarios
       res.status(401).json({ error: "Credenciales inválidas o cuenta inactiva." });
       return;
     }
+
+    // 2. Validación de contraseña con bcrypt (tolerante a migración)
+    const hashAComparar = user.password_hash || user.passwordHash || "";
+    const esPasswordValida = await comparePassword(String(password), hashAComparar);
+
+    if (!esPasswordValida) {
+      res.status(401).json({ error: "Credenciales inválidas o cuenta inactiva." });
+      return;
+    }
+
+    // Actualizar hash plano antiguo a bcrypt de manera transparente
+    if (!hashAComparar.startsWith("$2")) {
+      const nuevoBcrypt = await hashPassword(String(password));
+      user.passwordHash = nuevoBcrypt;
+      user.password_hash = nuevoBcrypt;
+    }
+
+    const requiereCambio = Boolean(user.requiere_cambio_password ?? user.requiereCambioPassword);
 
     // Cookie compatible con iframes y contextos cruzados
     res.cookie("crm_session_user", user.id, {
@@ -850,10 +998,192 @@ async function startServer() {
         username: user.username,
         email: user.email,
         nombreCompleto: user.nombreCompleto,
-        rol: user.rol
+        rol: user.rol,
+        requiere_cambio_password: requiereCambio,
+        requiereCambioPassword: requiereCambio
       }
     });
   });
+
+  // 1.1 ENDPOINT PROTEGIDO: CAMBIO DE CONTRASEÑA CON CIFRADO BCRYPT
+  app.post("/api/auth/cambiar-password", requireAuth(), async (req: AuthRequest, res: Response) => {
+    try {
+      const { nuevaPassword, nueva_password, confirmarPassword } = req.body;
+      const passwordParaAsignar = String(nuevaPassword || nueva_password || "").trim();
+
+      if (!passwordParaAsignar) {
+        res.status(400).json({ error: "Debe ingresar la nueva contraseña." });
+        return;
+      }
+
+      if (passwordParaAsignar.length < 8) {
+        res.status(400).json({
+          error: "La nueva contraseña debe tener al menos 8 caracteres por políticas de seguridad."
+        });
+        return;
+      }
+
+      // Validar que incluya letra y número
+      if (!/[a-zA-Z]/.test(passwordParaAsignar) || !/\d/.test(passwordParaAsignar)) {
+        res.status(400).json({
+          error: "La contraseña debe incluir al menos una letra y un número."
+        });
+        return;
+      }
+
+      if (confirmarPassword && passwordParaAsignar !== String(confirmarPassword).trim()) {
+        res.status(400).json({ error: "La nueva contraseña y la confirmación no coinciden." });
+        return;
+      }
+
+      if (passwordParaAsignar === "crm2026*") {
+        res.status(400).json({
+          error: "Debe definir una contraseña diferente a la contraseña genérica por defecto."
+        });
+        return;
+      }
+
+      const user = req.user!;
+
+      // Cifrado criptográfico con bcrypt (10 rondas de salt)
+      const nuevoHash = await hashPassword(passwordParaAsignar);
+
+      // Actualizar en memoria
+      const perfilEnDb = mockDb.perfiles.find((u) => u.id === user.id);
+      if (perfilEnDb) {
+        perfilEnDb.passwordHash = nuevoHash;
+        perfilEnDb.password_hash = nuevoHash;
+        perfilEnDb.requiereCambioPassword = false;
+        perfilEnDb.requiere_cambio_password = false;
+      }
+
+      // Actualizar en Supabase si está disponible
+      if (supabaseAdmin) {
+        (async () => {
+          try {
+            await supabaseAdmin
+              .from("perfiles_usuario")
+              .update({
+                password_hash: nuevoHash,
+                requiere_cambio_password: false
+              })
+              .eq("username", user.username);
+            console.log(`[AUTH]: Contraseña cifrada con bcrypt actualizada en Supabase para ${user.username}`);
+          } catch (err: any) {
+            console.error("[AUTH]: Error al actualizar contraseña en Supabase:", err?.message);
+          }
+        })();
+      }
+
+      // Auditoría administrativa
+      mockDb.auditoriaAdmin.unshift({
+        id: `aud-${Date.now()}`,
+        fecha: new Date().toISOString(),
+        adminId: user.id,
+        adminNombre: user.nombreCompleto,
+        accion: "CAMBIO_PASSWORD",
+        detalle: `El usuario ${user.username} actualizó su contraseña con hash seguro bcrypt.`,
+        categoria: "usuarios",
+        metadatos: { username: user.username, rol: user.rol }
+      });
+
+      res.json({
+        success: true,
+        message: "Contraseña actualizada y cifrada exitosamente con bcrypt.",
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          nombreCompleto: user.nombreCompleto,
+          rol: user.rol,
+          requiere_cambio_password: false,
+          requiereCambioPassword: false
+        }
+      });
+    } catch (err: any) {
+      console.error("[AUTH] Error en cambio de contraseña:", err);
+      res.status(500).json({ error: "Error interno al procesar el cambio de contraseña." });
+    }
+  });
+
+  // 1.2 UTILIDAD PARA CREACIÓN DE USUARIOS REALES CIFRADOS CON BCRYPT (Solo Administrador)
+  app.post(
+    "/api/admin/usuarios/crear-inicial",
+    requireAuth(["administrador"]),
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { username, email, nombreCompleto, rol, passwordPlana, requiereCambioPassword } = req.body;
+
+        if (!username || !email || !nombreCompleto || !rol || !passwordPlana) {
+          res.status(400).json({
+            error: "Todos los campos (username, email, nombreCompleto, rol, passwordPlana) son obligatorios."
+          });
+          return;
+        }
+
+        // Verificar si el username o email ya existen
+        const existe = mockDb.perfiles.some(
+          (u) =>
+            u.username.toLowerCase() === String(username).toLowerCase() ||
+            u.email.toLowerCase() === String(email).toLowerCase()
+        );
+
+        if (existe) {
+          res.status(400).json({ error: "Ya existe un usuario con ese nombre de usuario o correo electrónico." });
+          return;
+        }
+
+        const nuevoUsuario = await crearUsuarioInicial({
+          username,
+          email,
+          nombreCompleto,
+          rol,
+          passwordPlana,
+          requiereCambioPassword: requiereCambioPassword !== false
+        });
+
+        mockDb.perfiles.push(nuevoUsuario);
+
+        // Persistir en Supabase
+        if (supabaseAdmin) {
+          try {
+            await supabaseAdmin.from("perfiles_usuario").insert([
+              {
+                id: nuevoUsuario.id,
+                username: nuevoUsuario.username,
+                email: nuevoUsuario.email,
+                nombre_completo: nuevoUsuario.nombreCompleto,
+                rol: nuevoUsuario.rol,
+                activo: true,
+                password_hash: nuevoUsuario.password_hash,
+                requiere_cambio_password: nuevoUsuario.requiere_cambio_password
+              }
+            ]);
+            console.log(`[AUTH]: Nuevo usuario ${nuevoUsuario.username} persistido en Supabase.`);
+          } catch (sbErr: any) {
+            console.error("[AUTH]: Error al persistir nuevo usuario en Supabase:", sbErr?.message);
+          }
+        }
+
+        res.status(201).json({
+          success: true,
+          mensaje: "Usuario corporativo creado y cifrado con bcrypt exitosamente.",
+          usuario: {
+            id: nuevoUsuario.id,
+            username: nuevoUsuario.username,
+            email: nuevoUsuario.email,
+            nombreCompleto: nuevoUsuario.nombreCompleto,
+            rol: nuevoUsuario.rol,
+            activo: nuevoUsuario.activo,
+            creadoEn: nuevoUsuario.creadoEn,
+            requiere_cambio_password: nuevoUsuario.requiere_cambio_password
+          }
+        });
+      } catch (err: any) {
+        res.status(500).json({ error: err?.message || "Error al crear el usuario." });
+      }
+    }
+  );
 
   app.post("/api/auth/logout", (req: Request, res: Response) => {
     res.clearCookie("crm_session_user", { path: "/", sameSite: "none", secure: true });
@@ -865,6 +1195,7 @@ async function startServer() {
       res.status(401).json({ authenticated: false });
       return;
     }
+    const requiereCambio = Boolean(req.user.requiere_cambio_password ?? req.user.requiereCambioPassword);
     res.json({
       authenticated: true,
       user: {
@@ -872,7 +1203,9 @@ async function startServer() {
         username: req.user.username,
         email: req.user.email,
         nombreCompleto: req.user.nombreCompleto,
-        rol: req.user.rol
+        rol: req.user.rol,
+        requiere_cambio_password: requiereCambio,
+        requiereCambioPassword: requiereCambio
       }
     });
   });
@@ -885,6 +1218,8 @@ async function startServer() {
       res.status(404).json({ error: "Usuario no encontrado o inactivo." });
       return;
     }
+
+    const requiereCambio = Boolean(user.requiere_cambio_password ?? user.requiereCambioPassword);
 
     res.cookie("crm_session_user", user.id, {
       httpOnly: true,
@@ -902,7 +1237,9 @@ async function startServer() {
         username: user.username,
         email: user.email,
         nombreCompleto: user.nombreCompleto,
-        rol: user.rol
+        rol: user.rol,
+        requiere_cambio_password: requiereCambio,
+        requiereCambioPassword: requiereCambio
       }
     });
   });
@@ -926,8 +1263,108 @@ async function startServer() {
     res.json(CATALOGO_MUNICIPIOS);
   });
 
-  // 3. LISTADO GENERAL Y CONSULTA UNIVERSAL DEL ESTADO
-  app.get("/api/expedientes", requireAuth(), (req: AuthRequest, res: Response) => {
+  // 3. LISTADO GENERAL Y CONSULTA UNIVERSAL DEL ESTADO (CON HIDRATACIÓN DESDE SUPABASE)
+  app.get("/api/expedientes", requireAuth(), async (req: AuthRequest, res: Response) => {
+    // 1. Hidratación bidireccional desde Supabase si el servicio está activo
+    if (supabaseAdmin) {
+      try {
+        const { data: dbRows, error: sbErr } = await supabaseAdmin
+          .from("expedientes")
+          .select(`
+            *,
+            postulante:personas!expedientes_postulante_id_fkey(*),
+            predio:predios!expedientes_predio_vivienda_id_fkey(*),
+            hogar:hogares!expedientes_hogar_id_fkey(
+              id,
+              observaciones,
+              integrantes:integrantes_hogar(
+                id,
+                parentesco,
+                es_postulante_principal,
+                persona:personas(*)
+              )
+            ),
+            comercial:perfiles_usuario!expedientes_comercial_origen_id_fkey(id, nombre_completo, username, rol),
+            responsable:perfiles_usuario!expedientes_responsable_general_id_fkey(id, nombre_completo, username, rol)
+          `)
+          .order("creado_en", { ascending: false });
+
+        if (!sbErr && dbRows && dbRows.length > 0) {
+          for (const row of dbRows) {
+            const existe = mockDb.expedientes.some(
+              (e) => e.id === row.id || (row.codigo_visible && e.codigoVisible === row.codigo_visible)
+            );
+            if (!existe && row.postulante) {
+              const post = row.postulante;
+              const pred = row.predio || {};
+              const hog = row.hogar || {};
+              const com = row.comercial || {};
+              const resp = row.responsable || {};
+
+              const nuevoExp: Expediente = {
+                id: row.id,
+                codigoVisible: row.codigo_visible,
+                interesadoOrigenId: row.interesado_origen_id,
+                estadoGeneral: row.estado_general || "en_tramite",
+                faseActual: Number(row.fase_actual || 1),
+                comercialOrigenId: row.comercial_origen_id || com.id || "usr-comercial-01",
+                comercialOrigenNombre: com.nombre_completo || "Gestor Rural",
+                responsableGeneralId: row.responsable_general_id || resp.id || "usr-supervisor-01",
+                responsableGeneralNombre: resp.nombre_completo || "Dra. Helena Ramírez",
+                fechaPrimerContacto: row.fecha_primer_contacto || row.creado_en,
+                fechaIngresoFase1: row.fecha_ingreso_fase1 || row.creado_en,
+                creadoEn: row.creado_en,
+                actualizadoEn: row.actualizado_en,
+                postulante: {
+                  id: post.id || `per-${row.id}`,
+                  tipoIdentificacion: post.tipo_identificacion || "CC",
+                  numeroIdentificacion: post.numero_identificacion,
+                  primerNombre: post.nombres ? String(post.nombres).split(" ")[0] : "",
+                  primerApellido: post.primer_apellido || "",
+                  segundoApellido: post.segundo_apellido,
+                  nombres: post.nombres || `${post.primer_apellido}`,
+                  telefonoPrincipal: post.telefono_principal,
+                  correo: post.correo
+                },
+                predioVivienda: {
+                  id: pred.id || `pre-${row.id}`,
+                  departamentoCodigo: pred.departamento_codigo || "25",
+                  municipioCodigo: pred.municipio_codigo || "25899",
+                  vereda: pred.vereda || "Rural",
+                  nombreODireccion: pred.nombre_o_direccion || "Lote sin dirección registrada",
+                  matriculaInmobiliaria: pred.matricula_inmobiliaria,
+                  referenciaCatastral: pred.referencia_catastral,
+                  esPredioViviendaPrincipal: true
+                },
+                hogar: {
+                  id: hog.id || `hog-${row.id}`,
+                  observaciones: hog.observaciones,
+                  integrantes: [
+                    {
+                      id: `int-${row.id}`,
+                      hogarId: hog.id || `hog-${row.id}`,
+                      parentesco: "postulante_principal",
+                      esPostulantePrincipal: true,
+                      persona: {
+                        id: post.id || `per-${row.id}`,
+                        tipoIdentificacion: post.tipo_identificacion || "CC",
+                        numeroIdentificacion: post.numero_identificacion,
+                        primerApellido: post.primer_apellido || "",
+                        nombres: post.nombres || ""
+                      }
+                    }
+                  ]
+                }
+              };
+              mockDb.expedientes.unshift(nuevoExp);
+            }
+          }
+        }
+      } catch (dbErr: any) {
+        console.error("[EXPEDIENTES HIDRATACIÓN ERROR]:", dbErr?.message);
+      }
+    }
+
     const listado = mockDb.expedientes.map((exp) => {
       if (exp.faseActual >= 4 && !exp.gestionFase4) {
         inicializarFase4(exp);
@@ -942,7 +1379,7 @@ async function startServer() {
       const ahora = new Date().getTime();
       const diasTranscurridos = Math.max(0, Math.floor((ahora - fechaInicio) / (1000 * 60 * 60 * 24)));
 
-      // CAMBIO 4: Determinar si el expediente tiene observaciones (documentales o de fase/Compensar)
+      // Determinar si el expediente tiene observaciones (documentales o de fase/Compensar)
       const tieneDocsObservados = mockDb.requisitosCaso.some(
         (r) => r.expedienteId === exp.id && r.estado === "con_observaciones"
       );
@@ -977,12 +1414,68 @@ async function startServer() {
     res.json(listado);
   });
 
-  // 4. CAPTACIÓN: INTERESADOS (EXCLUSIVO para Comercial: ver, registrar y convertir)
-  // CAMBIO 2: Filtro estricto - solo prospectos activos (no convertidos a expediente ni descartados)
-  // CAMBIO 3: Cálculo de vigencia de 45 días y prórroga
-  // CAMBIO 6: Cálculo de último contacto (última nota, último documento, o fecha registro)
-  // CAMBIO 7: Conteo y lista de documentos adjuntos
-  app.get("/api/interesados", requireAuth(["comercial"]), (req: AuthRequest, res: Response) => {
+  // 4. CAPTACIÓN: INTERESADOS (CON HIDRATACIÓN DESDE SUPABASE)
+  app.get("/api/interesados", requireAuth(["comercial", "asistente", "supervisor", "administrador"]), async (req: AuthRequest, res: Response) => {
+    // 1. Hidratación bidireccional desde Supabase si el servicio está activo
+    if (supabaseAdmin) {
+      try {
+        const { data: dbRows, error: sbErr } = await supabaseAdmin
+          .from("interesados")
+          .select(`*, contactos_apoyo(*)`)
+          .order("creado_en", { ascending: false });
+
+        if (!sbErr && dbRows && dbRows.length > 0) {
+          for (const row of dbRows) {
+            const existe = mockDb.interesados.some(
+              (i) => i.id === row.id || (i.telefono === row.telefono && i.nombreContacto === row.nombre_contacto)
+            );
+            if (!existe) {
+              const fechaRegMs = new Date(row.creado_en).getTime();
+              const fechaCaducidad = new Date(fechaRegMs + 45 * 24 * 60 * 60 * 1000).toISOString();
+              mockDb.interesados.unshift({
+                id: row.id,
+                primerNombre: row.nombre_contacto ? String(row.nombre_contacto).split(" ")[0] : "",
+                primerApellido:
+                  row.nombre_contacto && String(row.nombre_contacto).split(" ").length > 1
+                    ? String(row.nombre_contacto).split(" ")[1]
+                    : "",
+                nombreContacto: row.nombre_contacto || "Sin Nombre",
+                telefono: row.telefono || "",
+                tieneWhatsapp: Boolean(row.tiene_whatsapp),
+                correo: row.correo || undefined,
+                departamentoCodigo: row.departamento_codigo || "25",
+                municipioCodigo: row.municipio_codigo || "25899",
+                vereda: row.vereda || "Rural",
+                origenContacto: row.origen_contacto || "Llamada",
+                resumenNecesidad: row.resumen_necesidad || "",
+                comercialAsignadoId: row.comercial_asignado_id || "usr-comercial-01",
+                estadoComercial: row.estado_comercial || "nuevo_contacto",
+                convertidoAExpedienteId: row.convertido_a_expediente_id || undefined,
+                creadoEn: row.creado_en,
+                fechaCaducidad,
+                diasExtension: 0,
+                contactosApoyo: Array.isArray(row.contactos_apoyo)
+                  ? row.contactos_apoyo.map((c: any) => ({
+                      id: c.id,
+                      interesadoId: c.interesado_id || row.id,
+                      nombreCompleto: c.nombre_completo,
+                      relacion: c.relacion || "Familiar",
+                      telefono: c.telefono,
+                      tieneWhatsapp: Boolean(c.tiene_whatsapp),
+                      correo: c.correo,
+                      preferenciaContacto: c.preferencia_contacto,
+                      creadoEn: c.creado_en || row.creado_en
+                    }))
+                  : [],
+                documentosAdjuntos: []
+              });
+            }
+          }
+        }
+      } catch (dbErr: any) {
+        console.error("[INTERESADOS HIDRATACIÓN ERROR]:", dbErr?.message);
+      }
+    }
     const ahora = Date.now();
     const msPorDia = 1000 * 60 * 60 * 24;
 
@@ -1069,7 +1562,8 @@ async function startServer() {
       return;
     }
 
-    const depCodigo = departamentoCodigo || (municipioCodigo ? String(municipioCodigo).substring(0, 2) : "25");
+    const munCodigoNormalizado = normalizarCodigoMunicipio(municipioCodigo);
+    const depCodigo = departamentoCodigo || munCodigoNormalizado.substring(0, 2) || "25";
     const ahoraIso = new Date().toISOString();
     const fechaCaducidadIso = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -1084,7 +1578,7 @@ async function startServer() {
       tieneWhatsapp: tieneWhatsapp !== undefined ? Boolean(tieneWhatsapp) : true,
       correo: correo ? String(correo).trim() : undefined,
       departamentoCodigo: depCodigo,
-      municipioCodigo: municipioCodigo || "25151",
+      municipioCodigo: munCodigoNormalizado,
       vereda: vereda ? normalizarTextoNombre(vereda) : undefined,
       origenContacto: origenContacto || "Llamada",
       resumenNecesidad: resumenNecesidad ? String(resumenNecesidad).trim() : undefined,
@@ -1410,6 +1904,8 @@ async function startServer() {
       correo: interesado.correo
     };
 
+    const munCodigoExp = normalizarCodigoMunicipio(municipioCodigo || interesado.municipioCodigo);
+
     const nuevoExp: typeof mockDb.expedientes[0] = {
       id: nuevoExpId,
       interesadoOrigenId: interesado.id,
@@ -1428,13 +1924,13 @@ async function startServer() {
       },
       predioVivienda: {
         id: predioId,
-        departamentoCodigo: municipioCodigo.substring(0, 2),
-        municipioCodigo,
+        departamentoCodigo: munCodigoExp.substring(0, 2),
+        municipioCodigo: munCodigoExp,
         vereda: vereda ? normalizarTextoNombre(vereda) : (interesado.vereda || "Rural"),
         nombreODireccion: nombreODireccionPredio ? String(nombreODireccionPredio).trim() : "Lote sin dirección registrada",
         esPredioViviendaPrincipal: true
       },
-      codigoVisible: calcularCodigoVisible(municipioCodigo, numeroIdentificacion, pApellido),
+      codigoVisible: calcularCodigoVisible(munCodigoExp, numeroIdentificacion, pApellido),
       estadoGeneral: "en_tramite",
       comercialOrigenId: req.user!.id,
       responsableGeneralId: req.user!.id,
@@ -1857,12 +2353,123 @@ async function startServer() {
       // Actualizar estado del requisito a 'recibido_revision'
       reqCaso.estado = "recibido_revision";
 
-
-
       // Si estaba devuelto con observaciones, reactivar en preparación
       if (exp.estadoFase2 === "devuelto") {
         exp.estadoFase2 = "en_preparacion";
       }
+
+      // PERSISTENCIA DIRECTA E INMEDIATA EN SUPABASE STORAGE ('expedientes-archivos')
+      (async () => {
+        try {
+          // 1. Si es archivo único (PDF o foto individual)
+          if (archivoDataUrl && typeof archivoDataUrl === "string") {
+            const uploadRes = await persistirArchivoEnStorage(
+              nuevaVersion.storagePath,
+              archivoDataUrl,
+              nuevaVersion.mimeType
+            );
+            if (uploadRes.ok && uploadRes.publicUrl) {
+              nuevaVersion.urlFirmadaTemporal = uploadRes.publicUrl;
+              nuevaVersion.archivoDataUrl = uploadRes.publicUrl;
+            }
+          }
+
+          // 2. Si son fotos de registro predial en lote
+          if (fotosArr && fotosArr.length > 0) {
+            for (let i = 0; i < fotosArr.length; i++) {
+              const foto = fotosArr[i];
+              if (foto.url && typeof foto.url === "string" && foto.url.startsWith("data:")) {
+                const fotoPath = `expedientes/${exp.id}/fotos/${foto.id}_${foto.nombre.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+                const fotoUpload = await persistirArchivoEnStorage(fotoPath, foto.url, "image/jpeg");
+                if (fotoUpload.ok && fotoUpload.publicUrl) {
+                  foto.url = fotoUpload.publicUrl;
+                }
+              }
+            }
+          }
+        } catch (storageErr: any) {
+          console.error("[STORAGE FAIL]: Error subiendo archivo a Supabase Storage:", storageErr?.message);
+        }
+
+        // 3. Persistencia relacional en base de datos PostgreSQL (si existen las tablas)
+        if (supabaseAdmin) {
+          try {
+            const { data: usuarioDb } = await supabaseAdmin
+              .from("perfiles_usuario")
+              .select("id")
+              .eq("username", req.user!.username)
+              .maybeSingle();
+            const subidoPorUuid = usuarioDb?.id;
+
+            const { data: expDb } = await supabaseAdmin
+              .from("expedientes")
+              .select("id")
+              .eq("codigo_visible", exp.codigoVisible)
+              .maybeSingle();
+
+            if (expDb?.id && subidoPorUuid) {
+              const { data: docDb } = await supabaseAdmin
+                .from("documentos")
+                .insert([
+                  {
+                    expediente_id: expDb.id,
+                    titulo: doc.titulo,
+                    persona_id: null,
+                    predio_id: null
+                  }
+                ])
+                .select("id")
+                .maybeSingle();
+
+              if (docDb?.id) {
+                const { data: verDb } = await supabaseAdmin
+                  .from("versiones_documento")
+                  .insert([
+                    {
+                      documento_id: docDb.id,
+                      version_numero: nuevaVersion.versionNumero,
+                      storage_path: nuevaVersion.storagePath,
+                      nombre_archivo_original: nuevaVersion.nombreArchivoOriginal,
+                      mime_type: nuevaVersion.mimeType,
+                      tamano_bytes: nuevaVersion.tamanoBytes,
+                      sha256_hash: nuevaVersion.sha256Hash,
+                      subido_por: subidoPorUuid
+                    }
+                  ])
+                  .select("id")
+                  .maybeSingle();
+
+                const { data: reqDb } = await supabaseAdmin
+                  .from("requisitos_caso")
+                  .select("id")
+                  .eq("expediente_id", expDb.id)
+                  .maybeSingle();
+
+                if (reqDb?.id && verDb?.id) {
+                  await supabaseAdmin.from("evidencias_requisito").insert([
+                    {
+                      requisito_caso_id: reqDb.id,
+                      version_documento_id: verDb.id,
+                      vinculado_por: subidoPorUuid
+                    }
+                  ]);
+
+                  await supabaseAdmin
+                    .from("requisitos_caso")
+                    .update({ estado: "recibido_revision" })
+                    .eq("id", reqDb.id);
+                }
+
+                console.log(
+                  `[SUPABASE]: Documento y versión ${nuevaVersion.versionNumero} registrados en Supabase BD para ${nuevaVersion.nombreArchivoOriginal}`
+                );
+              }
+            }
+          } catch (err: any) {
+            console.error("[SUPABASE DB]: Error al persistir documento en PostgreSQL:", err?.message);
+          }
+        }
+      })();
 
       res.status(201).json({
         success: true,
@@ -1962,6 +2569,77 @@ async function startServer() {
         fechaGestion: new Date().toISOString(),
         creadoEn: new Date().toISOString()
       });
+
+      // PERSISTENCIA EN SUPABASE DEL NUEVO INTEGRANTE (PostgreSQL)
+      if (supabaseAdmin) {
+        (async () => {
+          try {
+            // 1. Insertar o reutilizar persona en Supabase
+            const { data: personaDb } = await supabaseAdmin
+              .from("personas")
+              .upsert(
+                [
+                  {
+                    tipo_identificacion: nuevaPersona.tipoIdentificacion,
+                    numero_identificacion: nuevaPersona.numeroIdentificacion,
+                    nombres:
+                      nuevaPersona.primerNombre +
+                      (nuevaPersona.segundoNombre ? " " + nuevaPersona.segundoNombre : ""),
+                    primer_apellido: nuevaPersona.primerApellido,
+                    segundo_apellido: nuevaPersona.segundoApellido || null
+                  }
+                ],
+                { onConflict: "tipo_identificacion,numero_identificacion" }
+              )
+              .select("id")
+              .maybeSingle();
+
+            // 2. Buscar el expediente correspondiente en Supabase
+            const { data: expDb } = await supabaseAdmin
+              .from("expedientes")
+              .select("id, hogar_id")
+              .eq("codigo_visible", exp.codigoVisible)
+              .maybeSingle();
+
+            if (personaDb?.id && expDb?.hogar_id) {
+              // 3. Vincular a integrantes_hogar
+              await supabaseAdmin.from("integrantes_hogar").insert([
+                {
+                  hogar_id: expDb.hogar_id,
+                  persona_id: personaDb.id,
+                  parentesco,
+                  es_postulante_principal: false
+                }
+              ]);
+
+              // 4. Crear requisito documental de cédula para este integrante
+              const codPlantilla = numFase === 1 ? "F1-03" : "F2-04";
+              const { data: plantilla } = await supabaseAdmin
+                .from("plantillas_requisito")
+                .select("id")
+                .eq("codigo_requisito", codPlantilla)
+                .maybeSingle();
+
+              if (plantilla?.id) {
+                await supabaseAdmin.from("requisitos_caso").insert([
+                  {
+                    expediente_id: expDb.id,
+                    plantilla_id: plantilla.id,
+                    fase: numFase,
+                    persona_id: personaDb.id,
+                    estado: "pendiente_carga"
+                  }
+                ]);
+              }
+              console.log(
+                `[SUPABASE]: Integrante ${nombreCompleto} (${parentesco}) persistido en Supabase para expediente ${exp.codigoVisible}`
+              );
+            }
+          } catch (err: any) {
+            console.error("[SUPABASE]: Error al guardar integrante en Supabase:", err?.message);
+          }
+        })();
+      }
 
       res.status(201).json({
         success: true,
@@ -2580,6 +3258,9 @@ async function startServer() {
         responsableGeneralRol: asistente.rol
       };
 
+      // Sincronizar actualización de fase en Supabase
+      sincronizarExpedienteEnSupabase(exp);
+
       res.json({
         success: true,
         mensaje: `Fase 1 aprobada con éxito. El hogar avanzó a Fase 2 (Conformación del Hogar) y la responsabilidad general fue transferida a ${asistente.nombreCompleto}.`,
@@ -2760,6 +3441,9 @@ async function startServer() {
         fechaGestion: new Date().toISOString(),
         creadoEn: new Date().toISOString()
       });
+
+      // Sincronizar actualización de fase en Supabase
+      sincronizarExpedienteEnSupabase(exp);
 
       res.json({
         success: true,
@@ -3204,6 +3888,14 @@ async function startServer() {
         return;
       }
 
+      // Regla de Negocio VRD: Prohibición estricta de retroceso entre fases
+      if (faseDestino <= exp.faseActual && req.user!.rol !== "administrador") {
+        res.status(400).json({
+          error: `No es posible retroceder a la Fase ${faseDestino}. El avance del expediente es estrictamente progresivo e irreversible (Fase actual: ${exp.faseActual}).`
+        });
+        return;
+      }
+
       exp.faseActual = faseDestino;
       exp.actualizadoEn = new Date().toISOString();
 
@@ -3218,6 +3910,9 @@ async function startServer() {
         fechaGestion: new Date().toISOString(),
         creadoEn: new Date().toISOString()
       });
+
+      // Sincronizar avance de fase en Supabase
+      sincronizarExpedienteEnSupabase(exp);
 
       res.json({
         success: true,
@@ -6891,6 +7586,66 @@ async function startServer() {
     });
 
     res.json(mockDb.configuracionSistema.plantillasFases);
+  });
+
+  // 2.10 Limpiar todos los expedientes de prueba (Acción Exclusiva de Administrador para arranque desde cero)
+  app.post("/api/admin/limpiar-expedientes", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
+    try {
+      // 1. Limpieza en memoria
+      mockDb.expedientes = [];
+      mockDb.interesados = [];
+      mockDb.requisitosCaso = [];
+      mockDb.documentos = [];
+      mockDb.versiones = [];
+      mockDb.revisiones = [];
+      mockDb.notas = [];
+      mockDb.tareas = [];
+      mockDb.eventosSalida = [];
+      mockDb.cartasSalida = [];
+      mockDb.solicitudesRetiro = [];
+
+      // 2. Limpieza en Supabase PostgreSQL si está activo
+      if (supabaseAdmin) {
+        const tablasALimpiar = [
+          "versiones_documento",
+          "documentos",
+          "requisitos_caso",
+          "eventos_salida",
+          "cartas_salida",
+          "solicitudes_retiro_cedula",
+          "expedientes",
+          "integrantes_hogar",
+          "hogares",
+          "predios",
+          "interesados",
+          "personas"
+        ];
+        for (const tbl of tablasALimpiar) {
+          try {
+            await supabaseAdmin.from(tbl).delete().neq("id", "00000000-0000-0000-0000-000000000000");
+          } catch {}
+        }
+      }
+
+      mockDb.auditoriaAdmin.unshift({
+        id: `aud-${Date.now()}`,
+        fecha: new Date().toISOString(),
+        adminId: req.user!.id,
+        adminNombre: req.user!.nombreCompleto,
+        accion: "LIMPIAR_EXPEDIENTES_PRUEBA",
+        detalle: "Se eliminaron todos los expedientes e interesados de prueba para inicializar el sistema desde cero.",
+        categoria: "sistema"
+      });
+
+      res.json({
+        success: true,
+        message: "Todos los expedientes y registros de prueba han sido eliminados. El sistema se encuentra en blanco listo para producción.",
+        totalExpedientes: 0,
+        totalInteresados: 0
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "Error al limpiar expedientes de prueba: " + (err?.message || "error desconocido") });
+    }
   });
 
   // BLOQUE 3: VISIBILIDAD GLOBAL Y REPORTES (ADMINISTRADOR)

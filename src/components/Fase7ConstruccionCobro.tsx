@@ -1701,14 +1701,14 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
                     </span>
                   </div>
 
-                  {formFotosHito.length < 20 && (
+                  {currentUser.rol === "administrador" && formFotosHito.length < 20 && (
                     <button
                       type="button"
                       onClick={handleGenerarFotosMuestraHito}
-                      className="px-2.5 py-1 text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg cursor-pointer transition-colors"
-                      title="Crea fotografías periciales de demostración con sello del CRM"
+                      className="px-2.5 py-1 text-[11px] font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-lg cursor-pointer transition-colors"
+                      title="Herramienta de prueba exclusiva para el Administrador del Sistema"
                     >
-                      + Generar Fotos Muestra
+                      + Generar Fotos Muestra (Solo Admin)
                     </button>
                   )}
                 </div>

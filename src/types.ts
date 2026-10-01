@@ -21,6 +21,11 @@ export interface PerfilUsuario {
   rol: RolUsuario;
   activo: boolean;
   creadoEn: string;
+  // Seguridad y autenticación real con bcrypt
+  password_hash?: string;
+  requiere_cambio_password?: boolean;
+  passwordHash?: string;
+  requiereCambioPassword?: boolean;
 }
 
 export interface ContactoApoyo {

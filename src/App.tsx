@@ -37,7 +37,9 @@ import {
   ImageIcon,
   Image,
   FileSpreadsheet,
-  Phone
+  Phone,
+  KeyRound,
+  Printer
 } from "lucide-react";
 import {
   PerfilUsuario,
@@ -63,6 +65,8 @@ import { Fase7ConstruccionCobro } from "./components/Fase7ConstruccionCobro";
 import { ModalSolicitudRechazo } from "./components/ModalSolicitudRechazo";
 import { AdminPanel } from "./components/AdminPanel";
 import { ModuloInformes } from "./components/ModuloInformes";
+import { ModalCambioPassword } from "./components/ModalCambioPassword";
+import { FichaTecnicaImprimible } from "./components/FichaTecnicaImprimible";
 import { CATALOGO_MUNICIPIOS } from "./data/municipios";
 import { normalizarTextoNombre, construirNombreCompleto } from "./utils/normalizacion";
 import { formatearRol, formatearNombreUsuario } from "./utils/formatoRoles";
@@ -110,6 +114,8 @@ export default function App() {
   const [errorRevisar, setErrorRevisar] = useState<string | null>(null);
   const [guardandoRevision, setGuardandoRevision] = useState<boolean>(false);
   const [errorAprobar, setErrorAprobar] = useState<string | null>(null);
+  const [modalCambioPasswordVoluntario, setModalCambioPasswordVoluntario] = useState<boolean>(false);
+  const [mostrarFichaImprimible, setMostrarFichaImprimible] = useState<boolean>(false);
 
   const mostrarToast = (texto: string, tipo: "exito" | "error" = "exito") => {
     setToast({ tipo, texto });
@@ -561,6 +567,13 @@ export default function App() {
       setCurrentUser(data.user);
       localStorage.setItem("crm_user_session", JSON.stringify(data.user));
       localStorage.setItem("crm_user_token", data.token || data.user.id);
+
+      const requiereCambio = Boolean(data.user.requiere_cambio_password ?? data.user.requiereCambioPassword);
+      if (requiereCambio) {
+        mostrarToast("Seguridad: Debe definir su contraseña personal para continuar.", "error");
+        return;
+      }
+
       if (data.user.rol === "comercial") {
         setVistaActual("captacion");
       } else {
@@ -649,6 +662,15 @@ export default function App() {
       .then((res) => res.json())
       .then((data) => {
         setDetalleExp(data);
+        if (data?.expediente?.faseActual) {
+          // Bloqueo de retroceso: asegura que al consultar el expediente se posicione en la fase activa
+          setTabRequisitos((prev) => {
+            if (currentUser?.rol !== "administrador") {
+              return data.expediente.faseActual;
+            }
+            return prev && prev <= data.expediente.faseActual ? prev : data.expediente.faseActual;
+          });
+        }
         return data;
       })
       .catch(() => {});
@@ -1957,22 +1979,6 @@ export default function App() {
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-blue-950 flex flex-col items-center justify-center p-4">
-        {/* Banner visible de modo */}
-        <div className={`w-full max-w-md mb-3 px-3.5 py-2 rounded-lg text-center text-xs font-semibold tracking-wide border ${
-          systemStatus.mode === "supabase"
-            ? "bg-emerald-950/60 border-emerald-500/40 text-emerald-300 shadow-sm"
-            : "bg-amber-400/10 border-amber-400/30 text-amber-200"
-        }`}>
-          {systemStatus.mode === "supabase" ? (
-            <span className="flex items-center justify-center space-x-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span>⚡ SUPABASE ACTIVO • Proyecto: <strong className="font-mono text-emerald-200">{systemStatus.projectId || "dcelksfchabhrlevlfah"}</strong></span>
-            </span>
-          ) : (
-            <span>⚠️ {systemStatus.label}</span>
-          )}
-        </div>
-
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 border border-slate-200">
           <div className="flex items-center space-x-3 mb-6">
             <div className="p-3 bg-blue-600 text-white rounded-xl shadow-md">
@@ -1984,18 +1990,10 @@ export default function App() {
             </div>
           </div>
 
-          <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+          <p className="text-xs text-slate-600 mb-6 leading-relaxed">
             Acompañamiento integral para el programa <strong>Vivienda Rural Digna</strong> en sitio propio. Ingrese con
             sus credenciales asignadas.
           </p>
-
-          <div className="mb-4 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center justify-between text-[11px] text-emerald-900 shadow-2xs">
-            <div className="flex items-center space-x-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
-              <span>Supabase Conectado: <strong className="font-mono text-emerald-950">{systemStatus.projectId || "dcelksfchabhrlevlfah"}</strong></span>
-            </div>
-            <span className="text-[10px] bg-emerald-200/60 text-emerald-800 font-bold px-1.5 py-0.5 rounded">En línea</span>
-          </div>
 
           {authError && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 mb-4 flex items-center space-x-2">
@@ -2097,23 +2095,44 @@ export default function App() {
     );
   }
 
+  // PANTALLA OBLIGATORIA DE CAMBIO DE CONTRASEÑA (BCRYPT)
+  const requiereCambioPassword = Boolean(
+    currentUser?.requiere_cambio_password ?? currentUser?.requiereCambioPassword
+  );
+
+  if (currentUser && requiereCambioPassword) {
+    return (
+      <ModalCambioPassword
+        usuario={currentUser}
+        onPasswordCambiada={(usuarioActualizado) => {
+          setCurrentUser(usuarioActualizado);
+          localStorage.setItem("crm_user_session", JSON.stringify(usuarioActualizado));
+          mostrarToast("Contraseña actualizada y protegida con bcrypt. ¡Bienvenido!");
+        }}
+        onCerrarSesion={handleLogout}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
-      {/* AVISO PERMANENTE DE MODO DE EJECUCIÓN */}
-      <div className={`py-1.5 px-4 text-center text-xs font-semibold tracking-wide border-b flex items-center justify-center space-x-2 ${
-        systemStatus.mode === "supabase" 
-          ? "bg-emerald-50 text-emerald-900 border-emerald-200" 
-          : "bg-amber-100 text-amber-900 border-amber-300"
-      }`}>
-        {systemStatus.mode === "supabase" ? (
-          <>
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>⚡ CONECTADO A SUPABASE • Proyecto: <strong className="font-mono">{systemStatus.projectId || "dcelksfchabhrlevlfah"}</strong> • Persistencia y REST API Activas</span>
-          </>
-        ) : (
-          <span>⚠️ {systemStatus.label}</span>
-        )}
-      </div>
+      {/* AVISO PERMANENTE DE MODO DE EJECUCIÓN (SOLO VISIBLE PARA ADMINISTRADOR) */}
+      {currentUser?.rol === "administrador" && (
+        <div className={`py-1.5 px-4 text-center text-xs font-semibold tracking-wide border-b flex items-center justify-center space-x-2 ${
+          systemStatus.mode === "supabase" 
+            ? "bg-emerald-50 text-emerald-900 border-emerald-200" 
+            : "bg-amber-100 text-amber-900 border-amber-300"
+        }`}>
+          {systemStatus.mode === "supabase" ? (
+            <>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>⚡ CONECTADO A SUPABASE • Proyecto: <strong className="font-mono">{systemStatus.projectId || "dcelksfchabhrlevlfah"}</strong> • Persistencia y REST API Activas</span>
+            </>
+          ) : (
+            <span>⚠️ {systemStatus.label}</span>
+          )}
+        </div>
+      )}
 
       {/* BARRA SUPERIOR DE NAVEGACIÓN */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30 px-6 py-3 flex items-center justify-between shadow-xs">
@@ -2206,33 +2225,43 @@ export default function App() {
         </div>
 
         <div className="flex items-center space-x-3">
-          {/* CAMBIADOR RÁPIDO DE USUARIO / ROL */}
-          <div className="flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200/80 px-2.5 py-1.5 rounded-xl border border-slate-200 transition-colors">
-            <UserCheck className="w-4 h-4 text-blue-600 shrink-0" />
-            <div className="flex flex-col">
-              <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 leading-none">
-                Cambio Rápido de Rol
-              </span>
-              <select
-                aria-label="Cambio rápido de rol de usuario"
-                value={currentUser.id}
-                onChange={(e) => handleSwitchUser(e.target.value)}
-                className="text-xs font-semibold text-slate-800 bg-transparent outline-none cursor-pointer pr-1"
-              >
-                <option value="usr-comercial-01">Carlos Mendoza (Gestor Rural)</option>
-                <option value="usr-asistente-01">Laura Castillo (Gestor Documental)</option>
-                <option value="usr-asistente-02">Andrés Gil (Gestor Documental II)</option>
-                <option value="usr-supervisor-01">Dra. Helena Ramírez (Analista Documental)</option>
-                <option value="usr-ingenieria-01">Ing. Roberto Salazar (Ingeniería)</option>
-                <option value="usr-admin-01">Administrador del Sistema</option>
-              </select>
+          {/* CAMBIADOR RÁPIDO DE USUARIO / ROL (HERRAMIENTA EXCLUSIVA DEL ADMINISTRADOR) */}
+          {currentUser.rol === "administrador" && (
+            <div className="flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200/80 px-2.5 py-1.5 rounded-xl border border-slate-200 transition-colors">
+              <UserCheck className="w-4 h-4 text-blue-600 shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 leading-none">
+                  Cambio Rápido de Rol
+                </span>
+                <select
+                  aria-label="Cambio rápido de rol de usuario"
+                  value={currentUser.id}
+                  onChange={(e) => handleSwitchUser(e.target.value)}
+                  className="text-xs font-semibold text-slate-800 bg-transparent outline-none cursor-pointer pr-1"
+                >
+                  <option value="usr-comercial-01">Carlos Mendoza (Gestor Rural)</option>
+                  <option value="usr-asistente-01">Laura Castillo (Gestor Documental)</option>
+                  <option value="usr-asistente-02">Andrés Gil (Gestor Documental II)</option>
+                  <option value="usr-supervisor-01">Dra. Helena Ramírez (Analista Documental)</option>
+                  <option value="usr-ingenieria-01">Ing. Roberto Salazar (Ingeniería)</option>
+                  <option value="usr-admin-01">Administrador del Sistema</option>
+                </select>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="text-right hidden md:block">
             <div className="text-xs font-bold text-slate-800">{formatearNombreUsuario(currentUser.nombreCompleto)}</div>
             <div className="text-[11px] text-blue-600 font-medium">Rol: {formatearRol(currentUser.rol)}</div>
           </div>
+          <button
+            type="button"
+            onClick={() => setModalCambioPasswordVoluntario(true)}
+            className="p-2 text-slate-500 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
+            title="Cambiar contraseña de seguridad (bcrypt)"
+          >
+            <KeyRound className="w-4 h-4" />
+          </button>
           <button
             type="button"
             onClick={handleLogout}
@@ -2403,10 +2432,12 @@ export default function App() {
                               <Search className="w-5 h-5" />
                             </div>
                             <h4 className="text-xs font-bold text-slate-800 mb-1">
-                              No se encontraron expedientes
+                              {expedientes.length === 0 ? "No hay expedientes registrados en el sistema" : "No se encontraron expedientes"}
                             </h4>
                             <p className="text-xs text-slate-500 mb-3.5 leading-relaxed">
-                              No hay registros que coincidan con los filtros aplicados.
+                              {expedientes.length === 0
+                                ? "La aplicación se encuentra lista para iniciar la operación desde cero. Registre nuevos hogares en la sección de Captación Comercial para convertirlos a Expediente."
+                                : "No hay registros que coincidan con los filtros aplicados."}
                             </p>
                             {(filtroTexto || filtroMunicipio || filtroEstado || filtroFase || filtroResponsable || filtroTiempo) && (
                               <button
@@ -3108,6 +3139,17 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center space-x-3">
+                  {/* BOTÓN IMPRIMIR FICHA TÉCNICA OFICIAL */}
+                  <button
+                    type="button"
+                    onClick={() => setMostrarFichaImprimible(true)}
+                    className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold border border-slate-300 shadow-2xs flex items-center space-x-1.5 transition-colors cursor-pointer"
+                    title="Generar e imprimir Ficha Técnica Oficial (PDF / Impresión)"
+                  >
+                    <Printer className="w-4 h-4 text-slate-700" />
+                    <span>Ficha Técnica</span>
+                  </button>
+
                   {/* BOTÓN SOLICITAR RECHAZO DEL HOGAR (CUALQUIER FASE 1 A 7) */}
                   {!esSalidaDefinitiva && detalleExp.expediente.solicitudRechazo?.estado !== "pendiente" && (() => {
                     const analistaBloqueadoPorCarga = currentUser.rol === "supervisor" && !detalleExp.expediente.bloqueadoPorRevision;
@@ -3531,16 +3573,23 @@ export default function App() {
 
               return (
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs mb-6">
-                  {/* PESTAÑAS DE NAVEGACIÓN ENTRE FASES (1 A 7) */}
+                  {/* PESTAÑAS DE NAVEGACIÓN ENTRE FASES (1 A 7) — BLOQUEO ESTRICTO DE RETROCESO */}
                   <div className="flex items-center gap-2 border-b border-slate-200 mb-6 pb-0 overflow-x-auto scroll-smooth">
                     {fasesConfig.map((f) => {
                       const reqsDeEstaFase = detalleExp.requisitos.filter((r) => (f.num === 1 ? r.fase === 1 || !r.fase : r.fase === f.num));
-                      const estaHabilitada = detalleExp.expediente.faseActual >= f.num;
+                      const esFaseActual = detalleExp.expediente.faseActual === f.num;
+                      const esFaseAnterior = f.num < detalleExp.expediente.faseActual;
+                      const esFaseFutura = f.num > detalleExp.expediente.faseActual;
+
+                      // Regla de Negocio VRD: Al avanzar de fase, las fases previas y futuras quedan estrictamente bloqueadas.
+                      // La navegación se mantiene fija y exclusiva en la fase activa en curso.
+                      const estaHabilitada = esFaseActual;
                       const esSeleccionada = tabRequisitos === f.num;
                       const aceptados = reqsDeEstaFase.filter((r) => r.estado === "aceptado").length;
 
                       const getBadgeTexto = () => {
-                        if (!estaHabilitada) return "Bloqueada";
+                        if (esFaseAnterior) return "Cerrada / Bloqueada";
+                        if (esFaseFutura) return "Bloqueada";
                         if (f.num === 6) {
                           const post = detalleExp.expediente.postulacionSubsidio;
                           if (post?.estadoActual === "indicacion_obra_enviada") return "Obra Notificada";
@@ -3556,30 +3605,53 @@ export default function App() {
                           if (lic?.estadoActual === "radicado") return "Radicada";
                           return "Por Radicar";
                         }
-                        return reqsDeEstaFase.length > 0 ? `${aceptados}/${reqsDeEstaFase.length}` : "Activa";
+                        return reqsDeEstaFase.length > 0 ? `${aceptados}/${reqsDeEstaFase.length}` : "Fase Activa";
                       };
 
                       return (
                         <button
                           key={f.num}
                           type="button"
-                          onClick={() => setTabRequisitos(f.num)}
-                          className={`pb-2.5 px-3.5 text-xs font-bold border-b-2 transition-all flex items-center space-x-2 shrink-0 cursor-pointer whitespace-nowrap -mb-[1px] ${
-                            esSeleccionada
-                              ? "border-blue-600 text-blue-700"
-                              : "border-transparent text-slate-500 hover:text-slate-800"
+                          disabled={!estaHabilitada}
+                          onClick={() => {
+                            if (estaHabilitada) {
+                              setTabRequisitos(f.num);
+                            }
+                          }}
+                          title={
+                            esFaseAnterior
+                              ? (currentUser.rol === "administrador" 
+                                  ? "Fase superada y cerrada (Auditoría Administrativa)" 
+                                  : "Fase completada y bloqueada. No está permitido retroceder entre fases.")
+                              : esFaseFutura
+                              ? "Fase bloqueada. Requiere completar la fase activa precedente."
+                              : `Fase activa en gestión (${f.label})`
+                          }
+                          className={`pb-2.5 px-3.5 text-xs font-bold border-b-2 transition-all flex items-center space-x-2 shrink-0 whitespace-nowrap -mb-[1px] ${
+                            !estaHabilitada
+                              ? "border-transparent text-slate-400 opacity-60 cursor-not-allowed bg-slate-50/50"
+                              : esSeleccionada
+                              ? "border-blue-600 text-blue-700 cursor-pointer"
+                              : "border-transparent text-slate-500 hover:text-slate-800 cursor-pointer"
                           }`}
                         >
-                          <span>{f.label}</span>
+                          <div className="flex items-center space-x-1.5">
+                            {(esFaseAnterior || esFaseFutura) && (
+                              <Lock className={`w-3.5 h-3.5 ${esFaseAnterior ? "text-slate-400" : "text-slate-300"}`} />
+                            )}
+                            <span>{f.label}</span>
+                          </div>
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                              estaHabilitada
-                                ? (f.num === 6 && (detalleExp.expediente.postulacionSubsidio?.estadoActual === "aprobada" || detalleExp.expediente.postulacionSubsidio?.estadoActual === "indicacion_obra_enviada")) ||
+                              esFaseAnterior
+                                ? "bg-slate-100 text-slate-500 border border-slate-200"
+                                : esFaseFutura
+                                ? "bg-slate-100 text-slate-400"
+                                : (f.num === 6 && (detalleExp.expediente.postulacionSubsidio?.estadoActual === "aprobada" || detalleExp.expediente.postulacionSubsidio?.estadoActual === "indicacion_obra_enviada")) ||
                                   (f.num === 5 && detalleExp.expediente.tramiteLicencia?.estadoActual === "aprobada") ||
                                   (reqsDeEstaFase.length > 0 && aceptados === reqsDeEstaFase.length)
-                                  ? "bg-emerald-100 text-emerald-800"
-                                  : "bg-blue-50 text-blue-700 font-bold"
-                                : "bg-slate-100 text-slate-400"
+                                ? "bg-emerald-100 text-emerald-800"
+                                : "bg-blue-50 text-blue-700 font-bold"
                             }`}
                           >
                             {getBadgeTexto()}
@@ -5391,27 +5463,29 @@ export default function App() {
                     </label>
                   </div>
 
-                  {/* Botón rápido de prueba para generar 4 fotos prediales oficiales */}
-                  <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                    <div className="text-xs">
-                      <span className="font-bold text-slate-800 block">¿Desea generar el registro oficial de prueba?</span>
-                      <span className="text-slate-500 text-[11px]">Crea automáticamente 4 fotos periciales (Fachada, Lote, Linderos y Vía) con georreferenciación.</span>
+                  {/* Botón rápido de prueba para generar 4 fotos prediales oficiales (Solo Administrador) */}
+                  {currentUser.rol === "administrador" && (
+                    <div className="flex items-center justify-between p-3 bg-amber-50/80 border border-amber-200 rounded-xl">
+                      <div className="text-xs">
+                        <span className="font-bold text-amber-900 block">Modo Administrador: Registro Oficial de Prueba</span>
+                        <span className="text-amber-800 text-[11px]">Herramienta de diagnóstico para pruebas técnicas futuras. Genera 4 fotos periciales con georreferenciación.</span>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={subiendoArchivo}
+                        onClick={() => {
+                          const fotosGeneradas = generarFotosPredioMuestra(detalleExp?.expediente.codigoVisible);
+                          setFotosParaRegistro(fotosGeneradas);
+                          setErrorSubirArchivo(null);
+                          mostrarToast("4 fotografías periciales de prueba generadas (Solo Admin).");
+                        }}
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors shrink-0 flex items-center space-x-1.5 cursor-pointer"
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                        <span>Generar 4 Fotos (Solo Admin)</span>
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      disabled={subiendoArchivo}
-                      onClick={() => {
-                        const fotosGeneradas = generarFotosPredioMuestra(detalleExp?.expediente.codigoVisible);
-                        setFotosParaRegistro(fotosGeneradas);
-                        setErrorSubirArchivo(null);
-                        mostrarToast("4 fotografías periciales de prueba generadas correctamente.");
-                      }}
-                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors shrink-0 flex items-center space-x-1.5 cursor-pointer"
-                    >
-                      <Camera className="w-3.5 h-3.5" />
-                      <span>Generar 4 Fotos Oficiales</span>
-                    </button>
-                  </div>
+                  )}
 
                   {/* Cuadrícula de fotos cargadas / preparadas */}
                   {fotosParaRegistro.length > 0 && (
@@ -5570,34 +5644,36 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Opción alternativa rápida de prueba */}
-                  <div className="pt-2 border-t border-slate-100">
-                    <span className="text-[11px] text-slate-400 block mb-1.5">
-                      ¿No dispone de un archivo local en este momento?
-                    </span>
-                    <button
-                      type="button"
-                      disabled={subiendoArchivo}
-                      onClick={() => {
-                        const blob = new Blob(
-                          [
-                            `%PDF-1.4\n% CERTIFICADO OFICIAL EXPEDIENTE ${detalleExp?.expediente.codigoVisible || ''}\nRequisito: ${modalSubirArchivoReq.nombre}\nFecha: ${new Date().toISOString()}\nValidez jurídica: Certificado verificado por el sistema.`
-                          ],
-                          { type: "application/pdf" }
-                        );
-                        const mockFile = new File(
-                          [blob],
-                          `${modalSubirArchivoReq.codigoRequisito}_${modalSubirArchivoReq.nombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`,
-                          { type: "application/pdf" }
-                        );
-                        handleCargarArchivoReal(modalSubirArchivoReq, mockFile);
-                      }}
-                      className="w-full py-2 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-xs text-slate-600 hover:text-slate-800 font-medium transition-colors flex items-center justify-center space-x-1.5 cursor-pointer"
-                    >
-                      <FileText className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Generar y radicar PDF oficial de prueba</span>
-                    </button>
-                  </div>
+                  {/* Opción alternativa rápida de prueba (HABILITADO EXCLUSIVAMENTE PARA ADMINISTRADOR) */}
+                  {currentUser.rol === "administrador" && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <span className="text-[11px] font-bold text-amber-800 block mb-1.5">
+                        Herramienta de Diagnóstico Exclusiva de Administrador:
+                      </span>
+                      <button
+                        type="button"
+                        disabled={subiendoArchivo}
+                        onClick={() => {
+                          const blob = new Blob(
+                            [
+                              `%PDF-1.4\n% CERTIFICADO OFICIAL EXPEDIENTE ${detalleExp?.expediente.codigoVisible || ''}\nRequisito: ${modalSubirArchivoReq.nombre}\nFecha: ${new Date().toISOString()}\nValidez jurídica: Certificado verificado por el sistema.`
+                            ],
+                            { type: "application/pdf" }
+                          );
+                          const mockFile = new File(
+                            [blob],
+                            `${modalSubirArchivoReq.codigoRequisito}_${modalSubirArchivoReq.nombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`,
+                            { type: "application/pdf" }
+                          );
+                          handleCargarArchivoReal(modalSubirArchivoReq, mockFile);
+                        }}
+                        className="w-full py-2 px-3 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs text-amber-900 font-semibold transition-colors flex items-center justify-center space-x-1.5 cursor-pointer"
+                      >
+                        <FileText className="w-3.5 h-3.5 text-amber-700" />
+                        <span>Generar y radicar PDF oficial de prueba (Solo Admin)</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -6873,6 +6949,30 @@ export default function App() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* MODAL VOLUNTARIO DE CAMBIO DE CONTRASEÑA */}
+      {modalCambioPasswordVoluntario && currentUser && (
+        <ModalCambioPassword
+          usuario={currentUser}
+          esVoluntario={true}
+          onCerrarModal={() => setModalCambioPasswordVoluntario(false)}
+          onPasswordCambiada={(usuarioActualizado) => {
+            setCurrentUser(usuarioActualizado);
+            localStorage.setItem("crm_user_session", JSON.stringify(usuarioActualizado));
+            setModalCambioPasswordVoluntario(false);
+            mostrarToast("Contraseña actualizada exitosamente con bcrypt.");
+          }}
+        />
+      )}
+
+      {/* FICHA TÉCNICA OFICIAL IMPRIMIBLE (TAMAÑO CARTA / A4) */}
+      {mostrarFichaImprimible && detalleExp && (
+        <FichaTecnicaImprimible
+          expediente={detalleExp.expediente}
+          requisitos={detalleExp.requisitos}
+          onCerrar={() => setMostrarFichaImprimible(false)}
+        />
       )}
 
       {/* TOAST FLOTANTE */}
