@@ -49,7 +49,8 @@ import {
   Copy,
   ExternalLink,
   Terminal,
-  Trash2
+  Trash2,
+  Loader2
 } from "lucide-react";
 
 interface AdminPanelProps {
@@ -224,16 +225,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Acciones en curso
   const [guardando, setGuardando] = useState<boolean>(false);
+  const [usuarioAEliminar, setUsuarioAEliminar] = useState<any | null>(null);
+  const [eliminandoUsuario, setEliminandoUsuario] = useState<boolean>(false);
+
+  // Helper de peticiones autenticadas para Administración
+  const authFetch = (url: string, options: RequestInit = {}) => {
+    const token = currentUser?.id || localStorage.getItem("crm_user_token") || "";
+    const headers = new Headers(options.headers || {});
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+      headers.set("x-user-id", token);
+    }
+    const API_URL = import.meta.env.VITE_API_URL || "";
+    return fetch(`${API_URL}${url}`, {
+      ...options,
+      credentials: "include",
+      headers
+    });
+  };
 
   // Carga inicial
   const cargarDatos = async () => {
     setCargando(true);
     try {
       const [resUsr, resCfg, resMet, resExp] = await Promise.all([
-        fetch("/api/admin/usuarios"),
-        fetch("/api/admin/configuracion"),
-        fetch("/api/admin/reportes/dashboard"),
-        fetch("/api/expedientes")
+        authFetch("/api/admin/usuarios"),
+        authFetch("/api/admin/configuracion"),
+        authFetch("/api/admin/reportes/dashboard"),
+        authFetch("/api/expedientes")
       ]);
 
       if (resUsr.ok) {
@@ -274,7 +293,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
     setGuardando(true);
     try {
-      const res = await fetch("/api/admin/usuarios", {
+      const res = await authFetch("/api/admin/usuarios", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formUsuario)
@@ -304,7 +323,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     if (!modalEditarUsuario) return;
     setGuardando(true);
     try {
-      const res = await fetch(`/api/admin/usuarios/${modalEditarUsuario.id}`, {
+      const res = await authFetch(`/api/admin/usuarios/${modalEditarUsuario.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -333,7 +352,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
     try {
-      const res = await fetch(`/api/admin/usuarios/${usr.id}/toggle-activo`, {
+      const res = await authFetch(`/api/admin/usuarios/${usr.id}/toggle-activo`, {
         method: "PATCH"
       });
       const data = await res.json();
@@ -346,9 +365,37 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  const handleSolicitarEliminarUsuario = (usr: any) => {
+    if (usr.id === currentUser.id) {
+      mostrarToast("Seguridad: No puede eliminar su propia cuenta de administrador en sesión.", "error");
+      return;
+    }
+    setUsuarioAEliminar(usr);
+  };
+
+  const handleConfirmarEliminarUsuario = async () => {
+    if (!usuarioAEliminar) return;
+    setEliminandoUsuario(true);
+    try {
+      const res = await authFetch(`/api/admin/usuarios/${usuarioAEliminar.id}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo eliminar el usuario.");
+
+      mostrarToast(data.message || `Usuario ${usuarioAEliminar.nombreCompleto} eliminado correctamente.`);
+      setUsuarioAEliminar(null);
+      cargarDatos();
+    } catch (err: any) {
+      mostrarToast(err.message, "error");
+    } finally {
+      setEliminandoUsuario(false);
+    }
+  };
+
   const handleVerAuditoriaUsuario = async (usr: any) => {
     try {
-      const res = await fetch(`/api/admin/usuarios/${usr.id}/auditoria`);
+      const res = await authFetch(`/api/admin/usuarios/${usr.id}/auditoria`);
       if (res.ok) {
         const data = await res.json();
         setModalAuditoriaUsuario(data);
@@ -812,6 +859,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            title={usr.id === currentUser.id ? "No puede eliminar su propio usuario en sesión" : "Eliminar usuario del sistema"}
+                            disabled={usr.id === currentUser.id}
+                            onClick={() => handleSolicitarEliminarUsuario(usr)}
+                            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                              usr.id === currentUser.id
+                                ? "text-slate-300 cursor-not-allowed opacity-40"
+                                : "text-slate-500 hover:text-rose-600 hover:bg-rose-50"
+                            }`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </td>
@@ -2036,6 +2096,56 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirmación de Eliminación Segura de Usuario */}
+      {usuarioAEliminar && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 border border-slate-200">
+            <div className="flex items-start space-x-3.5 mb-4">
+              <div className="p-3 rounded-xl shrink-0 bg-rose-100 text-rose-600">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-slate-900 leading-snug">
+                  ¿Eliminar usuario del sistema?
+                </h3>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  Está a punto de eliminar al usuario <strong className="text-slate-900">{usuarioAEliminar.nombreCompleto}</strong> (<code>@{usuarioAEliminar.username}</code>, Rol: <span className="font-semibold uppercase">{formatearRol(usuarioAEliminar.rol)}</span>).
+                </p>
+                <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-800 leading-relaxed space-y-1">
+                  <div className="font-bold flex items-center space-x-1">
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>Acción permanente</span>
+                  </div>
+                  <p>
+                    Este usuario será eliminado de forma definitiva tanto del sistema CRM como de la base de datos de <strong>Supabase</strong> (<code>perfiles_usuario</code>).
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={eliminandoUsuario}
+                onClick={() => setUsuarioAEliminar(null)}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-xl text-xs font-semibold cursor-pointer transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={eliminandoUsuario}
+                onClick={handleConfirmarEliminarUsuario}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:bg-rose-400 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer"
+              >
+                {eliminandoUsuario && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>{eliminandoUsuario ? "Eliminando..." : "Sí, Eliminar Usuario"}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -1394,8 +1394,39 @@ export async function createApp(): Promise<express.Express> {
     });
   });
 
-  // Catálogo de todos los usuarios del sistema
-  app.get("/api/usuarios/todos", requireAuth(), (req: Request, res: Response) => {
+  // Catálogo de todos los usuarios del sistema (sincronizado con Supabase)
+  app.get("/api/usuarios/todos", requireAuth(), async (req: Request, res: Response) => {
+    if (supabaseAdmin) {
+      try {
+        const { data: dbUsers } = await supabaseAdmin.from("perfiles_usuario").select("*");
+        if (dbUsers && dbUsers.length > 0) {
+          for (const dbU of dbUsers) {
+            const existing = mockDb.perfiles.find((p) => p.id === dbU.id || p.username.toLowerCase() === dbU.username.toLowerCase());
+            if (existing) {
+              existing.id = dbU.id;
+              existing.nombreCompleto = dbU.nombre_completo || existing.nombreCompleto;
+              existing.email = dbU.email || existing.email;
+              existing.rol = (dbU.rol as RolUsuario) || existing.rol;
+              existing.activo = Boolean(dbU.activo);
+            } else {
+              mockDb.perfiles.push({
+                id: dbU.id,
+                username: dbU.username,
+                email: dbU.email,
+                nombreCompleto: dbU.nombre_completo || dbU.username,
+                rol: dbU.rol as RolUsuario,
+                activo: Boolean(dbU.activo),
+                creadoEn: dbU.creado_en || new Date().toISOString(),
+                passwordHash: dbU.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO"
+              });
+            }
+          }
+        }
+      } catch (err: any) {
+        console.error("[SUPABASE]: Error al obtener usuarios en /api/usuarios/todos:", err);
+      }
+    }
+
     const usuarios = mockDb.perfiles
       .filter((u) => u.activo)
       .map((u) => ({
@@ -4108,7 +4139,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/reasignar",
     requireAuth(["supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -4134,6 +4165,21 @@ export async function createApp(): Promise<express.Express> {
       exp.responsableGeneralNombre = nuevoUsuario.nombreCompleto;
       exp.responsableGeneralRol = nuevoUsuario.rol;
       exp.actualizadoEn = new Date().toISOString();
+
+      // Persistencia en Supabase
+      if (supabaseAdmin) {
+        try {
+          await supabaseAdmin
+            .from("expedientes")
+            .update({
+              responsable_general_id: nuevoUsuario.id,
+              actualizado_en: exp.actualizadoEn
+            })
+            .eq("id", exp.id);
+        } catch (err: any) {
+          console.error("[SUPABASE]: Error al actualizar responsable_general_id en Supabase:", err);
+        }
+      }
 
       mockDb.notas.push({
         id: `nota-${Date.now()}`,
@@ -7172,8 +7218,41 @@ export async function createApp(): Promise<express.Express> {
   });
 
   // BLOQUE 1: GESTIÓN DE USUARIOS Y ROLES (ADMINISTRADOR)
-  // 1.1 Listar todos los usuarios con estadísticas de asignación
-  app.get("/api/admin/usuarios", requireAuth(["administrador"]), (req: AuthRequest, res: Response) => {
+  // 1.1 Listar todos los usuarios con estadísticas de asignación y sincronización Supabase
+  app.get("/api/admin/usuarios", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
+    // Hidratar desde Supabase si está disponible
+    if (supabaseAdmin) {
+      try {
+        const { data: dbUsers, error: sbErr } = await supabaseAdmin.from("perfiles_usuario").select("*");
+        if (dbUsers && dbUsers.length > 0) {
+          for (const dbU of dbUsers) {
+            const existing = mockDb.perfiles.find((p) => p.id === dbU.id || p.username.toLowerCase() === dbU.username.toLowerCase());
+            if (existing) {
+              existing.id = dbU.id;
+              existing.nombreCompleto = dbU.nombre_completo || existing.nombreCompleto;
+              existing.email = dbU.email || existing.email;
+              existing.rol = (dbU.rol as RolUsuario) || existing.rol;
+              existing.activo = Boolean(dbU.activo);
+              if (dbU.password_hash) existing.passwordHash = dbU.password_hash;
+            } else {
+              mockDb.perfiles.push({
+                id: dbU.id,
+                username: dbU.username,
+                email: dbU.email,
+                nombreCompleto: dbU.nombre_completo || dbU.username,
+                rol: dbU.rol as RolUsuario,
+                activo: Boolean(dbU.activo),
+                creadoEn: dbU.creado_en || new Date().toISOString(),
+                passwordHash: dbU.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO"
+              });
+            }
+          }
+        }
+      } catch (err: any) {
+        console.error("[SUPABASE]: Error hidratando perfiles en /api/admin/usuarios:", err);
+      }
+    }
+
     const usuariosConStats = mockDb.perfiles.map((usr) => {
       const expedientesAsignados = mockDb.expedientes.filter(
         (exp) =>
@@ -7204,8 +7283,8 @@ export async function createApp(): Promise<express.Express> {
     res.json(usuariosConStats);
   });
 
-  // 1.2 Crear nuevo usuario en el sistema
-  app.post("/api/admin/usuarios", requireAuth(["administrador"]), (req: AuthRequest, res: Response) => {
+  // 1.2 Crear nuevo usuario en el sistema con persistencia directa en Supabase
+  app.post("/api/admin/usuarios", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
     const { nombreCompleto, username, email, rol, password } = req.body;
 
     if (!nombreCompleto || !username || !email || !rol) {
@@ -7226,6 +7305,9 @@ export async function createApp(): Promise<express.Express> {
       return res.status(400).json({ error: "El correo electrónico ya está registrado." });
     }
 
+    const passwordPlano = password || "crm2026*";
+    const passwordCifrado = await hashPassword(passwordPlano);
+
     const nuevoUsuario: PerfilUsuario & { passwordHash: string } = {
       id: `usr-${rol}-${Date.now().toString(36)}`,
       username: String(username).toLowerCase().trim(),
@@ -7234,10 +7316,34 @@ export async function createApp(): Promise<express.Express> {
       rol: rol as RolUsuario,
       activo: true,
       creadoEn: new Date().toISOString(),
-      passwordHash: password || "crm2026*"
+      passwordHash: passwordCifrado
     };
 
     mockDb.perfiles.push(nuevoUsuario);
+
+    // Persistencia directa en Supabase (tabla perfiles_usuario)
+    if (supabaseAdmin) {
+      try {
+        const { error: insErr } = await supabaseAdmin.from("perfiles_usuario").insert([{
+          id: nuevoUsuario.id,
+          username: nuevoUsuario.username,
+          email: nuevoUsuario.email,
+          nombre_completo: nuevoUsuario.nombreCompleto,
+          rol: nuevoUsuario.rol,
+          activo: nuevoUsuario.activo,
+          creado_en: nuevoUsuario.creadoEn,
+          password_hash: passwordCifrado,
+          requiere_cambio_password: false
+        }]);
+        if (insErr) {
+          console.error("[SUPABASE]: Error insertando usuario en perfiles_usuario:", insErr);
+        } else {
+          console.log(`[SUPABASE]: Usuario ${nuevoUsuario.username} insertado exitosamente en perfiles_usuario.`);
+        }
+      } catch (err: any) {
+        console.error("[SUPABASE]: Excepción al insertar usuario:", err);
+      }
+    }
 
     // Registro en auditoría
     mockDb.auditoriaAdmin.unshift({
@@ -7254,8 +7360,8 @@ export async function createApp(): Promise<express.Express> {
     res.status(201).json(nuevoUsuario);
   });
 
-  // 1.3 Editar usuario existente (nombre, email, rol, etc.)
-  app.put("/api/admin/usuarios/:id", requireAuth(["administrador"]), (req: AuthRequest, res: Response) => {
+  // 1.3 Editar usuario existente con persistencia directa en Supabase
+  app.put("/api/admin/usuarios/:id", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const { nombreCompleto, email, rol, activo } = req.body;
 
@@ -7272,6 +7378,30 @@ export async function createApp(): Promise<express.Express> {
     if (rol) usr.rol = rol as RolUsuario;
     if (activo !== undefined) usr.activo = Boolean(activo);
 
+    // Persistencia directa en Supabase (tabla perfiles_usuario)
+    if (supabaseAdmin) {
+      try {
+        const updatePayload: any = {};
+        if (nombreCompleto) updatePayload.nombre_completo = usr.nombreCompleto;
+        if (email) updatePayload.email = usr.email;
+        if (rol) updatePayload.rol = usr.rol;
+        if (activo !== undefined) updatePayload.activo = usr.activo;
+
+        const { error: updErr } = await supabaseAdmin
+          .from("perfiles_usuario")
+          .update(updatePayload)
+          .eq("id", id);
+
+        if (updErr) {
+          console.error("[SUPABASE]: Error actualizando usuario en Supabase:", updErr);
+        } else {
+          console.log(`[SUPABASE]: Perfil ${usr.username} (${id}) actualizado directamente en Supabase.`);
+        }
+      } catch (err: any) {
+        console.error("[SUPABASE]: Excepción al actualizar perfil en Supabase:", err);
+      }
+    }
+
     // Registro en auditoría
     mockDb.auditoriaAdmin.unshift({
       id: `aud-${Date.now()}`,
@@ -7287,8 +7417,8 @@ export async function createApp(): Promise<express.Express> {
     res.json(usr);
   });
 
-  // 1.4 Activar / Desactivar usuario
-  app.patch("/api/admin/usuarios/:id/toggle-activo", requireAuth(["administrador"]), (req: AuthRequest, res: Response) => {
+  // 1.4 Activar / Desactivar usuario con persistencia en Supabase
+  app.patch("/api/admin/usuarios/:id/toggle-activo", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const usr = mockDb.perfiles.find((p) => p.id === id);
     if (!usr) {
@@ -7302,6 +7432,18 @@ export async function createApp(): Promise<express.Express> {
 
     usr.activo = !usr.activo;
 
+    if (supabaseAdmin) {
+      try {
+        await supabaseAdmin
+          .from("perfiles_usuario")
+          .update({ activo: usr.activo })
+          .eq("id", id);
+        console.log(`[SUPABASE]: Estado activo de ${usr.username} actualizado a ${usr.activo}.`);
+      } catch (err: any) {
+        console.error("[SUPABASE]: Error actualizando activo en Supabase:", err);
+      }
+    }
+
     mockDb.auditoriaAdmin.unshift({
       id: `aud-${Date.now()}`,
       fecha: new Date().toISOString(),
@@ -7314,6 +7456,67 @@ export async function createApp(): Promise<express.Express> {
     });
 
     res.json(usr);
+  });
+
+  // 1.5 Eliminar usuario del sistema con validación de seguridad y persistencia directa en Supabase
+  app.delete("/api/admin/usuarios/:id", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+
+    // Validación de seguridad 1: No auto-eliminarse
+    if (id === req.user!.id) {
+      return res.status(400).json({ error: "Seguridad: No puede eliminar su propia cuenta de administrador en sesión." });
+    }
+
+    const index = mockDb.perfiles.findIndex((p) => p.id === id);
+    if (index === -1) {
+      return res.status(404).json({ error: "Usuario no encontrado." });
+    }
+
+    const usr = mockDb.perfiles[index];
+
+    // Validación de seguridad 2: Expedientes asignados
+    const tieneExpedientesAsignados = mockDb.expedientes.some(
+      (e) => e.responsableGeneralId === id || e.comercialOrigenId === id
+    );
+    if (tieneExpedientesAsignados) {
+      return res.status(400).json({
+        error: `El usuario "${usr.nombreCompleto}" tiene expedientes asignados en el sistema. Reasigne sus expedientes a otro funcionario antes de proceder con la eliminación, o desactívelo para suspender su acceso.`
+      });
+    }
+
+    // Eliminar de mockDb
+    mockDb.perfiles.splice(index, 1);
+
+    // Eliminar de Supabase (perfiles_usuario)
+    if (supabaseAdmin) {
+      try {
+        const { error: delErr } = await supabaseAdmin
+          .from("perfiles_usuario")
+          .delete()
+          .eq("id", id);
+        if (delErr) {
+          console.error("[SUPABASE]: Error al eliminar usuario en Supabase:", delErr);
+        } else {
+          console.log(`[SUPABASE]: Usuario ${usr.username} (${id}) eliminado permanentemente de Supabase.`);
+        }
+      } catch (err: any) {
+        console.error("[SUPABASE]: Excepción al eliminar usuario en Supabase:", err);
+      }
+    }
+
+    // Registro de auditoría
+    mockDb.auditoriaAdmin.unshift({
+      id: `aud-${Date.now()}`,
+      fecha: new Date().toISOString(),
+      adminId: req.user!.id,
+      adminNombre: req.user!.nombreCompleto,
+      accion: "ELIMINAR_USUARIO",
+      detalle: `Eliminación permanente de usuario ${usr.nombreCompleto} (@${usr.username}, Rol: ${usr.rol}).`,
+      categoria: "usuarios",
+      metadatos: { usuarioEliminadoId: usr.id, username: usr.username, email: usr.email, rol: usr.rol }
+    });
+
+    res.json({ success: true, message: `Usuario ${usr.nombreCompleto} eliminado exitosamente del sistema y de Supabase.` });
   });
 
   // 1.5 Historial de auditoría por usuario
@@ -7387,7 +7590,7 @@ export async function createApp(): Promise<express.Express> {
   });
 
   // 1.6 Reasignación de cartera de expedientes (Individual o Masiva)
-  app.post("/api/admin/reasignar-cartera", requireAuth(["administrador", "supervisor"]), (req: AuthRequest, res: Response) => {
+  app.post("/api/admin/reasignar-cartera", requireAuth(["administrador", "supervisor"]), async (req: AuthRequest, res: Response) => {
     const { origenUsuarioId, destinoUsuarioId, expedienteIds, motivo } = req.body;
 
     if (!destinoUsuarioId || !motivo) {
@@ -7446,6 +7649,23 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: ahora
       });
     });
+
+    // Persistencia directa en Supabase
+    if (supabaseAdmin) {
+      try {
+        const ids = expedientesParaReasignar.map((e) => e.id);
+        await supabaseAdmin
+          .from("expedientes")
+          .update({
+            responsable_general_id: destino.id,
+            actualizado_en: ahora
+          })
+          .in("id", ids);
+        console.log(`[SUPABASE]: ${ids.length} expedientes actualizados con nuevo responsable en Supabase.`);
+      } catch (err: any) {
+        console.error("[SUPABASE]: Error en reasignar-cartera en Supabase:", err);
+      }
+    }
 
     // Registrar en auditoría general
     mockDb.auditoriaAdmin.unshift({

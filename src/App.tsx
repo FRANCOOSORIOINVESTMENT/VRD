@@ -2109,64 +2109,6 @@ export default function App() {
               Iniciar Sesión
             </button>
           </form>
-
-          <div className="mt-6 pt-6 border-t border-slate-100">
-            <span className="text-[11px] font-bold tracking-wider uppercase text-slate-400 block mb-2">
-              Cuentas Ficticias de Prueba (5 Roles):
-            </span>
-            <div className="grid grid-cols-2 gap-1.5 text-[11px] text-slate-600 font-mono">
-              <button
-                type="button"
-                onClick={() => {
-                  setLoginUsername("comercial.franco");
-                  setLoginPassword("crm2026*");
-                }}
-                className="text-left hover:text-blue-600 p-1.5 rounded-lg hover:bg-blue-50/80 border border-slate-200 transition-colors truncate"
-              >
-                💼 comercial.franco
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setLoginUsername("supervisor.franco");
-                  setLoginPassword("crm2026*");
-                }}
-                className="text-left hover:text-blue-600 p-1.5 rounded-lg hover:bg-blue-50/80 border border-slate-200 transition-colors truncate"
-              >
-                ⚖️ supervisor.franco
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setLoginUsername("asistente.franco");
-                  setLoginPassword("crm2026*");
-                }}
-                className="text-left hover:text-blue-600 p-1.5 rounded-lg hover:bg-blue-50/80 border border-slate-200 transition-colors truncate"
-              >
-                📋 asistente.franco
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setLoginUsername("ingenieria.franco");
-                  setLoginPassword("crm2026*");
-                }}
-                className="text-left hover:text-blue-600 p-1.5 rounded-lg hover:bg-blue-50/80 border border-slate-200 transition-colors truncate"
-              >
-                📐 ingenieria.franco
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setLoginUsername("admin.franco");
-                  setLoginPassword("crm2026*");
-                }}
-                className="text-left hover:text-blue-600 p-1.5 rounded-lg hover:bg-blue-50/80 border border-slate-200 transition-colors truncate col-span-2"
-              >
-                🛡️ admin.franco (Auto-llena credenciales)
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     );
