@@ -132,7 +132,10 @@ export default function App() {
       headers.set("Authorization", `Bearer ${token}`);
       headers.set("x-user-id", token);
     }
-    return fetch(url, {
+    
+    const API_URL = import.meta.env.VITE_API_URL || '';
+    
+    return fetch(`${API_URL}${url}`, {
       ...options,
       credentials: "include",
       headers
@@ -608,19 +611,7 @@ export default function App() {
     }
   };
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError(null);
-    try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: loginUsername, password: loginPassword })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setAuthError(data.error || "Error al iniciar sesión.");
-        return;
+  const handleLogin = async (e: React.FormEvent)
       }
       setCurrentUser(data.user);
       localStorage.setItem("crm_user_session", JSON.stringify(data.user));
