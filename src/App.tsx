@@ -630,7 +630,14 @@ export default function App() {
         return;
       }
       if (!res.ok) {
-        setAuthError(data.error || "Error al iniciar sesión.");
+        if (data.message?.includes("Protected by Vercel") || data.error?.message === "Protected deployment") {
+          setAuthError("El despliegue está bloqueado por 'Vercel Authentication'. Desactive 'Deployment Protection' en Settings > Deployment Protection en el panel de Vercel.");
+          return;
+        }
+        const errorMsg = typeof data.error === "string"
+          ? data.error
+          : (data.error?.message || data.message || "Error al iniciar sesión.");
+        setAuthError(errorMsg);
         return;
       }
       setCurrentUser(data.user);
