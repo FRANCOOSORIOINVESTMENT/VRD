@@ -7,7 +7,7 @@ WORKDIR /app
 
 # Instalar dependencias completas para la compilación (incluye Vite y esbuild)
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 
 # Copiar el código fuente y compilar frontend (dist/) y backend (dist/server.cjs)
 COPY . .
@@ -23,7 +23,7 @@ ENV PORT=8080
 
 # Instalar únicamente dependencias requeridas en tiempo de ejecución
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 # Copiar artefactos compilados desde la etapa builder
 COPY --from=builder /app/dist ./dist
