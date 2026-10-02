@@ -73,19 +73,6 @@ export const CUENTAS_FICTICIAS: (PerfilUsuario & {
     requiere_cambio_password: false
   },
   {
-    id: "usr-asistente-02",
-    username: "asistente.andres",
-    email: "asistente.andres@franco.co",
-    nombreCompleto: "Andrés Gil (Gestor Documental II)",
-    rol: "asistente",
-    activo: true,
-    creadoEn: "2026-09-01T08:00:00Z",
-    passwordHash: HASH_DEFECTO_BCRYPT,
-    password_hash: HASH_DEFECTO_BCRYPT,
-    requiereCambioPassword: false,
-    requiere_cambio_password: false
-  },
-  {
     id: "usr-ingenieria-01",
     username: "ingenieria.franco",
     email: "ingenieria.prueba@franco.co",
