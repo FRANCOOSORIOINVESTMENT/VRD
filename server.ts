@@ -4,7 +4,6 @@ import express, { Request, Response, NextFunction } from "express";
 import cookieParser from "cookie-parser";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 import { mockDb, CUENTAS_FICTICIAS } from "./src/server/mockDb";
 import { hashPassword, comparePassword, crearUsuarioInicial } from "./src/server/authUtils";
 import uploadRouter from "./src/routes/upload.routes";
@@ -81,10 +80,24 @@ interface AuthRequest extends Request {
   };
 }
 
-async function startServer() {
+export async function createApp(): Promise<express.Express> {
   const app = express();
-  // Cloud Run inyecta dinámicamente PORT; 3000 es valor por defecto local
-  const PORT = parseInt(process.env.PORT || "3000", 10);
+
+  // Middleware CORS para despliegues serverless (Vercel, Cloud Run, etc.)
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    res.header("Access-Control-Allow-Origin", (req.headers.origin as string) || "*");
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-user-id"
+    );
+    if (req.method === "OPTIONS") {
+      res.sendStatus(200);
+      return;
+    }
+    next();
+  });
 
   app.use(express.json({ limit: "25mb" }));
   app.use(cookieParser());
@@ -7997,11 +8010,18 @@ async function startServer() {
     res.json(mockDb.auditoriaAdmin);
   });
 
+  return app;
+}
+
+export async function startServer(): Promise<express.Express> {
+  const app = await createApp();
+  const PORT = parseInt(process.env.PORT || "3000", 10);
 
   // ==========================================
   // CONFIGURACIÓN VITE MIDDLEWARE (DEV/PROD)
   // ==========================================
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true, host: "0.0.0.0", port: PORT },
       appType: "spa"
@@ -8018,6 +8038,18 @@ async function startServer() {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Servidor CRM VRD activo en el puerto ${PORT} (0.0.0.0)`);
   });
+
+  return app;
 }
 
-startServer();
+// En entornos serverless (Vercel, AWS Lambda) se delega a api/index.ts; en entornos standalone se arranca el servidor HTTP
+const isServerless = Boolean(
+  process.env.VERCEL ||
+  process.env.NOW_REGION ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.NETLIFY
+);
+
+if (!isServerless && process.env.NODE_ENV !== "test") {
+  startServer();
+}

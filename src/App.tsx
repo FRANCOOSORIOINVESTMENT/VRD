@@ -392,7 +392,8 @@ export default function App() {
 
   // Comprobación de sesión inicial y estado del sistema
   useEffect(() => {
-    fetch("/api/system/status")
+    const API_URL = import.meta.env.VITE_API_URL || "";
+    fetch(`${API_URL}/api/system/status`)
       .then((res) => res.json())
       .then((data) => {
         if (data.mode) setSystemStatus(data);
@@ -611,7 +612,26 @@ export default function App() {
     }
   };
 
-  const handleLogin = async (e: React.FormEvent)
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || "";
+      const res = await fetch(`${API_URL}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword })
+      });
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch {
+        setAuthError("No se pudo conectar con el endpoint de autenticación. Verifique que las funciones serverless de Vercel estén desplegadas.");
+        return;
+      }
+      if (!res.ok) {
+        setAuthError(data.error || "Error al iniciar sesión.");
+        return;
       }
       setCurrentUser(data.user);
       localStorage.setItem("crm_user_session", JSON.stringify(data.user));
@@ -648,7 +668,8 @@ export default function App() {
 
   const handleSwitchUser = async (userId: string) => {
     try {
-      const res = await fetch("/api/auth/switch-user", {
+      const API_URL = import.meta.env.VITE_API_URL || "";
+      const res = await fetch(`${API_URL}/api/auth/switch-user`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId })
