@@ -15,21 +15,21 @@ COPY . .
 # Compilar el frontend (en dist/) y empaquetar el backend (dist/server.cjs)
 RUN npm run build
 
-# Etapa 2: Runner (Entorno final de ejecución)
+# Etapa 2: Runner (Entorno final de ejecución para Render)
 FROM node:22-alpine AS runner
 
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=8080
+ENV PORT=10000
 
 # Copiar directamente las dependencias, configuración y compilados desde el builder
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 
-# Puerto expuesto para Google Cloud Run
-EXPOSE 8080
+# Puerto expuesto por defecto en Render
+EXPOSE 10000
 
-# Comando para iniciar el servidor de producción
+# Iniciar servidor Express de producción
 CMD ["node", "dist/server.cjs"]

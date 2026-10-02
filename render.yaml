@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: vrd
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: APP_MODE
+        value: supabase
+      - key: SUPABASE_URL
+        value: https://dcelksfchabhrlevlfah.supabase.co
+      - key: SUPABASE_PROJECT_ID
+        value: dcelksfchabhrlevlfah
+      - key: SUPABASE_ANON_KEY
+        value: sb_publishable_B8tc_3lQWCKeBJ3camRySQ_yZAVTqLw
+      - key: SUPABASE_PUBLISHABLE_KEY
+        value: sb_publishable_B8tc_3lQWCKeBJ3camRySQ_yZAVTqLw
+      - key: SUPABASE_SECRET_KEY
+        value: sb_secret_iJsl30gWg_k86wvb5FFNSw_jDiG5XIh
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        value: sb_secret_iJsl30gWg_k86wvb5FFNSw_jDiG5XIh
