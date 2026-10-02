@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 // CRM VRD — FRANCO OSORIO INVESTMENT S.A.S.
 // CONFIGURACIÓN OFICIAL DEL CLIENTE SUPABASE (DATABASE & STORAGE)
 
-dotenv.config({ override: true });
+dotenv.config();
 
 // 1. Limpieza y normalización de la URL base
 const normalizeUrl = (rawUrl?: string): string => {

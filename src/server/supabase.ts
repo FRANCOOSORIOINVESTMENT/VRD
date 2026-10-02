@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
-dotenv.config({ override: true });
+dotenv.config();
 
 // CRM VRD — FRANCO OSORIO INVESTMENT S.A.S.
 // MÓDULO DE CONFIGURACIÓN Y CLIENTE SUPABASE
