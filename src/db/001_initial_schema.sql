@@ -42,7 +42,7 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
 -- 2. TIPOS ENUMERADOS
 DO $$ BEGIN
-    CREATE TYPE rol_usuario AS ENUM ('administrador', 'supervisor', 'comercial', 'asistente', 'ingenieria');
+    CREATE TYPE rol_usuario AS ENUM ('administrador', 'supervisor', 'comercial', 'asistente', 'ingenieria', 'planeacion');
 EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 DO $$ BEGIN

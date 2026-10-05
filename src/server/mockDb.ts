@@ -34,7 +34,7 @@ export const CUENTAS_FICTICIAS: (PerfilUsuario & {
   requiere_cambio_password: boolean;
 })[] = [
   {
-    id: "usr-comercial-01",
+    id: "757ef367-c0bd-480a-b294-d5fef041f39c",
     username: "comercial.franco",
     email: "comercial.prueba@franco.co",
     nombreCompleto: "Carlos Mendoza (Gestor Rural)",
@@ -47,10 +47,10 @@ export const CUENTAS_FICTICIAS: (PerfilUsuario & {
     requiere_cambio_password: false
   },
   {
-    id: "usr-supervisor-01",
+    id: "f00564c8-adb3-46d2-b154-837b9e7386aa",
     username: "supervisor.franco",
     email: "supervisor.prueba@franco.co",
-    nombreCompleto: "Dra. Helena Ramírez (Analista Documental)",
+    nombreCompleto: "Dra. Helena Ramírez (Supervisor)",
     rol: "supervisor",
     activo: true,
     creadoEn: "2026-09-01T08:00:00Z",
@@ -60,7 +60,7 @@ export const CUENTAS_FICTICIAS: (PerfilUsuario & {
     requiere_cambio_password: false
   },
   {
-    id: "usr-asistente-01",
+    id: "ee12d5e6-34cf-4de5-b11a-f256ddde4be2",
     username: "asistente.franco",
     email: "asistente.prueba@franco.co",
     nombreCompleto: "Laura Castillo (Gestor Documental)",
@@ -73,7 +73,7 @@ export const CUENTAS_FICTICIAS: (PerfilUsuario & {
     requiere_cambio_password: false
   },
   {
-    id: "usr-ingenieria-01",
+    id: "73e7181a-02ea-49a9-afaa-7c58e7097a24",
     username: "ingenieria.franco",
     email: "ingenieria.prueba@franco.co",
     nombreCompleto: "Ing. Roberto Salazar (Coordinador Técnico)",
@@ -86,7 +86,7 @@ export const CUENTAS_FICTICIAS: (PerfilUsuario & {
     requiere_cambio_password: false
   },
   {
-    id: "usr-admin-01",
+    id: "a49c95b6-75da-48cb-a827-0cf4957e8c3b",
     username: "admin.franco",
     email: "admin.prueba@franco.co",
     nombreCompleto: "Administrador de Sistemas",

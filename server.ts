@@ -111,8 +111,72 @@ export async function createApp(): Promise<express.Express> {
     .then((status) => console.log(`[STORAGE]: ${status.mensaje}`))
     .catch((err) => console.error("[STORAGE]: Fallo comprobando bucket:", err?.message));
 
+  // Normalización oficial de roles según catálogo de base de datos Supabase
+  function normalizarRolUsuario(rolRaw?: string): RolUsuario {
+    const r = String(rolRaw || "").toLowerCase().trim();
+    if (r === "supervisor" || r === "supervisora" || r === "juridico" || r === "analista" || r === "analista documental") {
+      return "supervisor";
+    } else if (r === "comercial" || r === "gestor_rural" || r === "gestor rural") {
+      return "comercial";
+    } else if (r === "asistente" || r === "gestor_documental" || r === "gestor documental") {
+      return "asistente";
+    } else if (r === "ingenieria" || r === "ingeniería") {
+      return "ingenieria";
+    } else if (r === "planeacion" || r === "planeación") {
+      return "planeacion";
+    } else if (r === "administrador" || r === "admin") {
+      return "administrador";
+    }
+    return "asistente";
+  }
+
+  // Sincronización oficial de perfiles y roles desde Supabase a memoria
+  async function sincronizarPerfilesDesdeSupabase(): Promise<boolean> {
+    if (!supabaseAdmin) return false;
+    try {
+      const { data: dbUsers, error: sbErr } = await supabaseAdmin
+        .from("perfiles_usuario")
+        .select("*")
+        .order("creado_en", { ascending: true });
+
+      if (sbErr) {
+        console.error("[SUPABASE]: Error consultando perfiles_usuario:", sbErr.message);
+        return false;
+      }
+
+      if (dbUsers && Array.isArray(dbUsers)) {
+        mockDb.perfiles = dbUsers.map((dbU) => {
+          const rolNormalizado = normalizarRolUsuario(dbU.rol);
+          return {
+            id: dbU.id,
+            username: dbU.username,
+            email: dbU.email,
+            nombreCompleto: dbU.nombre_completo || dbU.username,
+            rol: rolNormalizado,
+            activo: Boolean(dbU.activo),
+            creadoEn: dbU.creado_en || new Date().toISOString(),
+            passwordHash: dbU.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
+            password_hash: dbU.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
+            requiereCambioPassword: Boolean(dbU.requiere_cambio_password),
+            requiere_cambio_password: Boolean(dbU.requiere_cambio_password)
+          };
+        });
+        console.log(`[SUPABASE]: ${mockDb.perfiles.length} usuarios y roles sincronizados oficialmente.`);
+        return true;
+      }
+    } catch (err: any) {
+      console.error("[SUPABASE]: Excepción sincronizando perfiles:", err?.message);
+    }
+    return false;
+  }
+
+  // Sincronización inmediata no bloqueante al inicio del servidor
+  sincronizarPerfilesDesdeSupabase().catch((err) =>
+    console.error("[SUPABASE]: Fallo sincronización inicial:", err?.message)
+  );
+
   // Middleware de resolución y verificación de sesión basada en headers (Bearer/x-user-id) y cookies HttpOnly
-  app.use((req: AuthRequest, res: Response, next: NextFunction) => {
+  app.use(async (req: AuthRequest, res: Response, next: NextFunction) => {
     const authHeader = req.headers["authorization"];
     const headerUserId = req.headers["x-user-id"] as string | undefined;
     let sessionUserId = req.cookies["crm_session_user"];
@@ -124,7 +188,53 @@ export async function createApp(): Promise<express.Express> {
     }
 
     if (sessionUserId) {
-      const user = mockDb.perfiles.find((u) => u.id === sessionUserId && u.activo);
+      let user = mockDb.perfiles.find(
+        (u) =>
+          (u.id === sessionUserId ||
+           u.username.toLowerCase() === sessionUserId.toLowerCase() ||
+           u.email.toLowerCase() === sessionUserId.toLowerCase()) &&
+          u.activo
+      );
+
+      // Si no está en memoria, consultar directamente en Supabase para evitar 401 por caché desfasado
+      if (!user && supabaseAdmin) {
+        try {
+          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionUserId);
+          let query = supabaseAdmin.from("perfiles_usuario").select("*");
+          if (isUuid) {
+            query = query.eq("id", sessionUserId);
+          } else {
+            query = query.or(`username.eq.${sessionUserId.toLowerCase()},email.eq.${sessionUserId.toLowerCase()}`);
+          }
+          const { data: dbU } = await query.maybeSingle();
+          if (dbU && dbU.activo) {
+            user = {
+              id: dbU.id,
+              username: dbU.username,
+              email: dbU.email,
+              nombreCompleto: dbU.nombre_completo || dbU.username,
+              rol: normalizarRolUsuario(dbU.rol),
+              activo: Boolean(dbU.activo),
+              creadoEn: dbU.creado_en || new Date().toISOString(),
+              passwordHash: dbU.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
+              password_hash: dbU.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
+              requiereCambioPassword: Boolean(dbU.requiere_cambio_password),
+              requiere_cambio_password: Boolean(dbU.requiere_cambio_password)
+            };
+            const idx = mockDb.perfiles.findIndex(
+              (p) => p.id === user!.id || p.username.toLowerCase() === user!.username.toLowerCase()
+            );
+            if (idx >= 0) {
+              mockDb.perfiles[idx] = user;
+            } else {
+              mockDb.perfiles.push(user);
+            }
+          }
+        } catch (err: any) {
+          console.error("[AUTH]: Error buscando usuario en Supabase:", err?.message);
+        }
+      }
+
       if (user) {
         req.user = user;
       }
@@ -1077,13 +1187,14 @@ export async function createApp(): Promise<express.Express> {
           .maybeSingle();
 
         if (dbUser) {
+          const rolNormalizado = normalizarRolUsuario(dbUser.rol);
           if (!user) {
             user = {
               id: dbUser.id,
               username: dbUser.username,
               email: dbUser.email,
-              nombreCompleto: dbUser.nombre_completo,
-              rol: dbUser.rol,
+              nombreCompleto: dbUser.nombre_completo || dbUser.username,
+              rol: rolNormalizado,
               activo: dbUser.activo,
               creadoEn: dbUser.creado_en || new Date().toISOString(),
               passwordHash: dbUser.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
@@ -1093,6 +1204,11 @@ export async function createApp(): Promise<express.Express> {
             };
             mockDb.perfiles.push(user);
           } else {
+            user.id = dbUser.id;
+            user.nombreCompleto = dbUser.nombre_completo || user.nombreCompleto;
+            user.email = dbUser.email || user.email;
+            user.rol = rolNormalizado;
+            user.activo = Boolean(dbUser.activo);
             if (dbUser.password_hash) {
               user.passwordHash = dbUser.password_hash;
               user.password_hash = dbUser.password_hash;
@@ -1362,9 +1478,19 @@ export async function createApp(): Promise<express.Express> {
   });
 
   // Cambio rápido de usuario / perfil para pruebas y navegación
-  app.post("/api/auth/switch-user", (req: Request, res: Response) => {
+  app.post("/api/auth/switch-user", async (req: Request, res: Response) => {
     const { userId } = req.body;
-    const user = mockDb.perfiles.find((u) => u.id === userId && u.activo);
+    let user = mockDb.perfiles.find(
+      (u) => (u.id === userId || u.username.toLowerCase() === String(userId).toLowerCase()) && u.activo !== false
+    );
+
+    if (!user && supabaseAdmin) {
+      await sincronizarPerfilesDesdeSupabase();
+      user = mockDb.perfiles.find(
+        (u) => (u.id === userId || u.username.toLowerCase() === String(userId).toLowerCase()) && u.activo !== false
+      );
+    }
+
     if (!user) {
       res.status(404).json({ error: "Usuario no encontrado o inactivo." });
       return;
@@ -1374,8 +1500,8 @@ export async function createApp(): Promise<express.Express> {
 
     res.cookie("crm_session_user", user.id, {
       httpOnly: true,
-      secure: true,
-      sameSite: "none",
+      secure: req.secure || req.protocol === "https",
+      sameSite: req.secure || req.protocol === "https" ? "none" : "lax",
       path: "/",
       maxAge: 8 * 60 * 60 * 1000
     });
@@ -1389,6 +1515,7 @@ export async function createApp(): Promise<express.Express> {
         email: user.email,
         nombreCompleto: user.nombreCompleto,
         rol: user.rol,
+        activo: true,
         requiere_cambio_password: requiereCambio,
         requiereCambioPassword: requiereCambio
       }
@@ -1398,34 +1525,20 @@ export async function createApp(): Promise<express.Express> {
   // Catálogo de todos los usuarios del sistema (sincronizado con Supabase)
   app.get("/api/usuarios/todos", requireAuth(), async (req: Request, res: Response) => {
     if (supabaseAdmin) {
-      try {
-        const { data: dbUsers } = await supabaseAdmin.from("perfiles_usuario").select("*").order("creado_en", { ascending: true });
-        if (dbUsers && dbUsers.length > 0) {
-          mockDb.perfiles = dbUsers.map((dbU) => ({
-            id: dbU.id,
-            username: dbU.username,
-            email: dbU.email,
-            nombreCompleto: dbU.nombre_completo || dbU.username,
-            rol: (dbU.rol as RolUsuario) || "asistente",
-            activo: Boolean(dbU.activo),
-            creadoEn: dbU.creado_en || new Date().toISOString(),
-            passwordHash: dbU.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO"
-          }));
-        }
-      } catch (err: any) {
-        console.error("[SUPABASE]: Error al obtener usuarios en /api/usuarios/todos:", err);
-      }
+      await sincronizarPerfilesDesdeSupabase();
     }
 
     const usuarios = mockDb.perfiles
-      .filter((u) => u.activo)
+      .filter((u) => u.activo !== false)
       .map((u) => ({
         id: u.id,
         nombreCompleto: u.nombreCompleto,
         username: u.username,
         rol: u.rol,
-        email: u.email
+        email: u.email,
+        activo: u.activo ?? true
       }));
+
     res.json(usuarios);
   });
 
@@ -1557,7 +1670,7 @@ export async function createApp(): Promise<express.Express> {
   });
 
   // 4. CAPTACIÓN: INTERESADOS (CON HIDRATACIÓN DESDE SUPABASE)
-  app.get("/api/interesados", requireAuth(["comercial", "asistente", "supervisor", "administrador"]), async (req: AuthRequest, res: Response) => {
+  app.get("/api/interesados", requireAuth(["comercial", "asistente", "supervisor", "administrador", "planeacion"]), async (req: AuthRequest, res: Response) => {
     // 1. Hidratación bidireccional desde Supabase si el servicio está activo
     if (supabaseAdmin) {
       try {
@@ -1971,8 +2084,8 @@ export async function createApp(): Promise<express.Express> {
     res.status(201).json(nuevoContacto);
   });
 
-  // 5.1 NOTAS DE CAPTACIÓN (Interesados - Exclusivo Comercial)
-  app.get("/api/interesados/:id/notas", requireAuth(["comercial"]), (req: AuthRequest, res: Response) => {
+  // 5.1 NOTAS DE CAPTACIÓN (Interesados - Consulta por Comercial, Supervisor, Administrador y Planeación)
+  app.get("/api/interesados/:id/notas", requireAuth(["comercial", "asistente", "supervisor", "administrador", "planeacion"]), (req: AuthRequest, res: Response) => {
     const notas = mockDb.notas.filter((n) => n.interesadoId === req.params.id);
     res.json(notas);
   });
@@ -2957,7 +3070,7 @@ export async function createApp(): Promise<express.Express> {
   // 8.2 LISTADO DE SOLICITUDES DE RETIRO DE CÉDULA
   app.get(
     "/api/solicitudes-retiro",
-    requireAuth(["comercial", "asistente", "supervisor", "administrador"]),
+    requireAuth(["comercial", "asistente", "supervisor", "administrador", "planeacion"]),
     (req: AuthRequest, res: Response) => {
       res.json(mockDb.solicitudesRetiro);
     }
@@ -4271,7 +4384,10 @@ export async function createApp(): Promise<express.Express> {
   );
 
   // 13. BITÁCORA DE NOTAS Y CONVERSACIONES
-  app.post("/api/expedientes/:id/notas", requireAuth(), (req: AuthRequest, res: Response) => {
+  app.post(
+    "/api/expedientes/:id/notas",
+    requireAuth(["comercial", "asistente", "supervisor", "ingenieria", "administrador"]),
+    (req: AuthRequest, res: Response) => {
     const { personaContactada, canal, contenido } = req.body;
     if (!contenido) {
       res.status(400).json({ error: "El contenido de la nota no puede estar vacío." });
@@ -7212,29 +7328,7 @@ export async function createApp(): Promise<express.Express> {
   app.get("/api/admin/usuarios", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
     // Hidratar desde Supabase como FUENTE OFICIAL si está disponible
     if (supabaseAdmin) {
-      try {
-        const { data: dbUsers, error: sbErr } = await supabaseAdmin
-          .from("perfiles_usuario")
-          .select("*")
-          .order("creado_en", { ascending: true });
-
-        if (dbUsers && dbUsers.length > 0) {
-          // Reemplazar la lista en memoria con los usuarios reales de Supabase
-          // Esto garantiza que si un usuario fue borrado en Supabase, ya NO aparezca aquí
-          mockDb.perfiles = dbUsers.map((dbU) => ({
-            id: dbU.id,
-            username: dbU.username,
-            email: dbU.email,
-            nombreCompleto: dbU.nombre_completo || dbU.username,
-            rol: (dbU.rol as RolUsuario) || "asistente",
-            activo: Boolean(dbU.activo),
-            creadoEn: dbU.creado_en || new Date().toISOString(),
-            passwordHash: dbU.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO"
-          }));
-        }
-      } catch (err: any) {
-        console.error("[SUPABASE]: Error sincronizando perfiles en /api/admin/usuarios:", err);
-      }
+      await sincronizarPerfilesDesdeSupabase();
     }
 
     const usuariosConStats = mockDb.perfiles.map((usr) => {
@@ -7273,6 +7367,13 @@ export async function createApp(): Promise<express.Express> {
 
     if (!nombreCompleto || !username || !email || !rol) {
       return res.status(400).json({ error: "Faltan campos obligatorios para crear el usuario." });
+    }
+
+    const rolesValidos: RolUsuario[] = ["administrador", "supervisor", "comercial", "asistente", "ingenieria", "planeacion"];
+    if (!rolesValidos.includes(rol as RolUsuario)) {
+      return res.status(400).json({
+        error: `El rol "${rol}" no es válido. Roles oficiales disponibles: ${rolesValidos.join(", ")}.`
+      });
     }
 
     const cleanUsername = String(username).toLowerCase().trim();
@@ -7358,9 +7459,23 @@ export async function createApp(): Promise<express.Express> {
     const { id } = req.params;
     const { nombreCompleto, email, rol, activo } = req.body;
 
-    const usr = mockDb.perfiles.find((p) => p.id === id);
+    let usr = mockDb.perfiles.find((p) => p.id === id || p.username.toLowerCase() === id.toLowerCase());
+    if (!usr && supabaseAdmin) {
+      await sincronizarPerfilesDesdeSupabase();
+      usr = mockDb.perfiles.find((p) => p.id === id || p.username.toLowerCase() === id.toLowerCase());
+    }
+
     if (!usr) {
       return res.status(404).json({ error: "Usuario no encontrado." });
+    }
+
+    if (rol) {
+      const rolesValidos: RolUsuario[] = ["administrador", "supervisor", "comercial", "asistente", "ingenieria", "planeacion"];
+      if (!rolesValidos.includes(rol as RolUsuario)) {
+        return res.status(400).json({
+          error: `El rol "${rol}" no es válido. Roles oficiales disponibles: ${rolesValidos.join(", ")}.`
+        });
+      }
     }
 
     const rolAnterior = usr.rol;
@@ -7381,14 +7496,19 @@ export async function createApp(): Promise<express.Express> {
         if (activo !== undefined) updatePayload.activo = usr.activo;
 
         const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(usr.id);
-        if (isUuid) {
-          await supabaseAdmin.from("perfiles_usuario").update(updatePayload).eq("id", usr.id);
-        } else {
-          await supabaseAdmin.from("perfiles_usuario").update(updatePayload).eq("username", usr.username);
+        const { error: upErr } = isUuid
+          ? await supabaseAdmin.from("perfiles_usuario").update(updatePayload).eq("id", usr.id)
+          : await supabaseAdmin.from("perfiles_usuario").update(updatePayload).eq("username", usr.username);
+
+        if (upErr) {
+          console.error("[SUPABASE]: Error actualizando perfil en Supabase:", upErr);
+          return res.status(500).json({ error: `Error en Supabase: ${upErr.message}` });
         }
+        await sincronizarPerfilesDesdeSupabase();
         console.log(`[SUPABASE]: Perfil ${usr.username} (${usr.id}) actualizado directamente en Supabase.`);
       } catch (err: any) {
         console.error("[SUPABASE]: Excepción al actualizar perfil en Supabase:", err);
+        return res.status(500).json({ error: `Excepción en Supabase: ${err.message}` });
       }
     }
 
@@ -7410,7 +7530,12 @@ export async function createApp(): Promise<express.Express> {
   // 1.4 Activar / Desactivar usuario con persistencia en Supabase
   app.patch("/api/admin/usuarios/:id/toggle-activo", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const usr = mockDb.perfiles.find((p) => p.id === id);
+    let usr = mockDb.perfiles.find((p) => p.id === id || p.username.toLowerCase() === id.toLowerCase());
+    if (!usr && supabaseAdmin) {
+      await sincronizarPerfilesDesdeSupabase();
+      usr = mockDb.perfiles.find((p) => p.id === id || p.username.toLowerCase() === id.toLowerCase());
+    }
+
     if (!usr) {
       return res.status(404).json({ error: "Usuario no encontrado." });
     }
@@ -7425,14 +7550,19 @@ export async function createApp(): Promise<express.Express> {
     if (supabaseAdmin) {
       try {
         const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(usr.id);
-        if (isUuid) {
-          await supabaseAdmin.from("perfiles_usuario").update({ activo: usr.activo }).eq("id", usr.id);
-        } else {
-          await supabaseAdmin.from("perfiles_usuario").update({ activo: usr.activo }).eq("username", usr.username);
+        const { error: actErr } = isUuid
+          ? await supabaseAdmin.from("perfiles_usuario").update({ activo: usr.activo }).eq("id", usr.id)
+          : await supabaseAdmin.from("perfiles_usuario").update({ activo: usr.activo }).eq("username", usr.username);
+
+        if (actErr) {
+          console.error("[SUPABASE]: Error actualizando activo en Supabase:", actErr);
+          return res.status(500).json({ error: `Error en Supabase: ${actErr.message}` });
         }
+        await sincronizarPerfilesDesdeSupabase();
         console.log(`[SUPABASE]: Estado activo de ${usr.username} actualizado a ${usr.activo}.`);
       } catch (err: any) {
         console.error("[SUPABASE]: Error actualizando activo en Supabase:", err);
+        return res.status(500).json({ error: `Excepción en Supabase: ${err.message}` });
       }
     }
 
@@ -7459,7 +7589,12 @@ export async function createApp(): Promise<express.Express> {
       return res.status(400).json({ error: "Seguridad: No puede eliminar su propia cuenta de administrador en sesión." });
     }
 
-    const index = mockDb.perfiles.findIndex((p) => p.id === id || p.username.toLowerCase() === id.toLowerCase());
+    let index = mockDb.perfiles.findIndex((p) => p.id === id || p.username.toLowerCase() === id.toLowerCase());
+    if (index === -1 && supabaseAdmin) {
+      await sincronizarPerfilesDesdeSupabase();
+      index = mockDb.perfiles.findIndex((p) => p.id === id || p.username.toLowerCase() === id.toLowerCase());
+    }
+
     if (index === -1) {
       return res.status(404).json({ error: "Usuario no encontrado." });
     }
@@ -7480,14 +7615,19 @@ export async function createApp(): Promise<express.Express> {
     if (supabaseAdmin) {
       try {
         const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(usr.id);
-        if (isUuid) {
-          await supabaseAdmin.from("perfiles_usuario").delete().eq("id", usr.id);
-        } else {
-          await supabaseAdmin.from("perfiles_usuario").delete().eq("username", usr.username);
+        const { error: delErr } = isUuid
+          ? await supabaseAdmin.from("perfiles_usuario").delete().eq("id", usr.id)
+          : await supabaseAdmin.from("perfiles_usuario").delete().eq("username", usr.username);
+
+        if (delErr) {
+          console.error("[SUPABASE]: Error eliminando usuario en Supabase:", delErr);
+          return res.status(500).json({ error: `Error en Supabase: ${delErr.message}` });
         }
+        await sincronizarPerfilesDesdeSupabase();
         console.log(`[SUPABASE]: Usuario ${usr.username} (${usr.id}) eliminado de Supabase.`);
       } catch (err: any) {
         console.error("[SUPABASE]: Excepción al eliminar usuario en Supabase:", err);
+        return res.status(500).json({ error: `Excepción en Supabase: ${err.message}` });
       }
     }
 
@@ -8040,9 +8180,9 @@ export async function createApp(): Promise<express.Express> {
     }
   });
 
-  // BLOQUE 3: VISIBILIDAD GLOBAL Y REPORTES (ADMINISTRADOR)
+  // BLOQUE 3: VISIBILIDAD GLOBAL Y REPORTES (ADMINISTRADOR Y PLANEACIÓN)
   // 3.1 Dashboard general con métricas, financiero, tiempos y cuellos de botella
-  app.get("/api/admin/reportes/dashboard", requireAuth(["administrador"]), (req: AuthRequest, res: Response) => {
+  app.get("/api/admin/reportes/dashboard", requireAuth(["administrador", "planeacion"]), (req: AuthRequest, res: Response) => {
     const expedientes = mockDb.expedientes;
     const ahora = Date.now();
 
@@ -8216,7 +8356,7 @@ export async function createApp(): Promise<express.Express> {
   });
 
   // 3.2 Listado completo de bitácora de auditoría general del sistema
-  app.get("/api/admin/auditoria", requireAuth(["administrador"]), (req: AuthRequest, res: Response) => {
+  app.get("/api/admin/auditoria", requireAuth(["administrador", "planeacion"]), (req: AuthRequest, res: Response) => {
     res.json(mockDb.auditoriaAdmin);
   });
 

@@ -15,7 +15,10 @@ import {
   Users,
   Settings,
   BarChart3,
+  Shield,
   ShieldCheck,
+  HardHat,
+  Building2,
   UserPlus,
   Edit2,
   CheckCircle2,
@@ -225,8 +228,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Acciones en curso
   const [guardando, setGuardando] = useState<boolean>(false);
+  const [sincronizandoUsuarios, setSincronizandoUsuarios] = useState<boolean>(false);
   const [usuarioAEliminar, setUsuarioAEliminar] = useState<any | null>(null);
   const [eliminandoUsuario, setEliminandoUsuario] = useState<boolean>(false);
+  const [errorUsuarios, setErrorUsuarios] = useState<string | null>(null);
+  const [ultimaSincronizacion, setUltimaSincronizacion] = useState<string>("");
 
   // Helper de peticiones autenticadas para Administración
   const authFetch = (url: string, options: RequestInit = {}) => {
@@ -244,37 +250,64 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     });
   };
 
-  // Carga inicial
+  // Carga directa y sincronización de usuarios desde Supabase
+  const cargarUsuariosDirecto = async (mostrarMensaje = false) => {
+    setSincronizandoUsuarios(true);
+    setErrorUsuarios(null);
+    try {
+      const res = await authFetch(`/api/admin/usuarios?t=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setUsuarios(data);
+          setErrorUsuarios(null);
+          setUltimaSincronizacion(new Date().toLocaleTimeString("es-CO"));
+          if (mostrarMensaje) {
+            mostrarToast("Usuarios y roles sincronizados directamente desde Supabase.");
+          }
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        const msg = errData.error || "No se pudieron obtener los usuarios de Supabase.";
+        setErrorUsuarios(msg);
+        mostrarToast(msg, "error");
+      }
+    } catch (err: any) {
+      console.error("Error sincronizando usuarios:", err);
+      const msg = err?.message || "Error de conexión al sincronizar con Supabase.";
+      setErrorUsuarios(msg);
+      mostrarToast(msg, "error");
+    } finally {
+      setSincronizandoUsuarios(false);
+    }
+  };
+
+  // Carga inicial resiliente (evita que un fallo en métricas bloquee los usuarios)
   const cargarDatos = async () => {
     setCargando(true);
     try {
-      const [resUsr, resCfg, resMet, resExp] = await Promise.all([
-        authFetch("/api/admin/usuarios"),
-        authFetch("/api/admin/configuracion"),
-        authFetch("/api/admin/reportes/dashboard"),
-        authFetch("/api/expedientes")
+      await Promise.allSettled([
+        cargarUsuariosDirecto(false),
+        authFetch(`/api/admin/configuracion?t=${Date.now()}`)
+          .then((res) => res.json())
+          .then((data) => {
+            if (data?.configuracion) setConfiguracion(data.configuracion);
+            if (data?.auditoria) setAuditoria(data.auditoria || []);
+          })
+          .catch((err) => console.error("Error cargando configuración:", err)),
+        authFetch(`/api/admin/reportes/dashboard?t=${Date.now()}`)
+          .then((res) => res.json())
+          .then((data) => {
+            if (data) setMetricas(data);
+          })
+          .catch((err) => console.error("Error cargando dashboard:", err)),
+        authFetch(`/api/expedientes?t=${Date.now()}`)
+          .then((res) => res.json())
+          .then((data) => {
+            if (Array.isArray(data)) setExpedientes(data);
+          })
+          .catch((err) => console.error("Error cargando expedientes:", err))
       ]);
-
-      if (resUsr.ok) {
-        const dataUsr = await resUsr.json();
-        setUsuarios(dataUsr);
-      }
-      if (resCfg.ok) {
-        const dataCfg = await resCfg.json();
-        setConfiguracion(dataCfg.configuracion);
-        setAuditoria(dataCfg.auditoria || []);
-      }
-      if (resMet.ok) {
-        const dataMet = await resMet.json();
-        setMetricas(dataMet);
-      }
-      if (resExp.ok) {
-        const dataExp = await resExp.json();
-        setExpedientes(dataExp);
-      }
-    } catch (err) {
-      console.error("Error cargando datos de administración:", err);
-      mostrarToast("Error al cargar la información del panel de administración.", "error");
     } finally {
       setCargando(false);
     }
@@ -731,6 +764,242 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {/* ========================================================================= */}
       {tabActiva === "usuarios" && (
         <div className="space-y-5">
+          {/* ========================================================= */}
+          {/* ESPACIO DESTACADO: ROLES DEL SISTEMA Y ROL SUPERVISOR */}
+          {/* ========================================================= */}
+          <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-blue-950 p-5 rounded-2xl text-white shadow-md border border-slate-700/60">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+              <div>
+                <div className="flex items-center space-x-2">
+                  <ShieldCheck className="w-5 h-5 text-blue-400" />
+                  <h3 className="text-sm font-bold tracking-tight text-white">
+                    Estructura Organizacional y Roles del Sistema
+                  </h3>
+                  <span className="text-[10px] font-mono bg-blue-500/20 text-blue-200 border border-blue-400/30 px-2 py-0.5 rounded-full">
+                    Supabase perfiles_usuario
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-1">
+                  Matriz oficial de los 6 roles reconocidos por el CRM VRD. Selecciona cualquier rol para filtrar la lista.
+                </p>
+              </div>
+
+              {/* Botón de Sincronización Directa con Supabase */}
+              <button
+                type="button"
+                id="btn-sync-usuarios-supabase"
+                onClick={() => cargarUsuariosDirecto(true)}
+                disabled={sincronizandoUsuarios}
+                className="px-3.5 py-1.5 bg-blue-600/40 hover:bg-blue-600/60 active:bg-blue-600 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-all border border-blue-400/40 shadow-xs cursor-pointer self-start sm:self-auto shrink-0"
+                title="Forzar actualización directa en tiempo real desde Supabase"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-blue-300 ${sincronizandoUsuarios ? "animate-spin" : ""}`} />
+                <span>{sincronizandoUsuarios ? "Sincronizando..." : "Sincronizar Supabase"}</span>
+              </button>
+            </div>
+
+            {/* Grid de Roles: Destacando SUPERVISOR y los 5 roles oficiales */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+              {/* 1. TARJETA DESTACADA: SUPERVISOR */}
+              <div
+                onClick={() => setFiltroUsuarioRol(filtroUsuarioRol === "supervisor" ? "todos" : "supervisor")}
+                className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                  filtroUsuarioRol === "supervisor"
+                    ? "bg-blue-600/40 border-blue-400 ring-2 ring-blue-400 shadow-md"
+                    : "bg-blue-950/40 border-blue-500/40 hover:bg-blue-900/50 hover:border-blue-400"
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-blue-300 bg-blue-500/20 px-2 py-0.5 rounded">
+                      ROL OFICIAL
+                    </span>
+                    <ShieldCheck className="w-4 h-4 text-blue-300" />
+                  </div>
+                  <h4 className="text-sm font-bold text-white flex items-center space-x-1">
+                    <span>Supervisor</span>
+                  </h4>
+                  <p className="text-[10px] text-slate-300 mt-1 line-clamp-2 leading-relaxed">
+                    Evaluación documental, aprobación de fases 1/2 y resolución de retiros.
+                  </p>
+                </div>
+                <div className="mt-3 pt-2 border-t border-blue-500/20 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-300">Asignados:</span>
+                  <span className="text-base font-black text-blue-300">
+                    {usuarios.filter((u) => u.rol === "supervisor" && u.activo).length}
+                  </span>
+                </div>
+              </div>
+
+              {/* 2. ADMINISTRADOR */}
+              <div
+                onClick={() => setFiltroUsuarioRol(filtroUsuarioRol === "administrador" ? "todos" : "administrador")}
+                className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                  filtroUsuarioRol === "administrador"
+                    ? "bg-purple-600/40 border-purple-400 ring-2 ring-purple-400 shadow-md"
+                    : "bg-purple-950/20 border-purple-500/30 hover:bg-purple-900/40"
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded">
+                      ADMIN
+                    </span>
+                    <Shield className="w-4 h-4 text-purple-300" />
+                  </div>
+                  <h4 className="text-sm font-bold text-white">Administrador</h4>
+                  <p className="text-[10px] text-slate-300 mt-1 line-clamp-2 leading-relaxed">
+                    Control total del sistema, configuración, reasignación y auditoría.
+                  </p>
+                </div>
+                <div className="mt-3 pt-2 border-t border-purple-500/20 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-300">Asignados:</span>
+                  <span className="text-base font-black text-purple-300">
+                    {usuarios.filter((u) => u.rol === "administrador" && u.activo).length}
+                  </span>
+                </div>
+              </div>
+
+              {/* 3. GESTOR RURAL (COMERCIAL) */}
+              <div
+                onClick={() => setFiltroUsuarioRol(filtroUsuarioRol === "comercial" ? "todos" : "comercial")}
+                className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                  filtroUsuarioRol === "comercial"
+                    ? "bg-emerald-600/40 border-emerald-400 ring-2 ring-emerald-400 shadow-md"
+                    : "bg-emerald-950/20 border-emerald-500/30 hover:bg-emerald-900/40"
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded">
+                      CAMPO
+                    </span>
+                    <Users className="w-4 h-4 text-emerald-300" />
+                  </div>
+                  <h4 className="text-sm font-bold text-white">Gestor Rural</h4>
+                  <p className="text-[10px] text-slate-300 mt-1 line-clamp-2 leading-relaxed">
+                    Captación de prospectos y radicación de requisitos en Fase 1.
+                  </p>
+                </div>
+                <div className="mt-3 pt-2 border-t border-emerald-500/20 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-300">Asignados:</span>
+                  <span className="text-base font-black text-emerald-300">
+                    {usuarios.filter((u) => u.rol === "comercial" && u.activo).length}
+                  </span>
+                </div>
+              </div>
+
+              {/* 4. GESTOR DOCUMENTAL (ASISTENTE) */}
+              <div
+                onClick={() => setFiltroUsuarioRol(filtroUsuarioRol === "asistente" ? "todos" : "asistente")}
+                className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                  filtroUsuarioRol === "asistente"
+                    ? "bg-slate-700/60 border-slate-300 ring-2 ring-slate-300 shadow-md"
+                    : "bg-slate-800/40 border-slate-700 hover:bg-slate-800"
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-300 bg-slate-700/50 px-2 py-0.5 rounded">
+                      DOCUMENTAL
+                    </span>
+                    <FileText className="w-4 h-4 text-slate-300" />
+                  </div>
+                  <h4 className="text-sm font-bold text-white">Gestor Doc.</h4>
+                  <p className="text-[10px] text-slate-300 mt-1 line-clamp-2 leading-relaxed">
+                    Custodia documental, digitalización y subsanación en Fase 2.
+                  </p>
+                </div>
+                <div className="mt-3 pt-2 border-t border-slate-700/50 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-300">Asignados:</span>
+                  <span className="text-base font-black text-slate-300">
+                    {usuarios.filter((u) => u.rol === "asistente" && u.activo).length}
+                  </span>
+                </div>
+              </div>
+
+              {/* 5. INGENIERÍA */}
+              <div
+                onClick={() => setFiltroUsuarioRol(filtroUsuarioRol === "ingenieria" ? "todos" : "ingenieria")}
+                className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                  filtroUsuarioRol === "ingenieria"
+                    ? "bg-amber-600/40 border-amber-400 ring-2 ring-amber-400 shadow-md"
+                    : "bg-amber-950/20 border-amber-500/30 hover:bg-amber-900/40"
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded">
+                      TÉCNICO
+                    </span>
+                    <HardHat className="w-4 h-4 text-amber-300" />
+                  </div>
+                  <h4 className="text-sm font-bold text-white">Ingeniería</h4>
+                  <p className="text-[10px] text-slate-300 mt-1 line-clamp-2 leading-relaxed">
+                    Gestión técnica, licenciamiento, radicación y supervisión de obra.
+                  </p>
+                </div>
+                <div className="mt-3 pt-2 border-t border-amber-500/20 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-300">Asignados:</span>
+                  <span className="text-base font-black text-amber-300">
+                    {usuarios.filter((u) => u.rol === "ingenieria" && u.activo).length}
+                  </span>
+                </div>
+              </div>
+
+              {/* 6. PLANEACIÓN Y AUDITORÍA */}
+              <div
+                onClick={() => setFiltroUsuarioRol(filtroUsuarioRol === "planeacion" ? "todos" : "planeacion")}
+                className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                  filtroUsuarioRol === "planeacion"
+                    ? "bg-teal-600/40 border-teal-400 ring-2 ring-teal-400 shadow-md"
+                    : "bg-teal-950/20 border-teal-500/30 hover:bg-teal-900/40"
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-teal-300 bg-teal-500/20 px-2 py-0.5 rounded">
+                      AUDITORÍA
+                    </span>
+                    <Building2 className="w-4 h-4 text-teal-300" />
+                  </div>
+                  <h4 className="text-sm font-bold text-white">Planeación</h4>
+                  <p className="text-[10px] text-slate-300 mt-1 line-clamp-2 leading-relaxed">
+                    Auditoría visual universal, reportería y consulta en todas las fases.
+                  </p>
+                </div>
+                <div className="mt-3 pt-2 border-t border-teal-500/20 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-300">Asignados:</span>
+                  <span className="text-base font-black text-teal-300">
+                    {usuarios.filter((u) => u.rol === "planeacion" && u.activo).length}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Banner de error o advertencia si falló la sincronización con Supabase */}
+          {errorUsuarios && (
+            <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center space-x-2.5">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                <div>
+                  <div className="font-bold">No se pudieron sincronizar los usuarios desde Supabase</div>
+                  <div className="text-[11px] text-rose-700 mt-0.5">{errorUsuarios}</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => cargarUsuariosDirecto(true)}
+                disabled={sincronizandoUsuarios}
+                className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold text-xs shrink-0 cursor-pointer flex items-center space-x-1.5 transition-colors self-start sm:self-auto"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${sincronizandoUsuarios ? "animate-spin" : ""}`} />
+                <span>{sincronizandoUsuarios ? "Reintentando..." : "Reintentar Conexión"}</span>
+              </button>
+            </div>
+          )}
+
           {/* Barra de herramientas y filtros */}
           <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row items-center justify-between gap-3 shadow-xs">
             <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full md:w-auto">
@@ -748,18 +1017,41 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <select
                 value={filtroUsuarioRol}
                 onChange={(e) => setFiltroUsuarioRol(e.target.value)}
-                className="w-full sm:w-44 py-1.5 px-3 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-blue-500 text-slate-700"
+                className="w-full sm:w-52 py-1.5 px-3 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-blue-500 text-slate-700 font-medium"
               >
-                <option value="todos">Todos los roles</option>
-                <option value="comercial">Gestor Rural</option>
-                <option value="asistente">Gestor Documental</option>
-                <option value="ingenieria">Ingeniería</option>
-                <option value="supervisor">Analista Documental</option>
+                <option value="todos">Todos los roles oficiales</option>
+                <option value="supervisor">Supervisor</option>
                 <option value="administrador">Administrador</option>
+                <option value="comercial">Gestor Rural (Comercial)</option>
+                <option value="asistente">Gestor Documental (Asistente)</option>
+                <option value="ingenieria">Ingeniería</option>
+                <option value="planeacion">Planeación y Auditoría</option>
               </select>
+
+              {filtroUsuarioRol !== "todos" && (
+                <button
+                  type="button"
+                  onClick={() => setFiltroUsuarioRol("todos")}
+                  className="text-xs text-blue-600 hover:text-blue-800 font-semibold cursor-pointer underline"
+                >
+                  Limpiar filtro
+                </button>
+              )}
             </div>
 
             <div className="flex items-center space-x-2 w-full md:w-auto justify-end">
+              <button
+                type="button"
+                id="btn-sync-usuarios-toolbar"
+                onClick={() => cargarUsuariosDirecto(true)}
+                disabled={sincronizandoUsuarios}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer"
+                title="Actualizar listado de usuarios desde Supabase"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-slate-600 ${sincronizandoUsuarios ? "animate-spin" : ""}`} />
+                <span>Refrescar</span>
+              </button>
+
               <button
                 type="button"
                 id="btn-abrir-reasignar"
@@ -815,6 +1107,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               ? "bg-amber-100 text-amber-800 border border-amber-200"
                               : usr.rol === "comercial"
                               ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                              : usr.rol === "planeacion"
+                              ? "bg-teal-100 text-teal-800 border border-teal-200"
                               : "bg-slate-100 text-slate-800 border border-slate-200"
                           }`}
                         >
@@ -1983,11 +2277,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   onChange={(e) => setFormUsuario({ ...formUsuario, rol: e.target.value as RolUsuario })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
                 >
-                  <option value="comercial">Gestor Rural</option>
-                  <option value="asistente">Gestor Documental</option>
-                  <option value="ingenieria">Ingeniería</option>
-                  <option value="supervisor">Analista Documental</option>
+                  <option value="supervisor">Supervisor (Control y Aprobación)</option>
                   <option value="administrador">Administrador</option>
+                  <option value="comercial">Gestor Rural (Comercial)</option>
+                  <option value="asistente">Gestor Documental (Asistente)</option>
+                  <option value="ingenieria">Ingeniería</option>
+                  <option value="planeacion">Planeación y Auditoría</option>
                 </select>
               </div>
 
@@ -2071,11 +2366,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   onChange={(e) => setModalEditarUsuario({ ...modalEditarUsuario, rol: e.target.value as RolUsuario })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
                 >
-                  <option value="comercial">Gestor Rural</option>
-                  <option value="asistente">Gestor Documental</option>
-                  <option value="ingenieria">Ingeniería</option>
-                  <option value="supervisor">Analista Documental</option>
+                  <option value="supervisor">Supervisor (Control y Aprobación)</option>
                   <option value="administrador">Administrador</option>
+                  <option value="comercial">Gestor Rural (Comercial)</option>
+                  <option value="asistente">Gestor Documental (Asistente)</option>
+                  <option value="ingenieria">Ingeniería</option>
+                  <option value="planeacion">Planeación y Auditoría</option>
                 </select>
               </div>
 
@@ -2447,11 +2743,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   onChange={(e) => setModalEditarFase({ ...modalEditarFase, rolSugerido: e.target.value as RolUsuario })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
                 >
+                  <option value="supervisor">Supervisor</option>
+                  <option value="administrador">Administrador</option>
                   <option value="comercial">Gestor Rural</option>
                   <option value="asistente">Gestor Documental</option>
                   <option value="ingenieria">Ingeniería</option>
-                  <option value="supervisor">Analista Documental</option>
-                  <option value="administrador">Administrador</option>
+                  <option value="planeacion">Planeación y Auditoría</option>
                 </select>
               </div>
 

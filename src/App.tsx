@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import {
   Users,
   FileText,
@@ -8,10 +8,13 @@ import {
   Filter,
   PlusCircle,
   Eye,
+  EyeOff,
+  User,
   CheckCircle2,
   AlertCircle,
   LogOut,
   ChevronRight,
+  ChevronDown,
   Upload,
   UserPlus,
   Send,
@@ -102,6 +105,8 @@ export default function App() {
   });
   const [loginUsername, setLoginUsername] = useState<string>("comercial.franco");
   const [loginPassword, setLoginPassword] = useState<string>("crm2026*");
+  const [mostrarPassword, setMostrarPassword] = useState<boolean>(false);
+  const [iniciandoSesion, setIniciandoSesion] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Notificaciones y estados de modales
@@ -334,6 +339,26 @@ export default function App() {
   const [motivoReasignacion, setMotivoReasignacion] = useState<string>("");
   const [guardandoReasignacion, setGuardandoReasignacion] = useState<boolean>(false);
   const [sincronizando, setSincronizando] = useState<boolean>(false);
+  const [cambiandoRol, setCambiandoRol] = useState<boolean>(false);
+  const roleSelectRef = useRef<HTMLSelectElement | null>(null);
+
+  // Lista siempre activa y resiliente para el cambiador rápido de usuario y rol
+  const usuariosParaSelector = useMemo(() => {
+    const lista = (todosUsuarios && todosUsuarios.length > 0)
+      ? todosUsuarios.filter((u) => u.activo !== false)
+      : [
+          { id: "757ef367-c0bd-480a-b294-d5fef041f39c", nombreCompleto: "Carlos Mendoza (Gestor Rural)", rol: "comercial" as RolUsuario, activo: true },
+          { id: "ee12d5e6-34cf-4de5-b11a-f256ddde4be2", nombreCompleto: "Laura Castillo (Gestor Documental)", rol: "asistente" as RolUsuario, activo: true },
+          { id: "f00564c8-adb3-46d2-b154-837b9e7386aa", nombreCompleto: "Dra. Helena Ramírez (Supervisor)", rol: "supervisor" as RolUsuario, activo: true },
+          { id: "73e7181a-02ea-49a9-afaa-7c58e7097a24", nombreCompleto: "Ing. Roberto Salazar (Coordinador Técnico)", rol: "ingenieria" as RolUsuario, activo: true },
+          { id: "a49c95b6-75da-48cb-a827-0cf4957e8c3b", nombreCompleto: "Administrador de Sistemas", rol: "administrador" as RolUsuario, activo: true }
+        ];
+
+    if (currentUser && !lista.some((u) => u.id === currentUser.id)) {
+      return [{ id: currentUser.id, nombreCompleto: currentUser.nombreCompleto, rol: currentUser.rol, activo: true }, ...lista];
+    }
+    return lista;
+  }, [todosUsuarios, currentUser]);
 
   // Sincronización en Tiempo Real con Supabase (WebSockets + Polling en Segundo Plano)
   useEffect(() => {
@@ -429,10 +454,11 @@ export default function App() {
     if (currentUser) {
       cargarExpedientes();
       cargarUsuarios();
-      if (currentUser.rol === "comercial") {
+      const rolesConAccesoCaptacion = ["comercial", "administrador", "planeacion", "supervisor", "asistente"];
+      if (rolesConAccesoCaptacion.includes(currentUser.rol)) {
         cargarInteresados();
       } else if (vistaActual === "captacion") {
-        // Bloqueo de ruta no autorizada para roles no comerciales (Cambio 7)
+        // Bloqueo de ruta no autorizada solo para perfiles no autorizados
         setVistaActual("expedientes");
       }
     }
@@ -615,6 +641,7 @@ export default function App() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
+    setIniciandoSesion(true);
     try {
       const API_URL = import.meta.env.VITE_API_URL || "";
       const res = await fetch(`${API_URL}/api/auth/login`, {
@@ -659,6 +686,8 @@ export default function App() {
       mostrarToast(`Sesión iniciada como ${data.user.nombreCompleto}`);
     } catch {
       setAuthError("No se pudo conectar con el servidor.");
+    } finally {
+      setIniciandoSesion(false);
     }
   };
 
@@ -674,9 +703,10 @@ export default function App() {
   };
 
   const handleSwitchUser = async (userId: string) => {
+    if (!userId || userId === currentUser?.id) return;
+    setCambiandoRol(true);
     try {
-      const API_URL = import.meta.env.VITE_API_URL || "";
-      const res = await fetch(`${API_URL}/api/auth/switch-user`, {
+      const res = await authFetch("/api/auth/switch-user", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId })
@@ -687,7 +717,10 @@ export default function App() {
         localStorage.setItem("crm_user_session", JSON.stringify(data.user));
         localStorage.setItem("crm_user_token", data.token || data.user.id);
         mostrarToast(`Sesión activa: ${data.user.nombreCompleto} (${data.user.rol.toUpperCase()})`);
-        cargarExpedientes();
+        await Promise.all([
+          cargarExpedientes(),
+          cargarUsuarios()
+        ]);
         if (data.user.rol === "comercial") {
           setVistaActual("captacion");
           cargarInteresados();
@@ -703,6 +736,8 @@ export default function App() {
       }
     } catch {
       mostrarToast("Error de conexión al cambiar de perfil de usuario", "error");
+    } finally {
+      setCambiandoRol(false);
     }
   };
 
@@ -725,7 +760,8 @@ export default function App() {
   };
 
   const cargarInteresados = (): Promise<void> => {
-    if (!currentUser || currentUser.rol !== "comercial") return Promise.resolve();
+    const rolesAutorizados = ["comercial", "administrador", "planeacion", "supervisor", "asistente"];
+    if (!currentUser || !rolesAutorizados.includes(currentUser.rol)) return Promise.resolve();
     return authFetch("/api/interesados")
       .then((res) => res.json())
       .then((data) => {
@@ -2052,63 +2088,206 @@ export default function App() {
     );
   }
 
-  // PANTALLA DE ACCESO (SCR-01)
+  // PANTALLA DE ACCESO (SCR-01: REDISEÑO INSTITUCIONAL MODERNO CRM VRD)
   if (!currentUser) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-blue-950 flex flex-col items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 border border-slate-200">
-          <div className="flex items-center space-x-3 mb-6">
-            <div className="p-3 bg-blue-600 text-white rounded-xl shadow-md">
-              <Building2 className="w-6 h-6" />
+      <div className="min-h-screen w-full flex flex-col lg:flex-row bg-[#F8FAF8] text-slate-800 selection:bg-[#3F7D58]/20 selection:text-[#285943]">
+        {/* SECCIÓN VISUAL IZQUIERDA (55% EN ESCRITORIO CON IMAGEN REALISTA DE VIVIENDA RURAL) */}
+        <div className="w-full lg:w-[55%] min-h-[360px] sm:min-h-[440px] lg:min-h-screen relative flex flex-col justify-between p-6 sm:p-10 lg:p-14 overflow-hidden bg-[#1E3A5F]">
+          {/* Fotografía realista de alta definición de vivienda rural en paisaje natural */}
+          <img
+            src="https://images.unsplash.com/photo-1518780664697-55e3ad937233?auto=format&fit=crop&w=1800&q=85"
+            alt="Vivienda Rural Digna"
+            className="absolute inset-0 w-full h-full object-cover object-center transform scale-105 motion-safe:transition-transform motion-safe:duration-1000"
+          />
+
+          {/* Overlay graduado institucional oscuro/transparente para legibilidad óptima */}
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/95 via-slate-900/65 to-slate-950/40 backdrop-blur-[0.5px]" />
+
+          {/* Sutil halo cálido en verde institucional (#3F7D58) */}
+          <div className="absolute -bottom-24 -left-24 w-96 h-96 bg-[#3F7D58]/20 rounded-full blur-3xl pointer-events-none" />
+
+          {/* Cabecera visual izquierda */}
+          <div className="relative z-10 flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-white shadow-sm">
+              <Building2 className="w-5 h-5 text-emerald-300" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-900">CRM VRD</h1>
-              <p className="text-xs text-slate-500 font-medium">FRANCO OSORIO INVESTMENT S.A.S.</p>
+              <span className="font-bold text-white text-base tracking-tight block">FRANCO OSORIO</span>
+              <span className="text-[11px] text-emerald-200/80 font-medium block">Vivienda Rural Digna</span>
             </div>
           </div>
 
-          <p className="text-xs text-slate-600 mb-6 leading-relaxed">
-            Acompañamiento integral para el programa <strong>Vivienda Rural Digna</strong> en sitio propio. Ingrese con
-            sus credenciales asignadas.
-          </p>
+          {/* Contenido central institucional sobre la imagen */}
+          <div className="relative z-10 my-auto py-8 lg:py-12">
+            <div className="w-12 h-1 bg-[#3F7D58] rounded-full mb-5 shadow-xs"></div>
+            <span className="text-[11px] uppercase tracking-widest text-emerald-300 font-bold block mb-1">
+              Sistema de Gestión Integral
+            </span>
+            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black text-white tracking-tight leading-tight">
+              CRM VRD
+            </h1>
+            <p className="text-lg sm:text-xl font-medium text-emerald-100/90 mt-1.5">
+              Vivienda Rural Digna
+            </p>
+            <p className="text-sm sm:text-base text-slate-200/90 font-light mt-4 max-w-md leading-relaxed">
+              &quot;Gestión integral para transformar y mejorar la vivienda rural.&quot;
+            </p>
 
-          {authError && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 mb-4 flex items-center space-x-2">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
-              <span>{authError}</span>
+            {/* Micro métricas sutiles para reforzar la seriedad del software */}
+            <div className="mt-8 pt-6 border-t border-white/10 grid grid-cols-2 gap-4 max-w-sm">
+              <div>
+                <span className="block text-[11px] text-slate-400 uppercase tracking-wider font-medium">Cobertura</span>
+                <span className="text-sm font-semibold text-white">Rural & Municipal</span>
+              </div>
+              <div>
+                <span className="block text-[11px] text-slate-400 uppercase tracking-wider font-medium">Fases</span>
+                <span className="text-sm font-semibold text-white">7 Etapas de Gestión</span>
+              </div>
             </div>
-          )}
+          </div>
 
-          <form onSubmit={handleLogin} className="space-y-4">
+          {/* Pie inferior izquierdo */}
+          <div className="relative z-10 pt-4 border-t border-white/15 flex items-center justify-between">
+            <p className="text-[11px] tracking-wider text-slate-300/80 font-medium uppercase">
+              FRANCO OSORIO INVESTMENT S.A.S.
+            </p>
+            <span className="text-[10px] text-emerald-300/80 font-mono">
+              Programa Nacional VRD
+            </span>
+          </div>
+        </div>
+
+        {/* PANEL DERECHO (45% EN ESCRITORIO, BLANCO, MINIMALISTA Y ELEGANTE) */}
+        <div className="w-full lg:w-[45%] flex flex-col justify-between p-6 sm:p-10 lg:p-14 bg-white min-h-screen overflow-y-auto">
+          {/* Espaciador superior en desktop */}
+          <div className="hidden lg:block"></div>
+
+          {/* Contenedor centrado del formulario (ancho máx 420px) */}
+          <div className="w-full max-w-[420px] mx-auto my-auto py-6 sm:py-8 space-y-6">
+            {/* Cabecera del formulario */}
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Nombre de usuario</label>
-              <input
-                type="text"
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                placeholder="ej: comercial.franco"
-                required
-              />
+              <div className="w-12 h-12 rounded-xl bg-[#F4EFE6] border border-[#3F7D58]/20 flex items-center justify-center text-[#3F7D58] shadow-2xs mb-5">
+                <Building2 className="w-6 h-6 text-[#3F7D58]" />
+              </div>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold tracking-wider uppercase text-[#3F7D58]">
+                  CRM VRD
+                </span>
+                <span className="text-slate-300">·</span>
+                <span className="text-xs font-medium text-slate-500">
+                  Vivienda Rural Digna
+                </span>
+              </div>
+              <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 mt-2 tracking-tight">
+                Bienvenido
+              </h2>
+              <p className="text-xs sm:text-sm text-[#475569] mt-1.5 leading-relaxed">
+                Ingresa con tus credenciales para continuar.
+              </p>
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Contraseña</label>
-              <input
-                type="password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                placeholder="••••••••"
-                required
-              />
+
+            {/* Banner de error de autenticación si existe */}
+            {authError && (
+              <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start space-x-2.5 shadow-2xs">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span className="leading-snug">{authError}</span>
+              </div>
+            )}
+
+            {/* Formulario */}
+            <form onSubmit={handleLogin} className="space-y-4">
+              {/* Campo Usuario */}
+              <div>
+                <label
+                  htmlFor="login-username"
+                  className="block text-xs font-semibold text-slate-700 mb-1.5"
+                >
+                  Usuario
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <User className="w-4 h-4" />
+                  </div>
+                  <input
+                    id="login-username"
+                    type="text"
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
+                    className="w-full h-12 pl-10 pr-4 text-sm bg-white border border-slate-200 rounded-xl focus:border-[#3F7D58] focus:ring-4 focus:ring-[#3F7D58]/10 hover:border-slate-300 outline-none transition-all duration-200 text-slate-800 placeholder:text-slate-400 font-medium shadow-2xs"
+                    placeholder="ej: comercial.franco"
+                    required
+                    autoComplete="username"
+                  />
+                </div>
+              </div>
+
+              {/* Campo Contraseña */}
+              <div>
+                <label
+                  htmlFor="login-password"
+                  className="block text-xs font-semibold text-slate-700 mb-1.5"
+                >
+                  Contraseña
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <input
+                    id="login-password"
+                    type={mostrarPassword ? "text" : "password"}
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="w-full h-12 pl-10 pr-11 text-sm bg-white border border-slate-200 rounded-xl focus:border-[#3F7D58] focus:ring-4 focus:ring-[#3F7D58]/10 hover:border-slate-300 outline-none transition-all duration-200 text-slate-800 placeholder:text-slate-400 font-medium shadow-2xs"
+                    placeholder="••••••••"
+                    required
+                    autoComplete="current-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setMostrarPassword(!mostrarPassword)}
+                    className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 focus:outline-none focus:text-[#3F7D58] transition-colors cursor-pointer"
+                    title={mostrarPassword ? "Ocultar contraseña" : "Ver contraseña"}
+                    aria-label={mostrarPassword ? "Ocultar contraseña" : "Ver contraseña"}
+                  >
+                    {mostrarPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Botón Iniciar sesión */}
+              <button
+                type="submit"
+                disabled={iniciandoSesion}
+                className="w-full h-12 px-5 bg-[#3F7D58] hover:bg-[#285943] active:bg-[#1E3A5F] text-white font-semibold text-sm rounded-xl shadow-xs hover:shadow-md transition-all duration-200 flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed group mt-2"
+              >
+                {iniciandoSesion ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>Verificando credenciales...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Iniciar sesión</span>
+                    <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+                  </>
+                )}
+              </button>
+            </form>
+
+            <div className="pt-2 text-center">
+              <span className="text-[11px] text-slate-400">
+                Acceso restringido a personal autorizado de VRD.
+              </span>
             </div>
-            <button
-              type="submit"
-              className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-lg shadow-sm transition-colors"
-            >
-              Iniciar Sesión
-            </button>
-          </form>
+          </div>
+
+          {/* Pie de página del panel derecho */}
+          <div className="pt-6 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-400">
+            <span>© 2026 CRM VRD · FRANCO OSORIO INVESTMENT S.A.S.</span>
+            <span className="text-slate-400 font-mono text-[10px]">v1.2 · Producción</span>
+          </div>
         </div>
       </div>
     );
@@ -2179,13 +2358,15 @@ export default function App() {
             >
               Expedientes VRD
             </button>
-            {currentUser.rol === "comercial" && (
+            {["comercial", "administrador", "planeacion", "supervisor", "asistente"].includes(currentUser.rol) && (
               <button
                 type="button"
                 id="btn-nav-captacion"
                 onClick={() => {
-                  setVistaActual("captacion");
                   setExpedienteSeleccionadoId(null);
+                  setDetalleExp(null);
+                  setVistaActual("captacion");
+                  cargarInteresados();
                 }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
                   vistaActual === "captacion" ? "bg-slate-100 text-blue-700 font-bold" : "text-slate-600 hover:bg-slate-50"
@@ -2225,7 +2406,7 @@ export default function App() {
                 <span>Panel de Administración</span>
               </button>
             )}
-            {(currentUser.rol === "supervisor" || currentUser.rol === "administrador" || currentUser.rol === "asistente") && (
+            {(currentUser.rol === "supervisor" || currentUser.rol === "administrador" || currentUser.rol === "asistente" || currentUser.rol === "planeacion") && (
               <button
                 type="button"
                 onClick={() => setModalBandejaRetiro(true)}
@@ -2252,7 +2433,7 @@ export default function App() {
               try {
                 await Promise.all([
                   cargarExpedientes(),
-                  currentUser.rol === "comercial" || currentUser.rol === "administrador" ? cargarInteresados() : Promise.resolve(),
+                  currentUser.rol === "comercial" || currentUser.rol === "administrador" || currentUser.rol === "planeacion" ? cargarInteresados() : Promise.resolve(),
                   expedienteSeleccionadoId ? cargarDetalleExpediente(expedienteSeleccionadoId) : Promise.resolve()
                 ]);
                 mostrarToast("Datos actualizados directamente desde Supabase PostgreSQL.");
@@ -2267,27 +2448,56 @@ export default function App() {
             <span className="hidden sm:inline">Sincronizar DB</span>
           </button>
 
-          {/* CAMBIADOR RÁPIDO DE USUARIO / ROL (HERRAMIENTA EXCLUSIVA DEL ADMINISTRADOR) */}
-          {currentUser.rol === "administrador" && (
-            <div className="flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200/80 px-2.5 py-1.5 rounded-xl border border-slate-200 transition-colors">
-              <UserCheck className="w-4 h-4 text-blue-600 shrink-0" />
-              <div className="flex flex-col">
-                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 leading-none">
+          {/* CAMBIADOR RÁPIDO DE USUARIO / ROL */}
+          {currentUser && (
+            <div
+              id="selector-cambio-rol"
+              title="Haz clic para cambiar de rol o perfil de usuario"
+              onClick={() => {
+                if (roleSelectRef.current) {
+                  if (typeof (roleSelectRef.current as any).showPicker === "function") {
+                    try {
+                      (roleSelectRef.current as any).showPicker();
+                    } catch {
+                      roleSelectRef.current.focus();
+                    }
+                  } else {
+                    roleSelectRef.current.focus();
+                  }
+                }
+              }}
+              className="flex items-center space-x-2 bg-slate-100 hover:bg-slate-200/90 active:bg-slate-200 px-3 py-1.5 rounded-xl border border-slate-300 shadow-2xs transition-all cursor-pointer select-none group"
+            >
+              {cambiandoRol ? (
+                <RefreshCw className="w-4 h-4 text-blue-600 shrink-0 animate-spin" />
+              ) : (
+                <UserCheck className="w-4 h-4 text-blue-600 group-hover:scale-105 shrink-0 transition-transform" />
+              )}
+              <div className="flex flex-col min-w-0">
+                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 leading-none group-hover:text-blue-700 transition-colors">
                   Cambio Rápido de Rol
                 </span>
-                <select
-                  aria-label="Cambio rápido de rol de usuario"
-                  value={currentUser.id}
-                  onChange={(e) => handleSwitchUser(e.target.value)}
-                  className="text-xs font-semibold text-slate-800 bg-transparent outline-none cursor-pointer pr-1"
-                >
-                  <option value="usr-comercial-01">Carlos Mendoza (Gestor Rural)</option>
-                  <option value="usr-asistente-01">Laura Castillo (Gestor Documental)</option>
-                  <option value="usr-asistente-02">Andrés Gil (Gestor Documental II)</option>
-                  <option value="usr-supervisor-01">Dra. Helena Ramírez (Analista Documental)</option>
-                  <option value="usr-ingenieria-01">Ing. Roberto Salazar (Ingeniería)</option>
-                  <option value="usr-admin-01">Administrador del Sistema</option>
-                </select>
+                <div className="flex items-center">
+                  <select
+                    ref={roleSelectRef}
+                    aria-label="Cambio rápido de rol de usuario"
+                    value={currentUser.id}
+                    disabled={cambiandoRol}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      e.stopPropagation();
+                      handleSwitchUser(e.target.value);
+                    }}
+                    className="text-xs font-semibold text-slate-800 bg-transparent outline-none cursor-pointer pr-1 hover:text-blue-800"
+                  >
+                    {usuariosParaSelector.map((u) => (
+                      <option key={u.id} value={u.id} className="bg-white text-slate-800 py-1">
+                        {formatearNombreUsuario(u.nombreCompleto)} ({formatearRol(u.rol)})
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="w-3 h-3 text-slate-400 group-hover:text-slate-600 shrink-0 pointer-events-none -ml-0.5" />
+                </div>
               </div>
             </div>
           )}
@@ -2322,10 +2532,28 @@ export default function App() {
             {/* ENCABEZADO Y FILTROS */}
             <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
-                <h2 className="text-xl font-bold text-slate-900">Listado General de Expedientes</h2>
+                <div className="flex items-center space-x-2">
+                  <h2 className="text-xl font-bold text-slate-900">Listado General de Expedientes</h2>
+                  {currentUser.rol === "planeacion" && (
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-teal-100 text-teal-800 px-2 py-0.5 rounded-full border border-teal-200">
+                      Auditoría / Solo Lectura
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-slate-500 mt-0.5">
                   Consulta universal del estado del proceso. Acceso según asignación y rol.
                 </p>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 shadow-xs transition-colors cursor-pointer"
+                  title="Imprimir listado actual o guardar como PDF"
+                >
+                  <Printer className="w-4 h-4 text-slate-600" />
+                  <span>Imprimir Vista / PDF</span>
+                </button>
               </div>
             </div>
 
@@ -2683,13 +2911,13 @@ export default function App() {
           </div>
         )}
 
-        {/* VISTA DE CAPTACIÓN DE HOGARES (EXCLUSIVO ROL COMERCIAL - CAMBIO 2 Y CAMBIO 7) */}
-        {currentUser.rol !== "comercial" && vistaActual === "captacion" && (
+        {/* VISTA DE CAPTACIÓN DE HOGARES (ACCESIBLE PARA ROLES AUTORIZADOS) */}
+        {!["comercial", "administrador", "planeacion", "supervisor", "asistente"].includes(currentUser.rol) && vistaActual === "captacion" && (
           <div className="p-8 bg-red-50 border border-red-200 rounded-xl text-center space-y-3">
             <AlertCircle className="w-8 h-8 text-red-600 mx-auto" />
             <h3 className="text-base font-bold text-red-900">Acceso Denegado</h3>
             <p className="text-xs text-red-700 max-w-md mx-auto">
-              El módulo de Captación de Hogares está reservado exclusivamente para el perfil Gestor Rural.
+              El módulo de Captación de Hogares está reservado para perfiles autorizados (Gestor Rural, Planeación, Supervisor y Administrador).
             </p>
             <button
               type="button"
@@ -2701,24 +2929,50 @@ export default function App() {
           </div>
         )}
 
-        {currentUser.rol === "comercial" && vistaActual === "captacion" && !expedienteSeleccionadoId && (
+        {["comercial", "administrador", "planeacion", "supervisor", "asistente"].includes(currentUser.rol) && vistaActual === "captacion" && !expedienteSeleccionadoId && (
           <div>
             {/* ENCABEZADO Y ACCIÓN PRINCIPAL (CAMBIO 2: CAPTACIÓN DE HOGARES) */}
             <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
-                <h2 className="text-xl font-bold text-slate-900">Captación de Hogares</h2>
+                <div className="flex items-center space-x-2">
+                  <h2 className="text-xl font-bold text-slate-900">Captación de Hogares</h2>
+                  {currentUser.rol === "planeacion" && (
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-teal-100 text-teal-800 px-2 py-0.5 rounded-full border border-teal-200">
+                      Auditoría / Solo Lectura
+                    </span>
+                  )}
+                  {currentUser.rol !== "comercial" && currentUser.rol !== "planeacion" && (
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full border border-slate-200">
+                      {formatearRol(currentUser.rol)} • Consulta
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-slate-500 mt-0.5">
                   Prospección y registro de hogares interesados antes de la radicación documental formal en Fase 1.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setModalNuevoInteresado(true)}
-                className="inline-flex items-center space-x-2 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer"
-              >
-                <PlusCircle className="w-4 h-4" />
-                <span>Registrar Hogar Interesado</span>
-              </button>
+              <div className="flex items-center space-x-2">
+                {/* BOTÓN IMPRIMIR VISTA / PDF PARA PLANEACIÓN Y AUDITORÍA */}
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 shadow-xs transition-colors cursor-pointer"
+                  title="Imprimir listado actual o guardar como PDF"
+                >
+                  <Printer className="w-4 h-4 text-slate-600" />
+                  <span>Imprimir Vista / PDF</span>
+                </button>
+                {currentUser.rol === "comercial" && (
+                  <button
+                    type="button"
+                    onClick={() => setModalNuevoInteresado(true)}
+                    className="inline-flex items-center space-x-2 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer"
+                  >
+                    <PlusCircle className="w-4 h-4" />
+                    <span>Registrar Hogar Interesado</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* BARRA DE BÚSQUEDA Y FILTROS DIRECTOS (CAMBIOS 1, 4 y 8) */}
@@ -2853,8 +3107,26 @@ export default function App() {
 
               if (itemsAMostrar.length === 0) {
                 return (
-                  <div className="p-8 bg-white border border-dashed border-slate-300 rounded-xl text-center text-slate-500 text-xs">
-                    No se encontraron hogares interesados con los criterios de búsqueda y filtros seleccionados.
+                  <div className="p-10 bg-white border border-dashed border-slate-300 rounded-xl text-center space-y-3">
+                    <Users className="w-10 h-10 text-slate-400 mx-auto" />
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-700">No hay prospectos en captación</h4>
+                      <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                        {interesados.length === 0
+                          ? "Actualmente no hay hogares interesados registrados en la base de datos de prospección."
+                          : "No se encontraron hogares interesados con los criterios de búsqueda y filtros seleccionados."}
+                      </p>
+                    </div>
+                    {currentUser.rol === "comercial" && (
+                      <button
+                        type="button"
+                        onClick={() => setModalNuevoInteresado(true)}
+                        className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                      >
+                        <PlusCircle className="w-4 h-4" />
+                        <span>Registrar Primer Interesado</span>
+                      </button>
+                    )}
                   </div>
                 );
               }
@@ -3010,38 +3282,51 @@ export default function App() {
                                             </li>
                                           ))}
                                         </ul>
-                                        <div className="mt-2 pt-2 border-t border-slate-100">
-                                          <div className="flex items-center space-x-1">
-                                            <input
-                                              type="text"
-                                              placeholder="Adjuntar doc (ej: Cedula.pdf)..."
-                                              value={nuevoDocNombre}
-                                              onChange={(e) => setNuevoDocNombre(e.target.value)}
-                                              className="text-[10px] px-2 py-1 border border-slate-200 rounded flex-1 outline-none"
-                                            />
-                                            <button
-                                              type="button"
-                                              onClick={async () => {
-                                                if (nuevoDocNombre.trim()) {
-                                                  await handleSubirDocumentoInteresado(item.id, nuevoDocNombre.trim());
-                                                }
-                                              }}
-                                              className="px-2 py-1 bg-blue-600 text-white rounded text-[10px] font-bold hover:bg-blue-700"
-                                              title="Adjuntar"
-                                            >
-                                              +
-                                            </button>
+                                        {currentUser.rol !== "planeacion" && (
+                                          <div className="mt-2 pt-2 border-t border-slate-100">
+                                            <div className="flex items-center space-x-1">
+                                              <input
+                                                type="text"
+                                                placeholder="Adjuntar doc (ej: Cedula.pdf)..."
+                                                value={nuevoDocNombre}
+                                                onChange={(e) => setNuevoDocNombre(e.target.value)}
+                                                className="text-[10px] px-2 py-1 border border-slate-200 rounded flex-1 outline-none"
+                                              />
+                                              <button
+                                                type="button"
+                                                onClick={async () => {
+                                                  if (nuevoDocNombre.trim()) {
+                                                    await handleSubirDocumentoInteresado(item.id, nuevoDocNombre.trim());
+                                                  }
+                                                }}
+                                                className="px-2 py-1 bg-blue-600 text-white rounded text-[10px] font-bold hover:bg-blue-700"
+                                                title="Adjuntar"
+                                              >
+                                                +
+                                              </button>
+                                            </div>
                                           </div>
-                                        </div>
+                                        )}
                                       </div>
                                     )}
                                   </div>
                                 )}
                               </td>
-                              {/* CAMBIO 3: Acción condicionada por vigencia */}
+                              {/* CAMBIO 3: Acción condicionada por vigencia y rol */}
                               <td className="px-4 py-3 text-right whitespace-nowrap">
                                 <div className="flex items-center justify-end">
-                                  {estaVencido ? (
+                                  {currentUser.rol === "planeacion" ? (
+                                    estaVencido ? (
+                                      <span className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-100 text-amber-800 rounded-lg text-xs font-semibold border border-amber-200">
+                                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                                        <span>Plazo Vencido</span>
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center px-2.5 py-1 bg-slate-100 text-slate-600 rounded-lg text-xs font-medium border border-slate-200">
+                                        En Prospección
+                                      </span>
+                                    )
+                                  ) : estaVencido ? (
                                     <button
                                       type="button"
                                       onClick={() => {
@@ -3166,6 +3451,11 @@ export default function App() {
                     >
                       {getEtiquetaFase(detalleExp.expediente.faseActual).nombre}
                     </span>
+                    {currentUser.rol === "planeacion" && (
+                      <span className="text-[10px] font-bold uppercase tracking-wider bg-teal-100 text-teal-800 px-2 py-0.5 rounded-full border border-teal-200">
+                        Auditoría / Solo Lectura
+                      </span>
+                    )}
                   </div>
                   <h1 className="text-2xl font-black text-slate-900">
                     {detalleExp.expediente.codigoVisible || "CÓDIGO PENDIENTE"}
@@ -3181,19 +3471,30 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center space-x-3">
+                  {/* BOTÓN IMPRIMIR VISTA / EXPEDIENTE (PDF / IMPRESIÓN) */}
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold border border-slate-300 shadow-2xs flex items-center space-x-1.5 transition-colors cursor-pointer"
+                    title="Imprimir pantalla del expediente o guardar como PDF"
+                  >
+                    <Printer className="w-4 h-4 text-slate-700" />
+                    <span>Imprimir Vista / PDF</span>
+                  </button>
+
                   {/* BOTÓN IMPRIMIR FICHA TÉCNICA OFICIAL */}
                   <button
                     type="button"
                     onClick={() => setMostrarFichaImprimible(true)}
-                    className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold border border-slate-300 shadow-2xs flex items-center space-x-1.5 transition-colors cursor-pointer"
+                    className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-800 rounded-xl text-xs font-bold border border-slate-300 shadow-2xs flex items-center space-x-1.5 transition-colors cursor-pointer"
                     title="Generar e imprimir Ficha Técnica Oficial (PDF / Impresión)"
                   >
-                    <Printer className="w-4 h-4 text-slate-700" />
-                    <span>Ficha Técnica</span>
+                    <FileText className="w-4 h-4 text-slate-700" />
+                    <span>Ficha Técnica Oficial</span>
                   </button>
 
-                  {/* BOTÓN SOLICITAR RECHAZO DEL HOGAR (CUALQUIER FASE 1 A 7) */}
-                  {!esSalidaDefinitiva && detalleExp.expediente.solicitudRechazo?.estado !== "pendiente" && (() => {
+                  {/* BOTÓN SOLICITAR RECHAZO DEL HOGAR (CUALQUIER FASE 1 A 7) - EXCLUYE PLANEACIÓN */}
+                  {!esSalidaDefinitiva && currentUser.rol !== "planeacion" && detalleExp.expediente.solicitudRechazo?.estado !== "pendiente" && (() => {
                     const analistaBloqueadoPorCarga = currentUser.rol === "supervisor" && !detalleExp.expediente.bloqueadoPorRevision;
                     const gestorBloqueadoPorRevision = (currentUser.rol === "asistente" || currentUser.rol === "comercial") && detalleExp.expediente.bloqueadoPorRevision;
                     const deshabilitarRechazo = analistaBloqueadoPorCarga || gestorBloqueadoPorRevision;
@@ -4820,10 +5121,14 @@ export default function App() {
             <div id="seccion-bitacora-notas" className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs">
               <h3 className="text-base font-bold text-slate-900 mb-4">Bitácora de Conversaciones y Notas</h3>
 
-              {esSalidaDefinitiva ? (
+              {esSalidaDefinitiva || currentUser.rol === "planeacion" ? (
                 <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-500 flex items-center space-x-2">
                   <Lock className="w-4 h-4 text-slate-400 shrink-0" />
-                  <span>El expediente está en salida definitiva. La bitácora se encuentra en modo de consulta histórica (solo lectura).</span>
+                  <span>
+                    {currentUser.rol === "planeacion"
+                      ? "Perfil de Planeación y Auditoría: La bitácora se encuentra en modo de consulta histórica (solo lectura)."
+                      : "El expediente está en salida definitiva. La bitácora se encuentra en modo de consulta histórica (solo lectura)."}
+                  </span>
                 </div>
               ) : (
                 <form onSubmit={handleAgregarNota} className="mb-6">

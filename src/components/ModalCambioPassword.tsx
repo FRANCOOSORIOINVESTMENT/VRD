@@ -128,7 +128,7 @@ export const ModalCambioPassword: React.FC<ModalCambioPasswordProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
       <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
         {/* Encabezado con identidad de seguridad */}
-        <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 p-6 text-white relative">
+        <div className="bg-gradient-to-r from-slate-950 via-[#1E3A5F] to-slate-900 p-6 text-white relative border-b border-slate-700/60">
           {esVoluntario && onCerrarModal && (
             <button
               type="button"
@@ -140,14 +140,14 @@ export const ModalCambioPassword: React.FC<ModalCambioPasswordProps> = ({
           )}
 
           <div className="flex items-center space-x-3 mb-2">
-            <div className="p-2.5 bg-blue-600/90 text-white rounded-xl shadow-md flex items-center justify-center">
-              <KeyRound className="w-6 h-6" />
+            <div className="w-11 h-11 rounded-xl bg-[#F4EFE6] border border-[#3F7D58]/30 text-[#3F7D58] shadow-2xs flex items-center justify-center">
+              <KeyRound className="w-6 h-6 text-[#3F7D58]" />
             </div>
             <div>
               <h2 className="text-lg font-bold tracking-tight">
                 {esVoluntario ? "Cambiar Contraseña" : "Actualización Obligatoria"}
               </h2>
-              <p className="text-xs text-blue-200 font-medium">
+              <p className="text-xs text-emerald-200 font-medium">
                 Seguridad de Acceso • FRANCO OSORIO S.A.S.
               </p>
             </div>
@@ -194,7 +194,7 @@ export const ModalCambioPassword: React.FC<ModalCambioPasswordProps> = ({
                 placeholder="Ingrese su nueva contraseña"
                 required
                 disabled={cargando}
-                className="w-full pl-9 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600/30 focus:border-blue-600 transition-all font-mono"
+                className="w-full pl-9 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#3F7D58]/20 focus:border-[#3F7D58] transition-all font-mono"
               />
               <button
                 type="button"
@@ -223,7 +223,7 @@ export const ModalCambioPassword: React.FC<ModalCambioPasswordProps> = ({
                 placeholder="Reingrese la contraseña para confirmar"
                 required
                 disabled={cargando}
-                className="w-full pl-9 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600/30 focus:border-blue-600 transition-all font-mono"
+                className="w-full pl-9 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#3F7D58]/20 focus:border-[#3F7D58] transition-all font-mono"
               />
               <button
                 type="button"
@@ -318,7 +318,7 @@ export const ModalCambioPassword: React.FC<ModalCambioPasswordProps> = ({
             <button
               type="submit"
               disabled={!formularioValido || cargando}
-              className="w-full sm:flex-1 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed order-1 sm:order-2"
+              className="w-full sm:flex-1 px-4 py-2.5 rounded-xl bg-[#3F7D58] hover:bg-[#285943] active:bg-[#1E3A5F] text-white text-xs font-bold shadow-xs hover:shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed order-1 sm:order-2"
             >
               {cargando ? (
                 <>

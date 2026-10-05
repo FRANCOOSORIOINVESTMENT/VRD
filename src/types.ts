@@ -1,7 +1,7 @@
 // CRM VRD — FRANCO OSORIO INVESTMENT S.A.S.
 // Tipos e Interfaces TypeScript del Dominio de Negocio
 
-export type RolUsuario = 'administrador' | 'supervisor' | 'comercial' | 'asistente' | 'ingenieria';
+export type RolUsuario = 'administrador' | 'supervisor' | 'comercial' | 'asistente' | 'ingenieria' | 'planeacion';
 
 export type TipoIdentificacion = 'CC' | 'CE' | 'TI' | 'RC' | 'PAS';
 

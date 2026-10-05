@@ -613,11 +613,11 @@ export const ModuloInformes: React.FC<ModuloInformesProps> = ({
   return (
     <div className="space-y-6">
       {/* ENCABEZADO DEL MÓDULO */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <div className="flex items-center space-x-3">
-            <div className="p-2.5 bg-emerald-600 text-white rounded-xl shadow-xs">
-              <FileSpreadsheet className="w-6 h-6" />
+            <div className="w-11 h-11 rounded-xl bg-[#F4EFE6] border border-[#3F7D58]/25 text-[#3F7D58] flex items-center justify-center shadow-2xs">
+              <FileSpreadsheet className="w-6 h-6 text-[#3F7D58]" />
             </div>
             <div>
               <h1 className="text-xl font-bold text-slate-900">
@@ -640,7 +640,7 @@ export const ModuloInformes: React.FC<ModuloInformesProps> = ({
             className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center space-x-2 shadow-xs transition-all cursor-pointer ${
               generandoDescarga || expedientesFiltrados.length === 0
                 ? "bg-slate-200 text-slate-400 cursor-not-allowed"
-                : "bg-emerald-600 hover:bg-emerald-700 text-white active:scale-98"
+                : "bg-[#3F7D58] hover:bg-[#285943] text-white active:scale-98 shadow-xs hover:shadow-md"
             }`}
           >
             {generandoDescarga ? (
@@ -659,7 +659,7 @@ export const ModuloInformes: React.FC<ModuloInformesProps> = ({
             className={`px-3.5 py-2.5 rounded-xl font-semibold text-xs flex items-center space-x-2 border transition-colors cursor-pointer ${
               generandoDescarga || expedientesFiltrados.length === 0
                 ? "border-slate-200 text-slate-300 cursor-not-allowed bg-slate-50"
-                : "border-slate-300 hover:bg-slate-50 text-slate-700 bg-white"
+                : "border-slate-300 hover:bg-[#F4EFE6] text-slate-700 bg-white"
             }`}
             title="Descargar archivo en formato de valores separados por punto y coma (CSV)"
           >
@@ -670,10 +670,10 @@ export const ModuloInformes: React.FC<ModuloInformesProps> = ({
       </div>
 
       {/* BLOQUE DE INFORMES PREDEFINIDOS (SUGERENCIAS RÁPIDAS) */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center space-x-2 text-xs font-bold text-slate-800 uppercase tracking-wider">
-            <Layers className="w-4 h-4 text-blue-600" />
+            <Layers className="w-4 h-4 text-[#3F7D58]" />
             <span>Informes Predefinidos Rápidos</span>
           </div>
           <span className="text-[11px] text-slate-400 font-medium">
@@ -687,7 +687,7 @@ export const ModuloInformes: React.FC<ModuloInformesProps> = ({
             onClick={() => aplicarInformePredefinido("general")}
             className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
               tipoInformeActivo === "general"
-                ? "border-blue-500 bg-blue-50/70 shadow-xs ring-1 ring-blue-400"
+                ? "border-[#3F7D58] bg-[#F4EFE6]/70 shadow-xs ring-1 ring-[#3F7D58]"
                 : "border-slate-200 bg-slate-50/60 hover:bg-slate-100/80 hover:border-slate-300"
             }`}
           >
@@ -700,13 +700,13 @@ export const ModuloInformes: React.FC<ModuloInformesProps> = ({
             onClick={() => aplicarInformePredefinido("activos_fase")}
             className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
               tipoInformeActivo === "activos_fase"
-                ? "border-blue-500 bg-blue-50/70 shadow-xs ring-1 ring-blue-400"
+                ? "border-[#3F7D58] bg-[#F4EFE6]/70 shadow-xs ring-1 ring-[#3F7D58]"
                 : "border-slate-200 bg-slate-50/60 hover:bg-slate-100/80 hover:border-slate-300"
             }`}
           >
-            <div className="text-xs font-bold text-blue-900 flex items-center justify-between">
+            <div className="text-xs font-bold text-[#285943] flex items-center justify-between">
               <span>Activos por Fase</span>
-              <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[10px] font-mono">
+              <span className="bg-[#3F7D58]/10 text-[#285943] px-1.5 py-0.5 rounded text-[10px] font-mono font-bold">
                 {metricasResumen.conteoEstados["en_tramite"] || 0}
               </span>
             </div>

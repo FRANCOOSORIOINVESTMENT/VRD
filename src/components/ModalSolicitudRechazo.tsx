@@ -189,7 +189,7 @@ export const ModalSolicitudRechazo: React.FC<ModalSolicitudRechazoProps> = ({
               </label>
               {evidenciaNombre && (
                 <span title={evidenciaNombre} className="text-[11px] font-medium text-slate-600 flex items-center space-x-1 truncate max-w-xs">
-                  <Paperclip className="w-3.5 h-3.5 text-blue-600" />
+                  <Paperclip className="w-3.5 h-3.5 text-[#3F7D58]" />
                   <span>{evidenciaNombre}</span>
                 </span>
               )}
