@@ -1,32 +1,37 @@
 @import "tailwindcss";
 
 @theme {
-  --color-vrd-green: #3F7D58;
-  --color-vrd-green-dark: #285943;
-  --color-vrd-blue: #1E3A5F;
-  --color-vrd-sand: #F4EFE6;
-  --color-vrd-bg: #F8FAF8;
-  --color-vrd-gray: #475569;
-
-  --color-blue-50: #F4EFE6;
-  --color-blue-100: #E8F2EC;
-  --color-blue-200: #CFE3D7;
-  --color-blue-300: #9EC6AF;
-  --color-blue-400: #62A47E;
-  --color-blue-500: #3F7D58;
+  --color-blue-50: #F4FAF6;
+  --color-blue-100: #E3F0E7;
+  --color-blue-200: #C2DEC9;
+  --color-blue-300: #93C4A0;
+  --color-blue-400: #5EA372;
+  --color-blue-500: #4B8C61;
   --color-blue-600: #3F7D58;
   --color-blue-700: #285943;
   --color-blue-800: #1E3A5F;
-  --color-blue-900: #152A42;
-  --color-blue-950: #0D1C2E;
+  --color-blue-900: #142640;
+  --color-blue-950: #0C1726;
+
+  --color-vrd-primary: #3F7D58;
+  --color-vrd-hover: #285943;
+  --color-vrd-navy: #1E3A5F;
+  --color-vrd-sand: #F4EFE6;
+  --color-vrd-surface: #F8FAF8;
+  --color-vrd-tint: #EBF3EE;
 }
 
 body {
   background-color: #F8FAF8;
-  color: #1e293b;
+  color: #0F172A;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
 ::selection {
   background-color: rgba(63, 125, 88, 0.2);
   color: #285943;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: #3F7D58 !important;
 }

@@ -2313,18 +2313,18 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
+    <div className="min-h-screen bg-[#F8FAF8] flex flex-col font-sans selection:bg-[#3F7D58]/20 selection:text-[#285943]">
       {/* AVISO PERMANENTE DE MODO DE EJECUCIÓN (SOLO VISIBLE PARA ADMINISTRADOR) */}
       {currentUser?.rol === "administrador" && (
         <div className={`py-1.5 px-4 text-center text-xs font-semibold tracking-wide border-b flex items-center justify-center space-x-2 ${
           systemStatus.mode === "supabase" 
-            ? "bg-emerald-50 text-emerald-900 border-emerald-200" 
+            ? "bg-[#1E3A5F] text-emerald-100 border-[#285943]" 
             : "bg-amber-100 text-amber-900 border-amber-300"
         }`}>
           {systemStatus.mode === "supabase" ? (
             <>
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>⚡ CONECTADO A SUPABASE • Proyecto: <strong className="font-mono">{systemStatus.projectId || "dcelksfchabhrlevlfah"}</strong> • Persistencia y REST API Activas</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>⚡ CONECTADO A SUPABASE • Proyecto: <strong className="font-mono text-emerald-200">{systemStatus.projectId || "dcelksfchabhrlevlfah"}</strong> • Persistencia y REST API Activas</span>
             </>
           ) : (
             <span>⚠️ {systemStatus.label}</span>
@@ -2333,15 +2333,15 @@ export default function App() {
       )}
 
       {/* BARRA SUPERIOR DE NAVEGACIÓN */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 px-6 py-3 flex items-center justify-between shadow-xs">
+      <header className="bg-white/95 backdrop-blur-md border-b border-slate-200 sticky top-0 z-30 px-6 py-3 flex items-center justify-between shadow-2xs">
         <div className="flex items-center space-x-6">
           <div className="flex items-center space-x-2.5">
-            <div className="p-2 bg-blue-600 text-white rounded-lg shadow-xs">
-              <Building2 className="w-5 h-5" />
+            <div className="p-2 bg-[#3F7D58] text-white rounded-xl shadow-xs">
+              <Building2 className="w-5 h-5 text-emerald-200" />
             </div>
             <div>
               <span className="font-bold text-slate-900 text-sm tracking-tight block">FRANCO OSORIO VRD</span>
-              <span className="text-[10px] text-slate-500 font-medium block">Vivienda Rural Digna</span>
+              <span className="text-[10px] text-[#3F7D58] font-bold uppercase tracking-wider block">Vivienda Rural Digna</span>
             </div>
           </div>
 
@@ -2352,8 +2352,8 @@ export default function App() {
                 setVistaActual("expedientes");
                 setExpedienteSeleccionadoId(null);
               }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                vistaActual === "expedientes" ? "bg-slate-100 text-blue-700" : "text-slate-600 hover:bg-slate-50"
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                vistaActual === "expedientes" ? "bg-[#EBF3EE] text-[#285943] font-bold border border-[#3F7D58]/20 shadow-2xs" : "text-slate-600 hover:bg-[#F4FAF6] hover:text-[#285943]"
               }`}
             >
               Expedientes VRD
@@ -2368,8 +2368,8 @@ export default function App() {
                   setVistaActual("captacion");
                   cargarInteresados();
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                  vistaActual === "captacion" ? "bg-slate-100 text-blue-700 font-bold" : "text-slate-600 hover:bg-slate-50"
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  vistaActual === "captacion" ? "bg-[#EBF3EE] text-[#285943] font-bold border border-[#3F7D58]/20 shadow-2xs" : "text-slate-600 hover:bg-[#F4FAF6] hover:text-[#285943]"
                 }`}
               >
                 Captación de Hogares
@@ -2383,11 +2383,11 @@ export default function App() {
                 setVistaActual("informes");
                 setExpedienteSeleccionadoId(null);
               }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1.5 cursor-pointer ${
-                vistaActual === "informes" ? "bg-slate-100 text-blue-700 font-bold" : "text-slate-600 hover:bg-slate-50"
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center space-x-1.5 cursor-pointer ${
+                vistaActual === "informes" ? "bg-[#EBF3EE] text-[#285943] font-bold border border-[#3F7D58]/20 shadow-2xs" : "text-slate-600 hover:bg-[#F4FAF6] hover:text-[#285943]"
               }`}
             >
-              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+              <FileSpreadsheet className="w-3.5 h-3.5 text-[#3F7D58]" />
               <span>Informes</span>
             </button>
             {currentUser.rol === "administrador" && (
@@ -2398,11 +2398,11 @@ export default function App() {
                   setVistaActual("administracion");
                   setExpedienteSeleccionadoId(null);
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1.5 cursor-pointer ${
-                  vistaActual === "administracion" ? "bg-slate-100 text-blue-700 font-bold" : "text-slate-600 hover:bg-slate-50"
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center space-x-1.5 cursor-pointer ${
+                  vistaActual === "administracion" ? "bg-[#EBF3EE] text-[#285943] font-bold border border-[#3F7D58]/20 shadow-2xs" : "text-slate-600 hover:bg-[#F4FAF6] hover:text-[#285943]"
                 }`}
               >
-                <Shield className="w-3.5 h-3.5 text-blue-600" />
+                <Shield className="w-3.5 h-3.5 text-[#3F7D58]" />
                 <span>Panel de Administración</span>
               </button>
             )}
@@ -2410,7 +2410,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setModalBandejaRetiro(true)}
-                className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors text-slate-600 hover:bg-slate-50 flex items-center space-x-1.5 cursor-pointer"
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all text-slate-600 hover:bg-amber-50 hover:text-amber-800 flex items-center space-x-1.5 cursor-pointer"
               >
                 <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
                 <span>Bandeja de Retiro</span>
@@ -2442,14 +2442,14 @@ export default function App() {
               }
             }}
             title="Sincronizar datos directamente con Supabase PostgreSQL"
-            className="flex items-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100/80 px-2.5 py-1.5 rounded-xl border border-emerald-200 text-emerald-800 transition-colors text-xs font-semibold cursor-pointer shadow-xs"
+            className="flex items-center space-x-1.5 bg-[#F4FAF6] hover:bg-[#E3F0E7] px-2.5 py-1.5 rounded-xl border border-[#C2DEC9] text-[#285943] transition-colors text-xs font-semibold cursor-pointer shadow-2xs"
           >
-            <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 shrink-0 ${sincronizando ? "animate-spin" : ""}`} />
+            <RefreshCw className={`w-3.5 h-3.5 text-[#3F7D58] shrink-0 ${sincronizando ? "animate-spin" : ""}`} />
             <span className="hidden sm:inline">Sincronizar DB</span>
           </button>
 
-          {/* CAMBIADOR RÁPIDO DE USUARIO / ROL */}
-          {currentUser && (
+          {/* CAMBIADOR RÁPIDO DE USUARIO / ROL (EXCLUSIVO PARA EL ADMINISTRADOR) */}
+          {currentUser.rol === "administrador" && (
             <div
               id="selector-cambio-rol"
               title="Haz clic para cambiar de rol o perfil de usuario"
@@ -2466,15 +2466,15 @@ export default function App() {
                   }
                 }
               }}
-              className="flex items-center space-x-2 bg-slate-100 hover:bg-slate-200/90 active:bg-slate-200 px-3 py-1.5 rounded-xl border border-slate-300 shadow-2xs transition-all cursor-pointer select-none group"
+              className="flex items-center space-x-2 bg-[#F4EFE6]/70 hover:bg-[#F4EFE6] active:bg-[#F4EFE6] px-3 py-1.5 rounded-xl border border-[#3F7D58]/25 shadow-2xs transition-all cursor-pointer select-none group"
             >
               {cambiandoRol ? (
-                <RefreshCw className="w-4 h-4 text-blue-600 shrink-0 animate-spin" />
+                <RefreshCw className="w-4 h-4 text-[#3F7D58] shrink-0 animate-spin" />
               ) : (
-                <UserCheck className="w-4 h-4 text-blue-600 group-hover:scale-105 shrink-0 transition-transform" />
+                <UserCheck className="w-4 h-4 text-[#3F7D58] group-hover:scale-105 shrink-0 transition-transform" />
               )}
               <div className="flex flex-col min-w-0">
-                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 leading-none group-hover:text-blue-700 transition-colors">
+                <span className="text-[9px] font-bold uppercase tracking-wider text-[#3F7D58] leading-none group-hover:text-[#285943] transition-colors">
                   Cambio Rápido de Rol
                 </span>
                 <div className="flex items-center">
@@ -2488,7 +2488,7 @@ export default function App() {
                       e.stopPropagation();
                       handleSwitchUser(e.target.value);
                     }}
-                    className="text-xs font-semibold text-slate-800 bg-transparent outline-none cursor-pointer pr-1 hover:text-blue-800"
+                    className="text-xs font-semibold text-slate-800 bg-transparent outline-none cursor-pointer pr-1 hover:text-[#285943]"
                   >
                     {usuariosParaSelector.map((u) => (
                       <option key={u.id} value={u.id} className="bg-white text-slate-800 py-1">
@@ -2496,20 +2496,20 @@ export default function App() {
                       </option>
                     ))}
                   </select>
-                  <ChevronDown className="w-3 h-3 text-slate-400 group-hover:text-slate-600 shrink-0 pointer-events-none -ml-0.5" />
+                  <ChevronDown className="w-3 h-3 text-[#3F7D58]/60 group-hover:text-[#3F7D58] shrink-0 pointer-events-none -ml-0.5" />
                 </div>
               </div>
             </div>
           )}
 
           <div className="text-right hidden md:block">
-            <div className="text-xs font-bold text-slate-800">{formatearNombreUsuario(currentUser.nombreCompleto)}</div>
-            <div className="text-[11px] text-blue-600 font-medium">Rol: {formatearRol(currentUser.rol)}</div>
+            <div className="text-xs font-bold text-slate-900">{formatearNombreUsuario(currentUser.nombreCompleto)}</div>
+            <div className="text-[11px] text-[#3F7D58] font-bold">Rol: {formatearRol(currentUser.rol)}</div>
           </div>
           <button
             type="button"
             onClick={() => setModalCambioPasswordVoluntario(true)}
-            className="p-2 text-slate-500 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
+            className="p-2 text-slate-500 hover:text-[#3F7D58] rounded-xl hover:bg-[#EBF3EE] transition-colors cursor-pointer"
             title="Cambiar contraseña de seguridad (bcrypt)"
           >
             <KeyRound className="w-4 h-4" />
@@ -2517,7 +2517,7 @@ export default function App() {
           <button
             type="button"
             onClick={handleLogout}
-            className="p-2 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
+            className="p-2 text-slate-400 hover:text-rose-600 rounded-xl hover:bg-rose-50 transition-colors cursor-pointer"
             title="Cerrar sesión"
           >
             <LogOut className="w-4 h-4" />

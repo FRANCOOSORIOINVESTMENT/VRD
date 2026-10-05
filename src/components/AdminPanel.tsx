@@ -654,17 +654,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   return (
     <div className="space-y-6 pb-12">
       {/* Encabezado del Módulo Administrador */}
-      <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white rounded-2xl shadow-2xs border border-slate-200/80 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center space-x-3.5">
-          <div className="w-11 h-11 rounded-lg bg-blue-600 text-white flex items-center justify-center shadow-xs">
-            <ShieldCheck className="w-6 h-6" />
+          <div className="w-11 h-11 rounded-xl bg-[#3F7D58] text-white flex items-center justify-center shadow-xs">
+            <ShieldCheck className="w-6 h-6 text-[#EBF3EE]" />
           </div>
           <div>
             <div className="flex items-center space-x-2">
               <h1 className="text-xl font-bold text-slate-900 tracking-tight">
                 Panel de Control de Administrador
               </h1>
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#EBF3EE] text-[#285943] border border-[#3F7D58]/30">
                 Control Total
               </span>
             </div>
@@ -767,15 +767,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           {/* ========================================================= */}
           {/* ESPACIO DESTACADO: ROLES DEL SISTEMA Y ROL SUPERVISOR */}
           {/* ========================================================= */}
-          <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-blue-950 p-5 rounded-2xl text-white shadow-md border border-slate-700/60">
+          <div className="bg-gradient-to-r from-[#1E3A5F] via-slate-900 to-[#285943] p-5 rounded-2xl text-white shadow-md border border-slate-700/60">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
               <div>
                 <div className="flex items-center space-x-2">
-                  <ShieldCheck className="w-5 h-5 text-blue-400" />
+                  <ShieldCheck className="w-5 h-5 text-emerald-400" />
                   <h3 className="text-sm font-bold tracking-tight text-white">
                     Estructura Organizacional y Roles del Sistema
                   </h3>
-                  <span className="text-[10px] font-mono bg-blue-500/20 text-blue-200 border border-blue-400/30 px-2 py-0.5 rounded-full">
+                  <span className="text-[10px] font-mono bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 px-2 py-0.5 rounded-full">
                     Supabase perfiles_usuario
                   </span>
                 </div>
@@ -790,10 +790,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 id="btn-sync-usuarios-supabase"
                 onClick={() => cargarUsuariosDirecto(true)}
                 disabled={sincronizandoUsuarios}
-                className="px-3.5 py-1.5 bg-blue-600/40 hover:bg-blue-600/60 active:bg-blue-600 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-all border border-blue-400/40 shadow-xs cursor-pointer self-start sm:self-auto shrink-0"
+                className="px-3.5 py-1.5 bg-[#3F7D58]/80 hover:bg-[#3F7D58] active:bg-[#285943] text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-all border border-emerald-400/40 shadow-xs cursor-pointer self-start sm:self-auto shrink-0"
                 title="Forzar actualización directa en tiempo real desde Supabase"
               >
-                <RefreshCw className={`w-3.5 h-3.5 text-blue-300 ${sincronizandoUsuarios ? "animate-spin" : ""}`} />
+                <RefreshCw className={`w-3.5 h-3.5 text-emerald-300 ${sincronizandoUsuarios ? "animate-spin" : ""}`} />
                 <span>{sincronizandoUsuarios ? "Sincronizando..." : "Sincronizar Supabase"}</span>
               </button>
             </div>
