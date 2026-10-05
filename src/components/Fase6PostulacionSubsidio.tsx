@@ -232,6 +232,14 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
         tamanoBytes: file.size,
         dataUrl: reader.result as string
       });
+      try {
+        e.target.value = "";
+      } catch {}
+    };
+    reader.onerror = () => {
+      try {
+        e.target.value = "";
+      } catch {}
     };
     reader.readAsDataURL(file);
   };

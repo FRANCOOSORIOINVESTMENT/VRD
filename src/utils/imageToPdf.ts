@@ -76,7 +76,8 @@ function generarPdfConJpeg(jpegBytes: Uint8Array, width: number, height: number)
  */
 export async function convertirImagenAPdf(file: File): Promise<File> {
   // Si ya es PDF o no es imagen, retornar tal cual
-  if (file.type === "application/pdf" || !file.type.startsWith("image/")) {
+  const esImagen = file.type.startsWith("image/") || /\.(jpg|jpeg|png|webp|bmp|tiff)$/i.test(file.name);
+  if (file.type === "application/pdf" || !esImagen) {
     return file;
   }
 
@@ -85,9 +86,24 @@ export async function convertirImagenAPdf(file: File): Promise<File> {
     reader.onload = () => {
       const img = new Image();
       img.onload = () => {
+        // Escalar resoluciones desmedidas para prevenir colapsos de memoria en Canvas de navegadores móviles
+        let origW = img.naturalWidth || img.width || 1200;
+        let origH = img.naturalHeight || img.height || 1600;
+        const MAX_DIM = 2048;
+
+        if (origW > MAX_DIM || origH > MAX_DIM) {
+          if (origW > origH) {
+            origH = Math.round((origH * MAX_DIM) / origW);
+            origW = MAX_DIM;
+          } else {
+            origW = Math.round((origW * MAX_DIM) / origH);
+            origH = MAX_DIM;
+          }
+        }
+
         const canvas = document.createElement("canvas");
-        canvas.width = img.naturalWidth || img.width || 1200;
-        canvas.height = img.naturalHeight || img.height || 1600;
+        canvas.width = origW;
+        canvas.height = origH;
         const ctx = canvas.getContext("2d");
 
         if (!ctx) {
@@ -107,19 +123,23 @@ export async function convertirImagenAPdf(file: File): Promise<File> {
             }
             const readerBlob = new FileReader();
             readerBlob.onload = () => {
-              const arrayBuffer = readerBlob.result as ArrayBuffer;
-              const uint8Array = new Uint8Array(arrayBuffer);
-              const pdfBlob = generarPdfConJpeg(uint8Array, canvas.width, canvas.height);
-              const nombreSinExt = file.name.replace(/\.[^/.]+$/, "");
-              const nombrePdf = `${nombreSinExt}.pdf`;
-              const pdfFile = new File([pdfBlob], nombrePdf, { type: "application/pdf" });
-              resolve(pdfFile);
+              try {
+                const arrayBuffer = readerBlob.result as ArrayBuffer;
+                const uint8Array = new Uint8Array(arrayBuffer);
+                const pdfBlob = generarPdfConJpeg(uint8Array, canvas.width, canvas.height);
+                const nombreSinExt = file.name.replace(/\.[^/.]+$/, "");
+                const nombrePdf = `${nombreSinExt}.pdf`;
+                const pdfFile = new File([pdfBlob], nombrePdf, { type: "application/pdf" });
+                resolve(pdfFile);
+              } catch {
+                resolve(file);
+              }
             };
             readerBlob.onerror = () => resolve(file);
             readerBlob.readAsArrayBuffer(blob);
           },
           "image/jpeg",
-          0.92
+          0.88
         );
       };
       img.onerror = () => resolve(file);

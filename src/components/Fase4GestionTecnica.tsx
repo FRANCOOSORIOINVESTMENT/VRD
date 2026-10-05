@@ -1312,6 +1312,9 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
                         id="fase4-input-soporte-tecnico"
                         type="file"
                         accept={frenteEditar === "arquitectura" ? ".pdf,application/pdf" : ".pdf,.jpg,.jpeg,.png"}
+                        onClick={(e) => {
+                          (e.target as HTMLInputElement).value = "";
+                        }}
                         onChange={handleSimularCargaArchivo}
                         className="sr-only"
                       />

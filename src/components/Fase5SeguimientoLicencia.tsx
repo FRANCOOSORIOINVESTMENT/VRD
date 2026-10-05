@@ -1703,6 +1703,9 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
                   id="f5-rad-archivo"
                   type="file"
                   accept=".pdf,application/pdf,image/*"
+                  onClick={(e) => {
+                    (e.target as HTMLInputElement).value = "";
+                  }}
                   onChange={(e) => setArchivoRad(e.target.files ? e.target.files[0] : null)}
                   className="w-full text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                 />
@@ -1833,6 +1836,9 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
                   id="f5-obs-archivo"
                   type="file"
                   accept=".pdf,application/pdf,image/*"
+                  onClick={(e) => {
+                    (e.target as HTMLInputElement).value = "";
+                  }}
                   onChange={(e) => setArchivoObs(e.target.files ? e.target.files[0] : null)}
                   className="w-full text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-50 file:text-amber-800 hover:file:bg-amber-100"
                 />
@@ -1941,6 +1947,9 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
                   id="f5-sub-archivo"
                   type="file"
                   accept=".pdf,application/pdf,image/*"
+                  onClick={(e) => {
+                    (e.target as HTMLInputElement).value = "";
+                  }}
                   onChange={(e) => setArchivoSub(e.target.files ? e.target.files[0] : null)}
                   className="w-full text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
                 />

@@ -183,6 +183,9 @@ export const ModalSolicitudRechazo: React.FC<ModalSolicitudRechazoProps> = ({
                   id="modal-rechazo-input-soporte"
                   type="file"
                   accept=".pdf,.jpg,.png"
+                  onClick={(e) => {
+                    (e.target as HTMLInputElement).value = "";
+                  }}
                   onChange={handleArchivoSeleccionado}
                   className="sr-only"
                 />

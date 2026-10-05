@@ -97,13 +97,45 @@ export async function createApp(): Promise<express.Express> {
       res.sendStatus(200);
       return;
     }
+
+    // Desactivar caché HTTP en navegadores e intermediarios para garantizar sincronización en tiempo real
+    if (req.path.startsWith("/api")) {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+    }
+
     next();
   });
 
-  app.use(express.json({ limit: "25mb" }));
+  app.set("etag", false);
+  app.use(express.json({ limit: "150mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "150mb" }));
   app.use(cookieParser());
 
-  // Rutas modulares para subida directa de archivos a Supabase Storage (máximo 25MB)
+  // Directorio local indestructible para persistencia de archivos subidos
+  const uploadsDirPath = path.join(process.cwd(), "public", "uploads");
+  if (!fs.existsSync(uploadsDirPath)) {
+    fs.mkdirSync(uploadsDirPath, { recursive: true });
+  }
+  app.use("/uploads", express.static(uploadsDirPath));
+
+  // Endpoint resiliente para servir archivos locales directamente
+  app.get("/api/documentos/archivo", (req: Request, res: Response) => {
+    try {
+      const rawPath = String(req.query.path || "");
+      const safePath = path.normalize(rawPath).replace(/^(\.\.[\/\\])+/, "");
+      const fullPath = path.join(uploadsDirPath, safePath);
+      if (fs.existsSync(fullPath)) {
+        return res.sendFile(fullPath);
+      }
+      res.status(404).json({ error: "Archivo local no encontrado en el servidor." });
+    } catch {
+      res.status(500).json({ error: "Error al servir archivo local." });
+    }
+  });
+
+  // Rutas modulares para subida directa de archivos (hasta 25MB por archivo)
   app.use("/api/documentos", uploadRouter);
 
   // Verificación no bloqueante del bucket Supabase Storage
@@ -1060,6 +1092,163 @@ export async function createApp(): Promise<express.Express> {
     });
   });
 
+  // 0.05 ENDPOINT MAESTRO DE SINCRONIZACIÓN Y RECARGA EN TIEMPO REAL
+  // Ejecuta sincronización bidireccional y retorna inmediatamente datos actualizados
+  const ejecutarSincronizacionMaestra = async (req: AuthRequest, res: Response) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+
+    try {
+      let supabaseOk = false;
+
+      // 1. Sincronización de perfiles
+      if (supabaseAdmin) {
+        await sincronizarPerfilesDesdeSupabase().catch((e) =>
+          console.warn("[SYNC]: Error sincronizando perfiles:", e?.message)
+        );
+      }
+
+      // 2. Sincronizar hacia Supabase cualquier cambio local pendiente
+      if (supabaseAdmin) {
+        try {
+          await Promise.allSettled(
+            mockDb.expedientes.map((exp) => sincronizarExpedienteEnSupabase(exp))
+          );
+          supabaseOk = true;
+        } catch (e: any) {
+          console.warn("[SYNC]: Error sincronizando hacia Supabase:", e?.message);
+        }
+      }
+
+      // 3. Hidratación fresca desde Supabase hacia la memoria del servidor
+      if (supabaseAdmin) {
+        try {
+          const { data: dbRows, error: sbErr } = await supabaseAdmin
+            .from("expedientes")
+            .select(`
+              *,
+              postulante:personas!expedientes_postulante_id_fkey(*),
+              predio:predios!expedientes_predio_vivienda_id_fkey(*),
+              hogar:hogares!expedientes_hogar_id_fkey(
+                id,
+                observaciones,
+                integrantes:integrantes_hogar(
+                  id,
+                  parentesco,
+                  es_postulante_principal,
+                  persona:personas(*)
+                )
+              ),
+              comercial:perfiles_usuario!expedientes_comercial_origen_id_fkey(id, nombre_completo, username, rol),
+              responsable:perfiles_usuario!expedientes_responsable_general_id_fkey(id, nombre_completo, username, rol)
+            `)
+            .order("creado_en", { ascending: false });
+
+          if (!sbErr && Array.isArray(dbRows)) {
+            const idsEnDb = new Set(dbRows.map((r: any) => r.id));
+            const codigosEnDb = new Set(dbRows.map((r: any) => r.codigo_visible).filter(Boolean));
+
+            for (const row of dbRows) {
+              const index = mockDb.expedientes.findIndex(
+                (e) => e.id === row.id || (row.codigo_visible && e.codigoVisible === row.codigo_visible)
+              );
+              if (index !== -1) {
+                const expExistente = mockDb.expedientes[index];
+                if (row.fase_actual) expExistente.faseActual = Number(row.fase_actual);
+                if (row.estado_general) expExistente.estadoGeneral = row.estado_general;
+                if (row.actualizado_en) expExistente.actualizadoEn = row.actualizado_en;
+                if (row.postulante) {
+                  if (row.postulante.telefono_principal) expExistente.postulante.telefonoPrincipal = row.postulante.telefono_principal;
+                  if (row.postulante.correo) expExistente.postulante.correo = row.postulante.correo;
+                  if (row.postulante.nombres) expExistente.postulante.nombres = row.postulante.nombres;
+                  if (row.postulante.primer_apellido) expExistente.postulante.primerApellido = row.postulante.primer_apellido;
+                }
+                if (row.predio) {
+                  if (row.predio.vereda) expExistente.predioVivienda.vereda = row.predio.vereda;
+                  if (row.predio.nombre_o_direccion) expExistente.predioVivienda.nombreODireccion = row.predio.nombre_o_direccion;
+                }
+              } else {
+                const nuevoExp = mapearFilaSupabaseAExpediente(row);
+                inicializarRequisitosFase1(nuevoExp);
+                if (nuevoExp.faseActual >= 2) inicializarRequisitosFase2(nuevoExp);
+                if (nuevoExp.faseActual >= 4) inicializarFase4(nuevoExp);
+                if (nuevoExp.faseActual >= 5) inicializarFase5Licencia(nuevoExp);
+                if (nuevoExp.faseActual >= 6) inicializarFase6Postulacion(nuevoExp);
+                if (nuevoExp.faseActual >= 7) inicializarFase7(nuevoExp);
+                mockDb.expedientes.unshift(nuevoExp);
+              }
+            }
+
+            // Preservar expedientes locales y remotos evitando descarte de datos
+            mockDb.expedientes = mockDb.expedientes.filter((e) => {
+              return Boolean(e && (e.id || e.codigoVisible));
+            });
+          }
+        } catch (dbErr: any) {
+          console.error("[SYNC]: Error consultando expedientes en Supabase:", dbErr?.message);
+        }
+      }
+
+      // 4. Preparar listado enriquecido de expedientes
+      const listadoExpedientes = mockDb.expedientes.map((exp) => {
+        if (exp.faseActual >= 4 && !exp.gestionFase4) {
+          inicializarFase4(exp);
+        }
+        const comercial = mockDb.perfiles.find((p) => p.id === exp.comercialOrigenId);
+        const responsable = exp.bloqueadoPorRevision
+          ? (mockDb.perfiles.find((p) => p.id === "usr-supervisor-01") || mockDb.perfiles.find((p) => p.rol === "supervisor"))
+          : mockDb.perfiles.find((p) => p.id === exp.responsableGeneralId);
+
+        const fechaInicio = new Date(exp.fechaIngresoFase1).getTime();
+        const diasTranscurridos = Math.max(0, Math.floor((Date.now() - fechaInicio) / (1000 * 60 * 60 * 24)));
+
+        const tieneDocsObservados = mockDb.requisitosCaso.some(
+          (r) => r.expedienteId === exp.id && r.estado === "con_observaciones"
+        );
+        const tieneFaseObservada =
+          (exp.estadoGeneral as string) === "con_observaciones" ||
+          exp.validacionCompensar?.estadoActual === "con_observaciones" ||
+          exp.estadoFase1 === "devuelto" ||
+          exp.estadoFase2 === "devuelto" ||
+          Boolean((exp as any).subsanacionFase3Activa);
+        const tieneObservaciones = tieneDocsObservados || tieneFaseObservada;
+
+        return {
+          ...exp,
+          comercialOrigenNombre: comercial?.nombreCompleto || "Sin asignar",
+          responsableGeneralNombre: exp.bloqueadoPorRevision
+            ? "Dra. Helena Ramírez (Analista Documental)"
+            : (responsable?.nombreCompleto || exp.responsableGeneralNombre || "Sin asignar"),
+          responsableGeneralRol: exp.bloqueadoPorRevision
+            ? "supervisor"
+            : (responsable?.rol || exp.responsableGeneralRol),
+          tieneObservaciones,
+          diasTranscurridos,
+          diasEnPausa: 0
+        };
+      });
+
+      res.json({
+        success: true,
+        ok: true,
+        supabaseConnected: supabaseOk,
+        mensaje: "Base de datos y estado sincronizados exitosamente.",
+        timestamp: new Date().toISOString(),
+        totalExpedientes: listadoExpedientes.length,
+        totalInteresados: mockDb.interesados.length,
+        expedientes: listadoExpedientes,
+        interesados: mockDb.interesados
+      });
+    } catch (err: any) {
+      console.error("[SYNC FATAL ERROR]:", err?.message);
+      res.status(500).json({ error: "Error en sincronización: " + (err?.message || "error desconocido") });
+    }
+  };
+
+  app.post("/api/sync", requireAuth(), ejecutarSincronizacionMaestra);
+  app.get("/api/sync", requireAuth(), ejecutarSincronizacionMaestra);
+
   // 0.1 DIAGNÓSTICO DETALLADO SUPABASE
   app.get("/api/supabase/status", async (req: Request, res: Response) => {
     try {
@@ -1610,9 +1799,9 @@ export async function createApp(): Promise<express.Express> {
             }
           }
 
-          // 1.3 Si un expediente fue borrado en la base de datos Supabase, eliminarlo de la memoria local
+          // 1.3 Preservar expedientes locales y remotos para evitar pérdidas de datos
           mockDb.expedientes = mockDb.expedientes.filter((e) => {
-            return idsEnDb.has(e.id) || codigosEnDb.has(e.codigoVisible);
+            return Boolean(e && (e.id || e.codigoVisible));
           });
         }
       } catch (dbErr: any) {
@@ -2120,7 +2309,7 @@ export async function createApp(): Promise<express.Express> {
   });
 
   // 5.2 TRANSFORMAR INTERESADO EN EXPEDIENTE VRD (Sin duplicación)
-  app.post("/api/interesados/:id/convertir", requireAuth(["comercial"]), (req: AuthRequest, res: Response) => {
+  app.post("/api/interesados/:id/convertir", requireAuth(["comercial"]), async (req: AuthRequest, res: Response) => {
     const interesado = mockDb.interesados.find((i) => i.id === req.params.id);
     if (!interesado) {
       res.status(404).json({ error: "Interesado no encontrado." });
@@ -2273,127 +2462,133 @@ export async function createApp(): Promise<express.Express> {
 
     // PERSISTENCIA DE LA CONVERSIÓN EN SUPABASE (PostgreSQL)
     if (supabaseAdmin) {
-      (async () => {
-        try {
-          // 1. Obtener UUID del comercial en Supabase
-          const { data: usuarioDb } = await supabaseAdmin
-            .from("perfiles_usuario")
-            .select("id")
-            .eq("username", req.user!.username)
-            .maybeSingle();
-          const comercialUuid = usuarioDb?.id;
+      try {
+        // 1. Obtener UUID del comercial en Supabase
+        const { data: usuarioDb } = await supabaseAdmin
+          .from("perfiles_usuario")
+          .select("id")
+          .eq("username", req.user!.username)
+          .maybeSingle();
+        const comercialUuid = usuarioDb?.id;
 
-          // 2. Insertar o actualizar persona postulante
-          const { data: personaDb } = await supabaseAdmin
-            .from("personas")
-            .upsert(
-              [
-                {
-                  tipo_identificacion: personaPostulante.tipoIdentificacion,
-                  numero_identificacion: personaPostulante.numeroIdentificacion,
-                  nombres:
-                    personaPostulante.primerNombre +
-                    (personaPostulante.segundoNombre ? " " + personaPostulante.segundoNombre : ""),
-                  primer_apellido: personaPostulante.primerApellido,
-                  segundo_apellido: personaPostulante.segundoApellido || null,
-                  telefono_principal: personaPostulante.telefonoPrincipal,
-                  correo: personaPostulante.correo || null
-                }
-              ],
-              { onConflict: "tipo_identificacion,numero_identificacion" }
-            )
-            .select("id")
-            .maybeSingle();
-
-          // 3. Insertar hogar
-          const { data: hogarDb } = await supabaseAdmin
-            .from("hogares")
-            .insert([{ observaciones: `Hogar creado para expediente ${nuevoExp.codigoVisible}` }])
-            .select("id")
-            .maybeSingle();
-
-          if (hogarDb?.id && personaDb?.id) {
-            await supabaseAdmin.from("integrantes_hogar").insert([
+        // 2. Insertar o actualizar persona postulante
+        const { data: personaDb } = await supabaseAdmin
+          .from("personas")
+          .upsert(
+            [
               {
-                hogar_id: hogarDb.id,
-                persona_id: personaDb.id,
-                parentesco: "postulante_principal",
-                es_postulante_principal: true
+                tipo_identificacion: personaPostulante.tipoIdentificacion,
+                numero_identificacion: personaPostulante.numeroIdentificacion,
+                nombres:
+                  personaPostulante.primerNombre +
+                  (personaPostulante.segundoNombre ? " " + personaPostulante.segundoNombre : ""),
+                primer_apellido: personaPostulante.primerApellido,
+                segundo_apellido: personaPostulante.segundoApellido || null,
+                telefono_principal: personaPostulante.telefonoPrincipal,
+                correo: personaPostulante.correo || null
               }
-            ]);
-          }
+            ],
+            { onConflict: "tipo_identificacion,numero_identificacion" }
+          )
+          .select("id")
+          .maybeSingle();
 
-          // 4. Insertar predio
-          const { data: predioDb } = await supabaseAdmin
-            .from("predios")
+        // 3. Insertar hogar
+        const { data: hogarDb } = await supabaseAdmin
+          .from("hogares")
+          .insert([{ observaciones: `Hogar creado para expediente ${nuevoExp.codigoVisible}` }])
+          .select("id")
+          .maybeSingle();
+
+        if (hogarDb?.id && personaDb?.id) {
+          await supabaseAdmin.from("integrantes_hogar").insert([
+            {
+              hogar_id: hogarDb.id,
+              persona_id: personaDb.id,
+              parentesco: "postulante_principal",
+              es_postulante_principal: true
+            }
+          ]);
+        }
+
+        // 4. Insertar predio
+        const { data: predioDb } = await supabaseAdmin
+          .from("predios")
+          .insert([
+            {
+              departamento_codigo: nuevoExp.predioVivienda.departamentoCodigo,
+              municipio_codigo: nuevoExp.predioVivienda.municipioCodigo,
+              vereda: nuevoExp.predioVivienda.vereda,
+              nombre_o_direccion: nuevoExp.predioVivienda.nombreODireccion,
+              es_predio_vivienda_principal: true
+            }
+          ])
+          .select("id")
+          .maybeSingle();
+
+        // 5. Insertar expediente
+        if (personaDb?.id && hogarDb?.id && predioDb?.id && comercialUuid) {
+          const { data: expDb, error: expErr } = await supabaseAdmin
+            .from("expedientes")
             .insert([
               {
-                departamento_codigo: nuevoExp.predioVivienda.departamentoCodigo,
-                municipio_codigo: nuevoExp.predioVivienda.municipioCodigo,
-                vereda: nuevoExp.predioVivienda.vereda,
-                nombre_o_direccion: nuevoExp.predioVivienda.nombreODireccion,
-                es_predio_vivienda_principal: true
+                postulante_id: personaDb.id,
+                hogar_id: hogarDb.id,
+                predio_vivienda_id: predioDb.id,
+                codigo_visible: nuevoExp.codigoVisible,
+                estado_general: "en_tramite",
+                comercial_origen_id: comercialUuid,
+                responsable_general_id: comercialUuid,
+                fase_actual: 1
               }
             ])
             .select("id")
             .maybeSingle();
 
-          // 5. Insertar expediente
-          if (personaDb?.id && hogarDb?.id && predioDb?.id && comercialUuid) {
-            const { data: expDb, error: expErr } = await supabaseAdmin
-              .from("expedientes")
-              .insert([
-                {
-                  postulante_id: personaDb.id,
-                  hogar_id: hogarDb.id,
-                  predio_vivienda_id: predioDb.id,
-                  codigo_visible: nuevoExp.codigoVisible,
-                  estado_general: "en_tramite",
-                  comercial_origen_id: comercialUuid,
-                  responsable_general_id: comercialUuid,
-                  fase_actual: 1
-                }
-              ])
-              .select("id")
-              .maybeSingle();
-
-            if (!expErr && expDb?.id) {
-              console.log(`[SUPABASE]: Expediente creado en Supabase con UUID ${expDb.id} (Código: ${nuevoExp.codigoVisible})`);
-
-              // Actualizar estado del interesado en Supabase
-              await supabaseAdmin
-                .from("interesados")
-                .update({
-                  estado_comercial: "convertido_a_expediente",
-                  convertido_a_expediente_id: expDb.id
-                })
-                .eq("telefono", interesado.telefono);
-
-              // 6. Insertar los 3 requisitos de Fase 1
-              const { data: plantillas } = await supabaseAdmin
-                .from("plantillas_requisito")
-                .select("id, codigo_requisito")
-                .eq("fase", 1);
-
-              if (plantillas && plantillas.length > 0) {
-                const reqsToInsert = plantillas.map((p: any) => ({
-                  expediente_id: expDb.id,
-                  plantilla_id: p.id,
-                  fase: 1,
-                  persona_id: p.codigo_requisito === "F1-03" ? personaDb.id : null,
-                  predio_id: p.codigo_requisito === "F1-01" || p.codigo_requisito === "F1-02" ? predioDb.id : null,
-                  estado: "pendiente_carga"
-                }));
-                await supabaseAdmin.from("requisitos_caso").insert(reqsToInsert);
+          if (!expErr && expDb?.id) {
+            console.log(`[SUPABASE]: Expediente creado en Supabase con UUID ${expDb.id} (Código: ${nuevoExp.codigoVisible})`);
+            // Sincronizar el id del expediente creado con el UUID oficial de Supabase
+            nuevoExp.id = expDb.id;
+            // Sincronizar requisitosCaso en memoria con el nuevo UUID oficial de Supabase
+            mockDb.requisitosCaso.forEach((r) => {
+              if (r.expedienteId === nuevoExpId) {
+                r.expedienteId = expDb.id;
               }
-            } else if (expErr) {
-              console.error("[SUPABASE]: Error al crear expediente en Supabase:", expErr.message);
+            });
+
+            // Actualizar estado del interesado en Supabase
+            await supabaseAdmin
+              .from("interesados")
+              .update({
+                estado_comercial: "convertido_a_expediente",
+                convertido_a_expediente_id: expDb.id
+              })
+              .eq("telefono", interesado.telefono);
+
+            // 6. Insertar los 3 requisitos de Fase 1
+            const { data: plantillas } = await supabaseAdmin
+              .from("plantillas_requisito")
+              .select("id, codigo_requisito")
+              .eq("fase", 1);
+
+            if (plantillas && plantillas.length > 0) {
+              const reqsToInsert = plantillas.map((p: any) => ({
+                expediente_id: expDb.id,
+                plantilla_id: p.id,
+                fase: 1,
+                persona_id: p.codigo_requisito === "F1-03" ? personaDb.id : null,
+                predio_id: p.codigo_requisito === "F1-01" || p.codigo_requisito === "F1-02" ? predioDb.id : null,
+                estado: "pendiente_carga"
+              }));
+              await supabaseAdmin.from("requisitos_caso").insert(reqsToInsert);
             }
+          } else if (expErr) {
+            console.error("[SUPABASE]: Error al crear expediente en Supabase:", expErr.message);
           }
-        } catch (err: any) {
-          console.error("[SUPABASE]: Error al persistir conversión en Supabase:", err?.message);
         }
-      })();
+      } catch (err: any) {
+        console.error("[SUPABASE]: Error al persistir conversión en Supabase:", err?.message);
+      }
     }
 
     res.status(201).json({
@@ -2552,246 +2747,336 @@ export async function createApp(): Promise<express.Express> {
     });
   });
 
-  // 7. CARGA DE DOCUMENTOS (Asistente en Fase 2, Comercial en Fase 1, Ingeniería en Fase 4/5, Supervisor, Administrador)
+  // 7. CARGA DE DOCUMENTOS (Asistente en Fase 2, Comercial en Fase 1, Ingeniería en Fase 4/5, Supervisor, Administrador, Planeación)
   app.post(
     "/api/expedientes/:id/requisitos/:reqId/subir",
-    requireAuth(["comercial", "asistente", "supervisor", "administrador", "ingenieria"]),
-    (req: AuthRequest, res: Response) => {
-      const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
-      let reqCaso = mockDb.requisitosCaso.find(
-        (r) => r.id === req.params.reqId || (r.expedienteId === req.params.id && r.codigoRequisito === req.params.reqId)
-      );
+    requireAuth(["comercial", "asistente", "supervisor", "administrador", "ingenieria", "planeacion"]),
+    async (req: AuthRequest, res: Response) => {
+      try {
+        let exp = mockDb.expedientes.find(
+          (e) =>
+            e.id === req.params.id ||
+            e.codigoVisible === req.params.id ||
+            e.codigoVisible?.toUpperCase() === req.params.id?.toUpperCase()
+        );
 
-      if (!reqCaso && exp && (req.params.reqId.includes("f5-01") || req.params.reqId === "F5-01")) {
-        reqCaso = {
-          id: `req-f5-01-${exp.id}`,
-          expedienteId: exp.id,
-          codigoRequisito: "F5-01",
-          nombre: "Presupuesto Oficial y APU Detallado",
-          descripcion: "Análisis de Precios Unitarios regionalizado Cundinamarca y presupuesto oficial de obra.",
-          fase: 5,
-          predioId: exp.predioVivienda?.id || "predio-default",
-          estado: "pendiente_carga",
-          esObligatorio: true,
-          esAdicional: false
-        };
-        mockDb.requisitosCaso.push(reqCaso);
-      }
+        // Si no se encuentra en memoria, intentar buscar en Supabase
+        if (!exp && supabaseAdmin) {
+          try {
+            const { data: row } = await supabaseAdmin
+              .from("expedientes")
+              .select(`
+                *,
+                postulante:personas!expedientes_postulante_id_fkey(*),
+                predio:predios!expedientes_predio_vivienda_id_fkey(*),
+                hogar:hogares!expedientes_hogar_id_fkey(
+                  id,
+                  observaciones,
+                  integrantes:integrantes_hogar(
+                    id,
+                    parentesco,
+                    es_postulante_principal,
+                    persona:personas(*)
+                  )
+                ),
+                comercial:perfiles_usuario!expedientes_comercial_origen_id_fkey(id, nombre_completo, username, rol),
+                responsable:perfiles_usuario!expedientes_responsable_general_id_fkey(id, nombre_completo, username, rol)
+              `)
+              .or(`id.eq.${req.params.id},codigo_visible.eq.${req.params.id}`)
+              .maybeSingle();
 
-      if (!exp || !reqCaso) {
-        res.status(404).json({ error: "Expediente o requisito no encontrado." });
-        return;
-      }
+            if (row) {
+              exp = mapearFilaSupabaseAExpediente(row);
+              mockDb.expedientes.unshift(exp);
+            }
+          } catch (err: any) {
+            console.error("[UPLOAD HIDRATACIÓN ERROR]:", err?.message);
+          }
+        }
 
-      // Restricción de bloqueo por revisión: Cuando el expediente está en revisión del Supervisor Jurídico,
-      // no se permiten modificaciones ni cargas de documentos operativos
-      if (exp.bloqueadoPorRevision && req.user!.rol !== "administrador" && req.user!.rol !== "supervisor") {
-        res.status(403).json({
-          error: `Acceso restringido por permisos de rol: El expediente se encuentra en revisión de Análisis Documental y su rol (${req.user!.rol}) tiene pausada temporalmente la carga y modificación de documentos.`
-        });
-        return;
-      }
-
-      // Restricción de Fase 2: Documentos de Fase 2 son gestionados por el Asistente, Supervisor o Admin,
-      // excepto el Registro Fotográfico del predio que puede ser aportado por el Comercial en visita de campo
-      const esFoto = reqCaso.codigoRequisito === "F2-11" || reqCaso.codigoRequisito === "F1-04" || reqCaso.nombre.toLowerCase().includes("fotogr");
-      if (reqCaso.fase === 2 && !esFoto) {
-        if (req.user!.rol !== "asistente" && req.user!.rol !== "administrador" && req.user!.rol !== "supervisor") {
-          res.status(403).json({
-            error: `Acceso restringido por permisos de rol: Los documentos de Fase 2 solo pueden ser cargados o reemplazados por el Gestor Documental o Administrador. Su rol actual es '${req.user!.rol}'.`
-          });
+        if (!exp) {
+          res.status(404).json({ error: "Expediente no encontrado en el sistema." });
           return;
         }
-      }
 
-      const { nombreArchivo, mimeType, tamanoBytes, contenidoSimulado, archivoDataUrl, sha256Hash, fotos } = req.body;
-      if (!nombreArchivo && (!fotos || !fotos.length)) {
-        res.status(400).json({ error: "Nombre de archivo o fotografías obligatorias." });
-        return;
-      }
+        // Asegurar inicialización de requisitos según la fase activa del expediente
+        inicializarRequisitosFase1(exp);
+        if (exp.faseActual >= 2) inicializarRequisitosFase2(exp);
+        if (exp.faseActual >= 4) inicializarFase4(exp);
+        if (exp.faseActual >= 5) inicializarFase5Licencia(exp);
+        if (exp.faseActual >= 6) inicializarFase6Postulacion(exp);
+        if (exp.faseActual >= 7) inicializarFase7(exp);
 
-      // 1. Obtener o crear entidad Documento
-      let doc = mockDb.documentos.find((d) => d.id === reqCaso.documentoAsociado?.id);
-      if (!doc) {
-        doc = {
-          id: `doc-${Date.now()}`,
-          expedienteId: exp.id,
-          titulo: `${reqCaso.nombre} - ${exp.postulante.primerApellido}`,
-          personaId: reqCaso.personaId,
-          predioId: reqCaso.predioId,
-          versiones: []
-        };
-        mockDb.documentos.push(doc);
-        reqCaso.documentoAsociado = doc;
-      }
+        const reqIdParam = String(req.params.reqId || "").trim();
+        const { codigoRequisito, fase, requisitoNombre } = req.body || {};
+        const codigoBuscado = String(codigoRequisito || "").toUpperCase().trim();
 
-      // 2. Crear nueva Versión inmutable (nunca sobrescribe la anterior)
-      let fotosArr = Array.isArray(fotos) && fotos.length > 0 ? fotos : undefined;
-      
-      // Si se cargó una sola imagen o dataUrl para un requisito fotográfico, preservarla como foto individual o añadirla
-      if (!fotosArr && archivoDataUrl && (mimeType?.startsWith("image/") || /\.(jpg|jpeg|png|webp|svg)$/i.test(nombreArchivo || "") || esFoto)) {
-        const fotosPrevias = doc.versionActual?.fotos ? [...doc.versionActual.fotos] : [];
-        const nuevaFotoObj = {
-          id: `foto-${Date.now()}`,
-          nombre: nombreArchivo || `Foto_${fotosPrevias.length + 1}.jpg`,
-          url: archivoDataUrl,
-          tamanoBytes: tamanoBytes || 150000,
-          categoria: "Registro predial",
-          subidoEn: new Date().toISOString()
-        };
-        // Si ya habían fotos, sumarla para no sobrescribir las anteriores
-        fotosArr = [...fotosPrevias, nuevaFotoObj];
-      }
+        // Extracción del código estándar (ej: F1-01, F1-02, F1-03, F2-11, F5-01)
+        const matchCodigo = reqIdParam.match(/F\d+-\d+/i) || (codigoBuscado ? [codigoBuscado] : null);
+        const codigoNormalizado = matchCodigo ? matchCodigo[0].toUpperCase() : null;
 
-      const primerFotoUrl = fotosArr ? fotosArr[0].url : undefined;
-      const fotosBytes = fotosArr ? fotosArr.reduce((acc: number, f: any) => acc + (f.tamanoBytes || 0), 0) : 0;
+        // Búsqueda resiliente del requisito
+        let reqCaso = mockDb.requisitosCaso.find(
+          (r) =>
+            r.id === reqIdParam ||
+            (codigoNormalizado && r.codigoRequisito?.toUpperCase() === codigoNormalizado) ||
+            (codigoBuscado && r.codigoRequisito?.toUpperCase() === codigoBuscado) ||
+            ((r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && (
+              r.codigoRequisito === reqIdParam ||
+              (r.codigoRequisito && reqIdParam.toLowerCase().includes(r.codigoRequisito.toLowerCase()))
+            ))
+        );
 
-      const nuevaVersionNum = (doc.versiones.length || 0) + 1;
-      const nuevaVersion: DocVersion = {
-        id: `ver-${Date.now()}`,
-        documentoId: doc.id,
-        versionNumero: nuevaVersionNum,
-        storagePath: `expedientes/${exp.id}/${reqCaso.codigoRequisito}_v${nuevaVersionNum}.${fotosArr ? "jpg" : "pdf"}`,
-        nombreArchivoOriginal: nombreArchivo || (fotosArr ? `Registro_Fotografico_${fotosArr.length}_fotos.jpg` : `Documento_${reqCaso.codigoRequisito}.pdf`),
-        mimeType: mimeType || (fotosArr ? "image/jpeg" : "application/pdf"),
-        tamanoBytes: tamanoBytes || fotosBytes || 1024000,
-        sha256Hash: sha256Hash || `sha256-${Date.now()}-${Math.random().toString(36).substring(7)}`,
-        subidoPorId: req.user!.id,
-        subidoPorNombre: req.user!.nombreCompleto,
-        subidoEn: new Date().toISOString(),
-        archivoDataUrl: archivoDataUrl || primerFotoUrl || undefined,
-        fotos: fotosArr
-      };
+        // Si aún no se encontró en memoria, inicializarlo o crearlo dinámicamente de forma segura
+        if (!reqCaso) {
+          const codigoFinal = codigoNormalizado || codigoBuscado || "DOC-ADICIONAL";
+          const faseFinal = Number(fase) || (codigoFinal.startsWith("F") ? parseInt(codigoFinal.substring(1)) : exp.faseActual) || 1;
 
-      doc.versiones.push(nuevaVersion);
-      doc.versionActual = nuevaVersion;
+          reqCaso = {
+            id: reqIdParam.startsWith("req-") ? reqIdParam : `req-${codigoFinal.toLowerCase()}-${exp.id}`,
+            expedienteId: exp.id,
+            codigoRequisito: codigoFinal,
+            nombre: requisitoNombre || `Documento ${codigoFinal}`,
+            descripcion: `Documento soporte para ${codigoFinal}`,
+            fase: faseFinal,
+            predioId: exp.predioVivienda?.id || `pre-${exp.id}`,
+            personaId: exp.postulante?.id || `per-${exp.id}`,
+            estado: "pendiente_carga",
+            esObligatorio: true,
+            esAdicional: false
+          };
+          mockDb.requisitosCaso.push(reqCaso);
+        }
 
-      // Actualizar estado del requisito a 'recibido_revision'
-      reqCaso.estado = "recibido_revision";
+        // Asegurar expedienteId sincronizado
+        reqCaso.expedienteId = exp.id;
 
-      // Si estaba devuelto con observaciones, reactivar en preparación
-      if (exp.estadoFase2 === "devuelto") {
-        exp.estadoFase2 = "en_preparacion";
-      }
+        // Restricción de bloqueo por revisión: Cuando el expediente está en revisión del Supervisor Jurídico,
+        // permitir si es una subsanación o corrección de documento
+        if (exp.bloqueadoPorRevision && req.user!.rol !== "administrador" && req.user!.rol !== "supervisor") {
+          const esSubsanacion =
+            exp.estadoFase2 === "devuelto" ||
+            reqCaso.estado === "con_observaciones" ||
+            reqCaso.estado === "pendiente_carga";
 
-      // PERSISTENCIA DIRECTA E INMEDIATA EN SUPABASE STORAGE ('expedientes-archivos')
-      (async () => {
-        try {
-          // 1. Si es archivo único (PDF o foto individual)
-          if (archivoDataUrl && typeof archivoDataUrl === "string") {
-            const uploadRes = await persistirArchivoEnStorage(
-              nuevaVersion.storagePath,
-              archivoDataUrl,
-              nuevaVersion.mimeType
-            );
-            if (uploadRes.ok && uploadRes.publicUrl) {
-              nuevaVersion.urlFirmadaTemporal = uploadRes.publicUrl;
-              nuevaVersion.archivoDataUrl = uploadRes.publicUrl;
-            }
+          if (!esSubsanacion) {
+            res.status(403).json({
+              error: `Acceso restringido por permisos de rol: El expediente se encuentra en revisión de Análisis Documental y su rol (${req.user!.rol}) tiene pausada temporalmente la carga de nuevos documentos.`
+            });
+            return;
+          } else {
+            exp.bloqueadoPorRevision = false;
           }
+        }
 
-          // 2. Si son fotos de registro predial en lote
-          if (fotosArr && fotosArr.length > 0) {
-            for (let i = 0; i < fotosArr.length; i++) {
-              const foto = fotosArr[i];
-              if (foto.url && typeof foto.url === "string" && foto.url.startsWith("data:")) {
-                const fotoPath = `expedientes/${exp.id}/fotos/${foto.id}_${foto.nombre.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-                const fotoUpload = await persistirArchivoEnStorage(fotoPath, foto.url, "image/jpeg");
-                if (fotoUpload.ok && fotoUpload.publicUrl) {
-                  foto.url = fotoUpload.publicUrl;
-                }
+        // Restricción de Fase 2: Documentos de Fase 2
+        const esFoto = reqCaso.codigoRequisito === "F2-11" || reqCaso.codigoRequisito === "F1-04" || reqCaso.nombre.toLowerCase().includes("fotogr");
+        const esComercialAsignado = req.user!.rol === "comercial" && exp.comercialOrigenId === req.user!.id;
+        if (reqCaso.fase === 2 && !esFoto) {
+          if (
+            req.user!.rol !== "asistente" &&
+            req.user!.rol !== "administrador" &&
+            req.user!.rol !== "supervisor" &&
+            !esComercialAsignado
+          ) {
+            res.status(403).json({
+              error: `Acceso restringido por permisos de rol: Los documentos de Fase 2 solo pueden ser cargados o reemplazados por el Gestor Documental o Administrador. Su rol actual es '${req.user!.rol}'.`
+            });
+            return;
+          }
+        }
+
+        const { nombreArchivo, mimeType, tamanoBytes, contenidoSimulado, archivoDataUrl, sha256Hash, fotos } = req.body || {};
+        if (!nombreArchivo && (!fotos || !fotos.length)) {
+          res.status(400).json({ error: "Nombre de archivo o fotografías obligatorias." });
+          return;
+        }
+
+        // 1. Obtener o crear entidad Documento
+        let doc = mockDb.documentos.find((d) => d.id === reqCaso.documentoAsociado?.id);
+        if (!doc) {
+          const titularNombre = exp.postulante?.primerApellido || exp.postulante?.nombres || exp.codigoVisible || "Titular";
+          doc = {
+            id: `doc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            expedienteId: exp.id,
+            titulo: `${reqCaso.nombre} - ${titularNombre}`,
+            personaId: reqCaso.personaId || exp.postulante?.id || `per-${exp.id}`,
+            predioId: reqCaso.predioId || exp.predioVivienda?.id || `pre-${exp.id}`,
+            versiones: []
+          };
+          mockDb.documentos.push(doc);
+          reqCaso.documentoAsociado = doc;
+        }
+        if (!Array.isArray(doc.versiones)) {
+          doc.versiones = [];
+        }
+
+        // 2. Crear nueva Versión inmutable
+        let fotosArr = Array.isArray(fotos) && fotos.length > 0 ? fotos : undefined;
+        
+        // Si se cargó una sola imagen o dataUrl para un requisito fotográfico, preservarla como foto individual o añadirla
+        if (!fotosArr && archivoDataUrl && (mimeType?.startsWith("image/") || /\.(jpg|jpeg|png|webp|svg)$/i.test(nombreArchivo || "") || esFoto)) {
+          const fotosPrevias = doc.versionActual?.fotos ? [...doc.versionActual.fotos] : [];
+          const nuevaFotoObj = {
+            id: `foto-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            nombre: nombreArchivo || `Foto_${fotosPrevias.length + 1}.jpg`,
+            url: archivoDataUrl,
+            tamanoBytes: tamanoBytes || 150000,
+            categoria: "Registro predial",
+            subidoEn: new Date().toISOString()
+          };
+          fotosArr = [...fotosPrevias, nuevaFotoObj];
+        }
+
+        const primerFotoUrl = fotosArr ? fotosArr[0].url : undefined;
+        const fotosBytes = fotosArr ? fotosArr.reduce((acc: number, f: any) => acc + (f.tamanoBytes || 0), 0) : 0;
+
+        const nuevaVersionNum = (doc.versiones.length || 0) + 1;
+        const storagePath = `expedientes/${exp.id}/${reqCaso.codigoRequisito}_v${nuevaVersionNum}.${fotosArr ? "jpg" : "pdf"}`;
+
+        // 3. Persistir archivo de inmediato en almacenamiento resiliente (disco local + Supabase Storage)
+        let publicUrlFinal = `/uploads/${storagePath}`;
+        if (archivoDataUrl && typeof archivoDataUrl === "string") {
+          const uploadRes = await persistirArchivoEnStorage(
+            storagePath,
+            archivoDataUrl,
+            mimeType || (fotosArr ? "image/jpeg" : "application/pdf")
+          );
+          if (uploadRes.ok && uploadRes.publicUrl) {
+            publicUrlFinal = uploadRes.publicUrl;
+          }
+        }
+
+        // Si son fotos de registro predial en lote, persistir cada una
+        if (fotosArr && fotosArr.length > 0) {
+          for (let i = 0; i < fotosArr.length; i++) {
+            const foto = fotosArr[i];
+            if (foto.url && typeof foto.url === "string" && foto.url.startsWith("data:")) {
+              const fotoPath = `expedientes/${exp.id}/fotos/${foto.id}_${(foto.nombre || `foto_${i+1}.jpg`).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+              const fotoUpload = await persistirArchivoEnStorage(fotoPath, foto.url, "image/jpeg");
+              if (fotoUpload.ok && fotoUpload.publicUrl) {
+                foto.url = fotoUpload.publicUrl;
               }
             }
           }
-        } catch (storageErr: any) {
-          console.error("[STORAGE FAIL]: Error subiendo archivo a Supabase Storage:", storageErr?.message);
         }
 
-        // 3. Persistencia relacional en base de datos PostgreSQL (si existen las tablas)
+        const nuevaVersion: DocVersion = {
+          id: `ver-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          documentoId: doc.id,
+          versionNumero: nuevaVersionNum,
+          storagePath,
+          nombreArchivoOriginal: nombreArchivo || (fotosArr ? `Registro_Fotografico_${fotosArr.length}_fotos.jpg` : `Documento_${reqCaso.codigoRequisito}.pdf`),
+          mimeType: mimeType || (fotosArr ? "image/jpeg" : "application/pdf"),
+          tamanoBytes: tamanoBytes || fotosBytes || 1024000,
+          sha256Hash: sha256Hash || `sha256-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+          subidoPorId: req.user!.id,
+          subidoPorNombre: req.user!.nombreCompleto,
+          subidoEn: new Date().toISOString(),
+          urlFirmadaTemporal: publicUrlFinal,
+          archivoDataUrl: publicUrlFinal,
+          fotos: fotosArr
+        };
+
+        doc.versiones.push(nuevaVersion);
+        doc.versionActual = nuevaVersion;
+
+        // Actualizar estado del requisito a 'recibido_revision'
+        reqCaso.estado = "recibido_revision";
+
+        // Si estaba devuelto con observaciones, reactivar en preparación
+        if (exp.estadoFase2 === "devuelto") {
+          exp.estadoFase2 = "en_preparacion";
+        }
+
+        // Persistencia relacional en base de datos PostgreSQL en segundo plano
         if (supabaseAdmin) {
-          try {
-            const { data: usuarioDb } = await supabaseAdmin
-              .from("perfiles_usuario")
-              .select("id")
-              .eq("username", req.user!.username)
-              .maybeSingle();
-            const subidoPorUuid = usuarioDb?.id;
-
-            const { data: expDb } = await supabaseAdmin
-              .from("expedientes")
-              .select("id")
-              .eq("codigo_visible", exp.codigoVisible)
-              .maybeSingle();
-
-            if (expDb?.id && subidoPorUuid) {
-              const { data: docDb } = await supabaseAdmin
-                .from("documentos")
-                .insert([
-                  {
-                    expediente_id: expDb.id,
-                    titulo: doc.titulo,
-                    persona_id: null,
-                    predio_id: null
-                  }
-                ])
+          (async () => {
+            try {
+              const { data: usuarioDb } = await supabaseAdmin
+                .from("perfiles_usuario")
                 .select("id")
+                .eq("username", req.user!.username)
+                .maybeSingle();
+              const subidoPorUuid = usuarioDb?.id;
+
+              const { data: expDb } = await supabaseAdmin
+                .from("expedientes")
+                .select("id")
+                .eq("codigo_visible", exp.codigoVisible)
                 .maybeSingle();
 
-              if (docDb?.id) {
-                const { data: verDb } = await supabaseAdmin
-                  .from("versiones_documento")
+              if (expDb?.id && subidoPorUuid) {
+                const { data: docDb } = await supabaseAdmin
+                  .from("documentos")
                   .insert([
                     {
-                      documento_id: docDb.id,
-                      version_numero: nuevaVersion.versionNumero,
-                      storage_path: nuevaVersion.storagePath,
-                      nombre_archivo_original: nuevaVersion.nombreArchivoOriginal,
-                      mime_type: nuevaVersion.mimeType,
-                      tamano_bytes: nuevaVersion.tamanoBytes,
-                      sha256_hash: nuevaVersion.sha256Hash,
-                      subido_por: subidoPorUuid
+                      expediente_id: expDb.id,
+                      titulo: doc.titulo,
+                      persona_id: null,
+                      predio_id: null
                     }
                   ])
                   .select("id")
                   .maybeSingle();
 
-                const { data: reqDb } = await supabaseAdmin
-                  .from("requisitos_caso")
-                  .select("id")
-                  .eq("expediente_id", expDb.id)
-                  .maybeSingle();
+                if (docDb?.id) {
+                  const { data: verDb } = await supabaseAdmin
+                    .from("versiones_documento")
+                    .insert([
+                      {
+                        documento_id: docDb.id,
+                        version_numero: nuevaVersion.versionNumero,
+                        storage_path: nuevaVersion.storagePath,
+                        nombre_archivo_original: nuevaVersion.nombreArchivoOriginal,
+                        mime_type: nuevaVersion.mimeType,
+                        tamano_bytes: nuevaVersion.tamanoBytes,
+                        sha256_hash: nuevaVersion.sha256Hash,
+                        subido_por: subidoPorUuid
+                      }
+                    ])
+                    .select("id")
+                    .maybeSingle();
 
-                if (reqDb?.id && verDb?.id) {
-                  await supabaseAdmin.from("evidencias_requisito").insert([
-                    {
-                      requisito_caso_id: reqDb.id,
-                      version_documento_id: verDb.id,
-                      vinculado_por: subidoPorUuid
-                    }
-                  ]);
-
-                  await supabaseAdmin
+                  const { data: reqDb } = await supabaseAdmin
                     .from("requisitos_caso")
-                    .update({ estado: "recibido_revision" })
-                    .eq("id", reqDb.id);
+                    .select("id")
+                    .eq("expediente_id", expDb.id)
+                    .maybeSingle();
+
+                  if (reqDb?.id && verDb?.id) {
+                    await supabaseAdmin.from("evidencias_requisito").insert([
+                      {
+                        requisito_caso_id: reqDb.id,
+                        version_documento_id: verDb.id,
+                        vinculado_por: subidoPorUuid
+                      }
+                    ]);
+
+                    await supabaseAdmin
+                      .from("requisitos_caso")
+                      .update({ estado: "recibido_revision" })
+                      .eq("id", reqDb.id);
+                  }
                 }
-
-                console.log(
-                  `[SUPABASE]: Documento y versión ${nuevaVersion.versionNumero} registrados en Supabase BD para ${nuevaVersion.nombreArchivoOriginal}`
-                );
               }
+            } catch (err: any) {
+              console.error("[SUPABASE DB]: Error al persistir documento en PostgreSQL:", err?.message);
             }
-          } catch (err: any) {
-            console.error("[SUPABASE DB]: Error al persistir documento en PostgreSQL:", err?.message);
-          }
+          })();
         }
-      })();
 
-      res.status(201).json({
-        success: true,
-        documento: doc,
-        version: nuevaVersion
-      });
+        res.status(201).json({
+          success: true,
+          documento: doc,
+          version: nuevaVersion
+        });
+      } catch (err: any) {
+        console.error("[UPLOAD EXCEPTION]: Error no controlado al subir documento:", err);
+        res.status(500).json({
+          error: `Error al procesar la carga del documento: ${err?.message || "Excepción interna del servidor."}`
+        });
+      }
     }
   );
 

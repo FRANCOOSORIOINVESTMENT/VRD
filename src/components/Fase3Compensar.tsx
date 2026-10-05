@@ -887,6 +887,9 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                         id="fase3-input-evidencia"
                         type="file"
                         accept="image/*,.pdf"
+                        onClick={(e) => {
+                          (e.target as HTMLInputElement).value = "";
+                        }}
                         onChange={(e) => {
                           const file = e.target.files?.[0];
                           if (file) handleSeleccionarEvidencia(file);

@@ -250,7 +250,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     });
   };
 
-  // Carga directa y sincronización de usuarios desde Supabase
+  // Carga directa y sincronización general desde Supabase
+  const sincronizarConSupabase = async (mostrarMensaje = false) => {
+    setSincronizandoUsuarios(true);
+    setErrorUsuarios(null);
+    try {
+      await authFetch("/api/sync", { method: "POST" });
+      await cargarDatos();
+      setUltimaSincronizacion(new Date().toLocaleTimeString("es-CO"));
+      if (mostrarMensaje) {
+        mostrarToast("Base de datos, expedientes y usuarios sincronizados directamente desde Supabase.", "exito");
+      }
+    } catch (err: any) {
+      console.error("Error sincronizando con Supabase:", err);
+      const msg = err?.message || "Error de conexión al sincronizar con Supabase.";
+      setErrorUsuarios(msg);
+      mostrarToast(msg, "error");
+    } finally {
+      setSincronizandoUsuarios(false);
+    }
+  };
+
+  // Carga directa de usuarios desde Supabase
   const cargarUsuariosDirecto = async (mostrarMensaje = false) => {
     setSincronizandoUsuarios(true);
     setErrorUsuarios(null);
@@ -315,6 +336,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   useEffect(() => {
     cargarDatos();
+    const handleSync = () => {
+      cargarDatos();
+    };
+    window.addEventListener("crm:datos-sincronizados", handleSync);
+    return () => {
+      window.removeEventListener("crm:datos-sincronizados", handleSync);
+    };
   }, []);
 
   // Handlers Bloque 1: Usuarios
@@ -788,7 +816,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <button
                 type="button"
                 id="btn-sync-usuarios-supabase"
-                onClick={() => cargarUsuariosDirecto(true)}
+                onClick={() => sincronizarConSupabase(true)}
                 disabled={sincronizandoUsuarios}
                 className="px-3.5 py-1.5 bg-[#3F7D58]/80 hover:bg-[#3F7D58] active:bg-[#285943] text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-all border border-emerald-400/40 shadow-xs cursor-pointer self-start sm:self-auto shrink-0"
                 title="Forzar actualización directa en tiempo real desde Supabase"

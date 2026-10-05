@@ -1727,6 +1727,9 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
                       type="file"
                       accept="image/jpeg,image/png,image/webp"
                       multiple
+                      onClick={(e) => {
+                        (e.target as HTMLInputElement).value = "";
+                      }}
                       onChange={(e) => handleSubirFotosHito(e.target.files)}
                       className="hidden"
                     />
@@ -1850,6 +1853,9 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
                 <input
                   type="file"
                   accept="application/pdf,image/jpeg,image/png"
+                  onClick={(e) => {
+                    (e.target as HTMLInputElement).value = "";
+                  }}
                   onChange={handleSeleccionarArchivoDoc}
                   className="hidden"
                 />

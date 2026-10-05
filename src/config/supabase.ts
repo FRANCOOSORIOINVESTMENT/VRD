@@ -1,5 +1,7 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import fs from "fs";
+import path from "path";
 
 // CRM VRD — FRANCO OSORIO INVESTMENT S.A.S.
 // CONFIGURACIÓN OFICIAL DEL CLIENTE SUPABASE (DATABASE & STORAGE)
@@ -117,33 +119,57 @@ export async function persistirArchivoEnStorage(
       return { ok: false, error: "Formato de archivo no soportado." };
     }
 
-    const { error: uploadError } = await supabase.storage
-      .from(STORAGE_BUCKET_NAME)
-      .upload(storagePath, buffer, {
-        contentType,
-        upsert: true
-      });
-
-    if (uploadError) {
-      console.error(`[STORAGE ERROR]: Error al subir archivo a '${STORAGE_BUCKET_NAME}/${storagePath}':`, uploadError.message);
-      return { ok: false, error: uploadError.message };
+    // 1. Guardar copia local resiliente e indestructible en disco
+    const localUploadsDir = path.join(process.cwd(), "public", "uploads");
+    const localFilePath = path.join(localUploadsDir, storagePath);
+    const localDir = path.dirname(localFilePath);
+    if (!fs.existsSync(localDir)) {
+      fs.mkdirSync(localDir, { recursive: true });
     }
+    fs.writeFileSync(localFilePath, buffer);
+    const localUrl = `/uploads/${storagePath.replace(/\\/g, "/")}`;
 
-    const { data: urlData } = supabase.storage
-      .from(STORAGE_BUCKET_NAME)
-      .getPublicUrl(storagePath);
+    // 2. Intentar subir a Supabase Storage si el cliente está disponible
+    try {
+      const { error: uploadError } = await supabase.storage
+        .from(STORAGE_BUCKET_NAME)
+        .upload(storagePath, buffer, {
+          contentType,
+          upsert: true
+        });
 
-    const publicUrl = urlData?.publicUrl || "";
-    console.log(`[STORAGE SUCCESS]: Archivo guardado en Supabase Storage: ${storagePath} -> ${publicUrl}`);
+      if (!uploadError) {
+        const { data: urlData } = supabase.storage
+          .from(STORAGE_BUCKET_NAME)
+          .getPublicUrl(storagePath);
 
-    return {
-      ok: true,
-      publicUrl,
-      storagePath
-    };
+        const publicUrl = urlData?.publicUrl || localUrl;
+        console.log(`[STORAGE SUCCESS]: Archivo persistido en Supabase Storage: ${storagePath} -> ${publicUrl}`);
+
+        return {
+          ok: true,
+          publicUrl,
+          storagePath
+        };
+      } else {
+        console.warn(`[STORAGE WARNING]: No se pudo subir a Supabase Storage (${uploadError.message}). Usando almacenamiento local persistente.`);
+        return {
+          ok: true,
+          publicUrl: localUrl,
+          storagePath
+        };
+      }
+    } catch (remoteErr: any) {
+      console.warn(`[STORAGE WARNING]: Excepción conectando a Supabase Storage (${remoteErr?.message}). Usando almacenamiento local persistente.`);
+      return {
+        ok: true,
+        publicUrl: localUrl,
+        storagePath
+      };
+    }
   } catch (err: any) {
-    console.error(`[STORAGE EXCEPTION]: Excepción al subir a Supabase Storage:`, err?.message);
-    return { ok: false, error: err?.message || "Excepción de red en Storage" };
+    console.error(`[STORAGE EXCEPTION]: Excepción al almacenar archivo:`, err?.message);
+    return { ok: false, error: err?.message || "Excepción al procesar archivo" };
   }
 }
 

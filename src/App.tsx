@@ -103,8 +103,8 @@ export default function App() {
     projectUrl: "https://dcelksfchabhrlevlfah.supabase.co",
     supabaseConnected: true
   });
-  const [loginUsername, setLoginUsername] = useState<string>("comercial.franco");
-  const [loginPassword, setLoginPassword] = useState<string>("crm2026*");
+  const [loginUsername, setLoginUsername] = useState<string>("");
+  const [loginPassword, setLoginPassword] = useState<string>("");
   const [mostrarPassword, setMostrarPassword] = useState<boolean>(false);
   const [iniciandoSesion, setIniciandoSesion] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -129,7 +129,7 @@ export default function App() {
     setTimeout(() => setToast(null), 4500);
   };
 
-  // Helper de peticiones autenticadas compatible con cookies e iframes
+  // Helper de peticiones autenticadas compatible con cookies, iframes y sin caché
   const authFetch = (url: string, options: RequestInit = {}) => {
     const token = currentUser?.id || localStorage.getItem("crm_user_token") || "";
     const headers = new Headers(options.headers || {});
@@ -138,10 +138,18 @@ export default function App() {
       headers.set("x-user-id", token);
     }
     
+    // Evitar caché de navegador para sincronización y actualización inmediata en tiempo real
+    headers.set("Cache-Control", "no-cache, no-store, must-revalidate");
+    headers.set("Pragma", "no-cache");
+    
+    const separator = url.includes("?") ? "&" : "?";
+    const cacheBustedUrl = `${url}${separator}_t=${Date.now()}`;
+    
     const API_URL = import.meta.env.VITE_API_URL || '';
     
-    return fetch(`${API_URL}${url}`, {
+    return fetch(`${API_URL}${cacheBustedUrl}`, {
       ...options,
+      cache: "no-store",
       credentials: "include",
       headers
     });
@@ -339,6 +347,9 @@ export default function App() {
   const [motivoReasignacion, setMotivoReasignacion] = useState<string>("");
   const [guardandoReasignacion, setGuardandoReasignacion] = useState<boolean>(false);
   const [sincronizando, setSincronizando] = useState<boolean>(false);
+  const [mensajeSincronizacion, setMensajeSincronizacion] = useState<string | null>(null);
+  const [estadoSincronizacion, setEstadoSincronizacion] = useState<"inactivo" | "cargando" | "exito" | "error">("inactivo");
+  const [ultimaSincronizacion, setUltimaSincronizacion] = useState<string>("");
   const [cambiandoRol, setCambiandoRol] = useState<boolean>(false);
   const roleSelectRef = useRef<HTMLSelectElement | null>(null);
 
@@ -754,9 +765,13 @@ export default function App() {
     return authFetch("/api/expedientes")
       .then((res) => res.json())
       .then((data) => {
-        if (Array.isArray(data)) setExpedientes(data);
+        if (Array.isArray(data)) {
+          setExpedientes([...data]);
+        }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error("[CARGA EXPEDIENTES ERROR]:", err);
+      });
   };
 
   const cargarInteresados = (): Promise<void> => {
@@ -765,9 +780,13 @@ export default function App() {
     return authFetch("/api/interesados")
       .then((res) => res.json())
       .then((data) => {
-        if (Array.isArray(data)) setInteresados(data);
+        if (Array.isArray(data)) {
+          setInteresados([...data]);
+        }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error("[CARGA INTERESADOS ERROR]:", err);
+      });
   };
 
   const cargarDetalleExpediente = (id: string): Promise<any> => {
@@ -786,7 +805,79 @@ export default function App() {
         }
         return data;
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error("[CARGA DETALLE ERROR]:", err);
+      });
+  };
+
+  // Función de recarga de datos automática e inmediata tras sincronización de base de datos
+  const recargarDatosSistema = async (
+    mostrarFeedback: boolean = false,
+    targetExpedienteId?: string | null
+  ): Promise<void> => {
+    try {
+      // 1. Disparar sincronización bidireccional en el backend (Supabase <-> Memoria)
+      const resSync = await authFetch("/api/sync", { method: "POST" });
+      if (resSync.ok) {
+        const syncData = await resSync.json();
+        // Actualización directa y atómica de React state si el endpoint retorna la colección
+        if (Array.isArray(syncData.expedientes)) {
+          setExpedientes([...syncData.expedientes]);
+        }
+        if (Array.isArray(syncData.interesados)) {
+          setInteresados([...syncData.interesados]);
+        }
+      }
+    } catch (syncErr) {
+      console.warn("[SYNC]: Fallo en endpoint /api/sync, ejecutando recarga directa:", syncErr);
+    }
+
+    // 2. Consulta y recarga atómica desde backend con anti-caché garantizado
+    const idAconsultar = targetExpedienteId !== undefined ? targetExpedienteId : expedienteSeleccionadoId;
+    await Promise.allSettled([
+      cargarExpedientes(),
+      currentUser && ["comercial", "administrador", "planeacion", "supervisor", "asistente"].includes(currentUser.rol)
+        ? cargarInteresados()
+        : Promise.resolve(),
+      cargarUsuarios(),
+      idAconsultar ? cargarDetalleExpediente(idAconsultar) : Promise.resolve()
+    ]);
+
+    // 3. Notificar a componentes hijos o paneles (como AdminPanel) que los datos fueron sincronizados
+    window.dispatchEvent(new CustomEvent("crm:datos-sincronizados"));
+    setUltimaSincronizacion(new Date().toLocaleTimeString("es-CO"));
+
+    if (mostrarFeedback) {
+      mostrarToast("Base de datos sincronizada y datos actualizados en tiempo real.", "exito");
+    }
+  };
+
+  // Manejador del botón de sincronización manual con indicador visual
+  const handleSincronizarManual = async () => {
+    if (sincronizando) return;
+    setSincronizando(true);
+    setEstadoSincronizacion("cargando");
+    setMensajeSincronizacion("Sincronizando...");
+    try {
+      await recargarDatosSistema(true);
+      setEstadoSincronizacion("exito");
+      setMensajeSincronizacion("¡Actualizado!");
+      setTimeout(() => {
+        setMensajeSincronizacion(null);
+        setEstadoSincronizacion("inactivo");
+      }, 2500);
+    } catch (err: any) {
+      console.error("[SYNC UI ERROR]:", err);
+      setEstadoSincronizacion("error");
+      setMensajeSincronizacion("Error al sincronizar");
+      mostrarToast("Error al sincronizar con la base de datos.", "error");
+      setTimeout(() => {
+        setMensajeSincronizacion(null);
+        setEstadoSincronizacion("inactivo");
+      }, 2500);
+    } finally {
+      setSincronizando(false);
+    }
   };
 
   const handleCrearRequisito = async (e: React.FormEvent) => {
@@ -1279,10 +1370,19 @@ export default function App() {
       if (res.ok) {
         setModalConvertirInteresado(null);
         mostrarToast(data.mensaje || "Expediente creado exitosamente.");
-        cargarInteresados();
-        cargarExpedientes();
-        setExpedienteSeleccionadoId(data.expediente.id);
+        const nuevoId = data.expediente?.id;
+        if (nuevoId) {
+          setExpedienteSeleccionadoId(nuevoId);
+        }
         setVistaActual("expedientes");
+        // Limpiar filtros activos para garantizar visibilidad inmediata del nuevo expediente
+        setFiltroTexto("");
+        setFiltroFase("");
+        setFiltroMunicipio("");
+        setFiltroEstado("");
+        setFiltroResponsable("");
+        // Recarga de datos automática e inmediata en la interfaz
+        await recargarDatosSistema(false, nuevoId);
       } else {
         setErrorConvertir(data.error || "Error al convertir interesado en expediente.");
       }
@@ -1434,6 +1534,13 @@ export default function App() {
   const handleCargarArchivoReal = async (requisito: RequisitoCaso, file: File) => {
     if (!expedienteSeleccionadoId) return;
     setErrorSubirArchivo(null);
+
+    // Validación preventiva de tamaño
+    if (file.size > 25 * 1024 * 1024) {
+      setErrorSubirArchivo("El archivo supera el tamaño máximo permitido de 25 Megabytes (25 MB). Por favor seleccione un archivo más ligero.");
+      return;
+    }
+
     setSubiendoArchivo(true);
 
     try {
@@ -1470,7 +1577,10 @@ export default function App() {
             mimeType: archivoParaCargar.type || "application/pdf",
             tamanoBytes: archivoParaCargar.size,
             archivoDataUrl: dataUrl,
-            sha256Hash
+            sha256Hash,
+            codigoRequisito: requisito.codigoRequisito,
+            fase: requisito.fase,
+            requisitoNombre: requisito.nombre
           })
         }
       );
@@ -1703,6 +1813,9 @@ export default function App() {
             tamanoBytes: fotosSubir.reduce((acc, f) => acc + (f.tamanoBytes || 0), 0),
             archivoDataUrl: fotosSubir[0]?.url,
             sha256Hash,
+            codigoRequisito: requisito.codigoRequisito,
+            fase: requisito.fase,
+            requisitoNombre: requisito.nombre,
             fotos: fotosSubir.map((f, idx) => ({
               id: f.id || `foto-${Date.now()}-${idx}`,
               nombre: f.nombre,
@@ -1754,7 +1867,10 @@ export default function App() {
             nombreArchivo,
             mimeType: "application/pdf",
             tamanoBytes: 1048576,
-            sha256Hash: `sha256-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 10)}`
+            sha256Hash: `sha256-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 10)}`,
+            codigoRequisito: modalSubirArchivoReq.codigoRequisito,
+            fase: modalSubirArchivoReq.fase,
+            requisitoNombre: modalSubirArchivoReq.nombre
           })
         }
       );
@@ -2215,7 +2331,7 @@ export default function App() {
                     value={loginUsername}
                     onChange={(e) => setLoginUsername(e.target.value)}
                     className="w-full h-12 pl-10 pr-4 text-sm bg-white border border-slate-200 rounded-xl focus:border-[#3F7D58] focus:ring-4 focus:ring-[#3F7D58]/10 hover:border-slate-300 outline-none transition-all duration-200 text-slate-800 placeholder:text-slate-400 font-medium shadow-2xs"
-                    placeholder="ej: comercial.franco"
+                    placeholder="Usuario institucional"
                     required
                     autoComplete="username"
                   />
@@ -2425,27 +2541,43 @@ export default function App() {
         </div>
 
         <div className="flex items-center space-x-3">
-          {/* Botón de Sincronización Manual Directa con Supabase */}
+          {/* Botón de Sincronización Manual Directa con Supabase y Recarga Automática */}
           <button
             type="button"
-            onClick={async () => {
-              setSincronizando(true);
-              try {
-                await Promise.all([
-                  cargarExpedientes(),
-                  currentUser.rol === "comercial" || currentUser.rol === "administrador" || currentUser.rol === "planeacion" ? cargarInteresados() : Promise.resolve(),
-                  expedienteSeleccionadoId ? cargarDetalleExpediente(expedienteSeleccionadoId) : Promise.resolve()
-                ]);
-                mostrarToast("Datos actualizados directamente desde Supabase PostgreSQL.");
-              } finally {
-                setSincronizando(false);
-              }
-            }}
-            title="Sincronizar datos directamente con Supabase PostgreSQL"
-            className="flex items-center space-x-1.5 bg-[#F4FAF6] hover:bg-[#E3F0E7] px-2.5 py-1.5 rounded-xl border border-[#C2DEC9] text-[#285943] transition-colors text-xs font-semibold cursor-pointer shadow-2xs"
+            onClick={handleSincronizarManual}
+            disabled={sincronizando}
+            title={
+              sincronizando
+                ? "Sincronizando información en tiempo real..."
+                : `Sincronizar base de datos y recargar información en tiempo real${
+                    ultimaSincronizacion ? ` (Última: ${ultimaSincronizacion})` : ""
+                  }`
+            }
+            className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl border transition-all text-xs font-semibold cursor-pointer shadow-2xs ${
+              sincronizando
+                ? "bg-[#EBF3EE] border-[#3F7D58] text-[#285943] cursor-wait opacity-90 ring-2 ring-[#3F7D58]/20"
+                : estadoSincronizacion === "exito"
+                ? "bg-emerald-50 border-emerald-400 text-emerald-800"
+                : estadoSincronizacion === "error"
+                ? "bg-rose-50 border-rose-300 text-rose-800"
+                : "bg-[#F4FAF6] hover:bg-[#E3F0E7] active:bg-[#C2DEC9] border-[#C2DEC9] text-[#285943]"
+            }`}
           >
-            <RefreshCw className={`w-3.5 h-3.5 text-[#3F7D58] shrink-0 ${sincronizando ? "animate-spin" : ""}`} />
-            <span className="hidden sm:inline">Sincronizar DB</span>
+            {sincronizando ? (
+              <RefreshCw className="w-3.5 h-3.5 text-[#3F7D58] shrink-0 animate-spin" />
+            ) : estadoSincronizacion === "exito" ? (
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            ) : estadoSincronizacion === "error" ? (
+              <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+            ) : (
+              <RefreshCw className="w-3.5 h-3.5 text-[#3F7D58] shrink-0" />
+            )}
+            <span>
+              {mensajeSincronizacion || "Sincronizar DB"}
+            </span>
+            {sincronizando && (
+              <span className="w-1.5 h-1.5 rounded-full bg-[#3F7D58] animate-ping" />
+            )}
           </button>
 
           {/* CAMBIADOR RÁPIDO DE USUARIO / ROL (EXCLUSIVO PARA EL ADMINISTRADOR) */}
@@ -3389,6 +3521,15 @@ export default function App() {
             }}
             mostrarToast={mostrarToast}
           />
+        )}
+
+        {/* INDICADOR DE CARGA DE DETALLE EN TIEMPO REAL */}
+        {expedienteSeleccionadoId && !detalleExp && (
+          <div className="flex flex-col items-center justify-center py-24 space-y-3 bg-white rounded-2xl border border-slate-200 shadow-xs">
+            <RefreshCw className="w-8 h-8 text-[#3F7D58] animate-spin" />
+            <div className="text-sm font-bold text-slate-800">Cargando expediente en tiempo real...</div>
+            <p className="text-xs text-slate-400">Sincronizando información técnica, jurídica y documental del hogar</p>
+          </div>
         )}
 
         {/* DETALLE DEL EXPEDIENTE (FICHA + REQUISITOS + VISOR) */}
@@ -5772,6 +5913,9 @@ export default function App() {
                       multiple
                       accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
                       className="hidden"
+                      onClick={(e) => {
+                        (e.target as HTMLInputElement).value = "";
+                      }}
                       onChange={async (e) => {
                         if (e.target.files && e.target.files.length > 0) {
                           const nuevas: { id: string; nombre: string; url: string; tamanoBytes: number; categoria: string }[] = [];
@@ -5929,6 +6073,9 @@ export default function App() {
                       id="inputArchivoRealModal"
                       accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"
                       className="hidden"
+                      onClick={(e) => {
+                        (e.target as HTMLInputElement).value = "";
+                      }}
                       onChange={(e) => {
                         if (e.target.files && e.target.files[0]) {
                           setArchivoSeleccionadoSubir(e.target.files[0]);
@@ -6534,6 +6681,9 @@ export default function App() {
                     type="file"
                     id="archivoNuevoReq"
                     accept="application/pdf,image/jpeg,image/png"
+                    onClick={(e) => {
+                      (e.target as HTMLInputElement).value = "";
+                    }}
                     onChange={(e) => {
                       if (e.target.files && e.target.files[0]) {
                         setArchivoAdjuntoNuevoReq(e.target.files[0]);
