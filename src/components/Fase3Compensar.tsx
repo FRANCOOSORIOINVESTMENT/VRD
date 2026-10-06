@@ -30,7 +30,8 @@ import {
   UploadCloud,
   FileSpreadsheet,
   Inbox,
-  Upload
+  Upload,
+  Download
 } from "lucide-react";
 
 interface Fase3CompensarProps {
@@ -566,26 +567,36 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                         <span title={req.nombreRequisito} className="text-slate-600 truncate">{req.nombreRequisito}</span>
                       </div>
                       {req.documentoAsociado?.versionActual && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const ver = req.documentoAsociado!.versionActual!;
-                            onAbrirVisor({
-                              url: ver.url,
-                              nombreArchivo: ver.nombreArchivoOriginal,
-                              sha256: ver.sha256,
-                              version: ver.versionNumero,
-                              tamanoBytes: ver.tamanoBytes,
-                              subidoPor: ver.subidoPor?.nombreCompleto || "Sistema",
-                              subidoEn: ver.subidoEn,
-                              titulo: `${req.codigoRequisito} - ${req.nombreRequisito}`
-                            });
-                          }}
-                          className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded text-[11px] font-bold flex items-center space-x-1 shrink-0 cursor-pointer"
-                        >
-                          <Eye className="w-3 h-3" />
-                          <span>Ver</span>
-                        </button>
+                        <div className="flex items-center space-x-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const ver = req.documentoAsociado!.versionActual!;
+                              onAbrirVisor({
+                                url: ver.url ? (ver.url.includes("?") ? `${ver.url}&t=${Date.now()}` : `${ver.url}?t=${Date.now()}`) : ver.url,
+                                nombreArchivo: ver.nombreArchivoOriginal,
+                                sha256: ver.sha256,
+                                version: ver.versionNumero,
+                                tamanoBytes: ver.tamanoBytes,
+                                subidoPor: ver.subidoPor?.nombreCompleto || "Sistema",
+                                subidoEn: ver.subidoEn,
+                                titulo: `${req.codigoRequisito} - ${req.nombreRequisito}`
+                              });
+                            }}
+                            className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded text-[11px] font-bold flex items-center space-x-1 cursor-pointer"
+                          >
+                            <Eye className="w-3 h-3" />
+                            <span>Ver</span>
+                          </button>
+                          <a
+                            href={req.documentoAsociado.versionActual.url ? (req.documentoAsociado.versionActual.url.includes("?") ? `${req.documentoAsociado.versionActual.url}&t=${Date.now()}` : `${req.documentoAsociado.versionActual.url}?t=${Date.now()}`) : "#"}
+                            download={req.documentoAsociado.versionActual.nombreArchivoOriginal}
+                            className="p-1 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded text-[11px] font-bold flex items-center cursor-pointer"
+                            title="Descargar documento"
+                          >
+                            <Download className="w-3 h-3" />
+                          </a>
+                        </div>
                       )}
                     </div>
                   ))}
@@ -810,27 +821,38 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
 
                   <div className="flex items-center space-x-2">
                     {version && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onAbrirVisor({
-                            titulo: `${req.codigoRequisito}: ${req.nombre}`,
-                            nombreArchivo: version.nombreArchivoOriginal,
-                            mimeType: version.mimeType,
-                            sha256Hash: version.sha256Hash,
-                            tamanoBytes: version.tamanoBytes,
-                            subidoPor: version.subidoPorNombre,
-                            subidoEn: version.subidoEn,
-                            archivoDataUrl: version.archivoDataUrl,
-                            fotos: version.fotos,
-                            fotoInicialIndex: 0
-                          })
-                        }
-                        className="inline-flex items-center space-x-1 font-semibold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>Ver Documento</span>
-                      </button>
+                      <div className="flex items-center space-x-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onAbrirVisor({
+                              titulo: `${req.codigoRequisito}: ${req.nombre}`,
+                              nombreArchivo: version.nombreArchivoOriginal,
+                              mimeType: version.mimeType,
+                              sha256Hash: version.sha256Hash,
+                              tamanoBytes: version.tamanoBytes,
+                              subidoPor: version.subidoPorNombre,
+                              subidoEn: version.subidoEn,
+                              archivoDataUrl: version.archivoDataUrl ? (version.archivoDataUrl.includes("?") ? `${version.archivoDataUrl}&t=${Date.now()}` : `${version.archivoDataUrl}?t=${Date.now()}`) : version.archivoDataUrl,
+                              fotos: version.fotos,
+                              fotoInicialIndex: 0
+                            })
+                          }
+                          className="inline-flex items-center space-x-1 font-semibold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Ver Documento</span>
+                        </button>
+                        <a
+                          href={version.archivoDataUrl ? (version.archivoDataUrl.includes("?") ? `${version.archivoDataUrl}&t=${Date.now()}` : `${version.archivoDataUrl}?t=${Date.now()}`) : "#"}
+                          download={version.nombreArchivoOriginal}
+                          className="inline-flex items-center space-x-1 font-semibold text-emerald-600 hover:text-emerald-800 hover:underline cursor-pointer ml-1"
+                          title="Descargar documento"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Descargar</span>
+                        </a>
+                      </div>
                     )}
 
                     {/* Libertad total para el Gestor Documental de actualizar documentos en subsanación (Cambio 6) */}
@@ -1008,7 +1030,7 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                     {env.documentosIncluidos?.map((d) => d.requisitoCodigo).join(", ")}
                   </p>
                   {env.evidenciaUrl && (
-                    <div className="pt-1.5">
+                    <div className="pt-1.5 flex items-center space-x-2">
                       <button
                         type="button"
                         onClick={() =>
@@ -1020,7 +1042,7 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                             tamanoBytes: env.evidenciaTamanoBytes || 102400,
                             subidoPor: env.usuarioEnvioNombre,
                             subidoEn: env.fechaEnvio,
-                            archivoDataUrl: env.evidenciaUrl
+                            archivoDataUrl: env.evidenciaUrl ? (env.evidenciaUrl.includes("?") ? `${env.evidenciaUrl}&t=${Date.now()}` : `${env.evidenciaUrl}?t=${Date.now()}`) : env.evidenciaUrl
                           })
                         }
                         className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-md text-xs font-semibold border border-blue-200 transition-colors cursor-pointer"
@@ -1028,6 +1050,15 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                         <Eye className="w-3.5 h-3.5 text-blue-600" />
                         <span>Ver Pantallazo del Envío</span>
                       </button>
+                      <a
+                        href={env.evidenciaUrl ? (env.evidenciaUrl.includes("?") ? `${env.evidenciaUrl}&t=${Date.now()}` : `${env.evidenciaUrl}?t=${Date.now()}`) : "#"}
+                        download={env.evidenciaNombre || "Pantallazo_Envio_Compensar.png"}
+                        className="inline-flex items-center space-x-1 px-2.5 py-1 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-md text-xs font-semibold border border-slate-200 transition-colors cursor-pointer"
+                        title="Descargar pantallazo"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Descargar</span>
+                      </a>
                     </div>
                   )}
                 </div>

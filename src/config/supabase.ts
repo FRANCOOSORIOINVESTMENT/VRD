@@ -127,7 +127,8 @@ export async function persistirArchivoEnStorage(
       fs.mkdirSync(localDir, { recursive: true });
     }
     fs.writeFileSync(localFilePath, buffer);
-    const localUrl = `/uploads/${storagePath.replace(/\\/g, "/")}`;
+    const timestampBuster = `t=${Date.now()}`;
+    const localUrl = `/uploads/${storagePath.replace(/\\/g, "/")}?${timestampBuster}`;
 
     // 2. Intentar subir a Supabase Storage si el cliente está disponible
     try {
@@ -143,7 +144,8 @@ export async function persistirArchivoEnStorage(
           .from(STORAGE_BUCKET_NAME)
           .getPublicUrl(storagePath);
 
-        const publicUrl = urlData?.publicUrl || localUrl;
+        const basePub = urlData?.publicUrl || localUrl;
+        const publicUrl = basePub.includes("?") ? `${basePub}&${timestampBuster}` : `${basePub}?${timestampBuster}`;
         console.log(`[STORAGE SUCCESS]: Archivo persistido en Supabase Storage: ${storagePath} -> ${publicUrl}`);
 
         return {

@@ -1077,13 +1077,160 @@ export async function createApp(): Promise<express.Express> {
         .eq("codigo_visible", exp.codigoVisible);
 
       if (error) {
-        console.error(`[SUPABASE]: Error actualizando expediente ${exp.codigoVisible}:`, error.message);
+        console.error(`[SUPABASE]: Error actualizando expediente ${exp.codigoVisible} por código:`, error.message);
+        if (exp.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
+          await supabaseAdmin
+            .from("expedientes")
+            .update(payload)
+            .eq("id", exp.id);
+        }
       } else {
         console.log(`[SUPABASE]: Expediente ${exp.codigoVisible} sincronizado en PostgreSQL (Fase ${exp.faseActual}).`);
       }
     } catch (e: any) {
       console.error("[SUPABASE]: Excepción sincronizando expediente:", e?.message);
     }
+  }
+
+  /**
+   * Procesa la Salida Definitiva / Retiro de un Hogar:
+   * 1. Marca estado_general = 'salida_definitiva' en memoria y en la tabla expedientes de Supabase.
+   * 2. Registra el evento en memoria y en la tabla eventos_salida de Supabase.
+   */
+  async function registrarSalidaDefinitiva(
+    exp: Expediente,
+    motivo: string,
+    fundamento: string,
+    decididoPorId: string,
+    faseAlcanzada?: number
+  ): Promise<EventoSalida> {
+    exp.estadoGeneral = "salida_definitiva";
+    exp.bloqueadoPorRevision = false;
+    const fase = faseAlcanzada ?? exp.faseActual ?? 1;
+
+    const eventoSalidaId = `sal-${Date.now()}`;
+    const eventoSalida: EventoSalida = {
+      id: eventoSalidaId,
+      expedienteId: exp.id,
+      motivo: motivo || "Salida definitiva",
+      fundamento: fundamento || "Retiro formal del programa",
+      decididoPorId,
+      fechaSalida: new Date().toISOString(),
+      faseAlcanzada: fase
+    };
+    mockDb.eventosSalida.push(eventoSalida);
+
+    // 1. Sincronizar actualización de expediente en PostgreSQL
+    await sincronizarExpedienteEnSupabase(exp);
+
+    // 2. Insertar directamente en la tabla eventos_salida y forzar UPDATE en expedientes
+    if (supabaseAdmin) {
+      try {
+        let expUuid: string | null = null;
+        if (exp.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
+          expUuid = exp.id;
+        } else {
+          const { data: expRow } = await supabaseAdmin
+            .from("expedientes")
+            .select("id")
+            .eq("codigo_visible", exp.codigoVisible)
+            .maybeSingle();
+          if (expRow?.id) expUuid = expRow.id;
+        }
+
+        // UPDATE directo y explícito a tabla expedientes en Supabase
+        const payloadUpdate = {
+          estado_general: "salida_definitiva",
+          bloqueado_por_revision: false,
+          actualizado_en: new Date().toISOString()
+        };
+
+        if (expUuid) {
+          const { error: updErr } = await supabaseAdmin
+            .from("expedientes")
+            .update(payloadUpdate)
+            .eq("id", expUuid);
+          if (updErr) {
+            console.error("[SUPABASE]: Error haciendo UPDATE en expedientes por UUID:", updErr.message);
+          } else {
+            console.log(`[SUPABASE]: UPDATE exitoso estado_general='salida_definitiva' para expediente ${exp.codigoVisible} (UUID: ${expUuid}).`);
+          }
+        }
+        if (exp.codigoVisible) {
+          const { error: updErr2 } = await supabaseAdmin
+            .from("expedientes")
+            .update(payloadUpdate)
+            .eq("codigo_visible", exp.codigoVisible);
+          if (updErr2) {
+            console.error("[SUPABASE]: Error haciendo UPDATE en expedientes por codigo_visible:", updErr2.message);
+          } else {
+            console.log(`[SUPABASE]: UPDATE exitoso estado_general='salida_definitiva' para expediente ${exp.codigoVisible}.`);
+          }
+        }
+
+        // Resolver UUID del usuario para decidido_por sin error de sintaxis UUID en Postgres
+        let userUuid: string | null = null;
+        if (decididoPorId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(decididoPorId)) {
+          userUuid = decididoPorId;
+        } else if (decididoPorId) {
+          const { data: uRow } = await supabaseAdmin
+            .from("perfiles_usuario")
+            .select("id")
+            .eq("username", String(decididoPorId).toLowerCase())
+            .maybeSingle();
+          if (uRow?.id) {
+            userUuid = uRow.id;
+          }
+        }
+
+        if (!userUuid) {
+          const perfilEnMemoria = mockDb.perfiles.find(
+            (p) => p.id === decididoPorId || p.username.toLowerCase() === String(decididoPorId).toLowerCase()
+          );
+          if (perfilEnMemoria) {
+            const { data: uRowMem } = await supabaseAdmin
+              .from("perfiles_usuario")
+              .select("id")
+              .eq("username", perfilEnMemoria.username.toLowerCase())
+              .maybeSingle();
+            if (uRowMem?.id) userUuid = uRowMem.id;
+          }
+        }
+
+        if (!userUuid) {
+          const { data: fallbackUser } = await supabaseAdmin
+            .from("perfiles_usuario")
+            .select("id")
+            .in("rol", ["supervisor", "administrador"])
+            .limit(1)
+            .maybeSingle();
+          if (fallbackUser?.id) userUuid = fallbackUser.id;
+        }
+
+        if (expUuid && userUuid) {
+          const { error: insError } = await supabaseAdmin
+            .from("eventos_salida")
+            .insert({
+              expediente_id: expUuid,
+              motivo: (motivo || "Salida definitiva").slice(0, 150),
+              fundamento: fundamento || "Retiro definitivo del programa.",
+              decidido_por: userUuid,
+              fecha_salida: new Date().toISOString(),
+              fase_alcanzada: fase
+            });
+
+          if (insError) {
+            console.error("[SUPABASE]: Error insertando en eventos_salida:", insError.message);
+          } else {
+            console.log(`[SUPABASE]: Registro exitoso en eventos_salida para expediente ${exp.codigoVisible}.`);
+          }
+        }
+      } catch (err: any) {
+        console.error("[SUPABASE]: Excepción registrando evento_salida:", err?.message);
+      }
+    }
+
+    return eventoSalida;
   }
 
   // ==========================================
@@ -1771,6 +1918,9 @@ export async function createApp(): Promise<express.Express> {
 
   // 3. LISTADO GENERAL Y CONSULTA UNIVERSAL DEL ESTADO (CON HIDRATACIÓN DESDE SUPABASE)
   app.get("/api/expedientes", requireAuth(), async (req: AuthRequest, res: Response) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     // 1. Hidratación bidireccional desde Supabase si el servicio está activo
     if (supabaseAdmin) {
       try {
@@ -2643,6 +2793,9 @@ export async function createApp(): Promise<express.Express> {
 
   // 6. DETALLE DE UN EXPEDIENTE Y SUS REQUISITOS
   app.get("/api/expedientes/:id", requireAuth(), async (req: AuthRequest, res: Response) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     let exp = mockDb.expedientes.find((e) => e.id === req.params.id || e.codigoVisible === req.params.id);
 
     // Si no está en memoria y Supabase está activo, buscarlo directamente en la base de datos
@@ -2986,7 +3139,8 @@ export async function createApp(): Promise<express.Express> {
         const storagePath = `expedientes/${exp.id}/${reqCaso.codigoRequisito}_v${nuevaVersionNum}.${fotosArr ? "jpg" : "pdf"}`;
 
         // 3. Persistir archivo de inmediato en almacenamiento resiliente (disco local + Supabase Storage)
-        let publicUrlFinal = `/uploads/${storagePath}`;
+        const tsBuster = `t=${Date.now()}`;
+        let publicUrlFinal = `/uploads/${storagePath}?${tsBuster}`;
         if (archivoDataUrl && typeof archivoDataUrl === "string") {
           const uploadRes = await persistirArchivoEnStorage(
             storagePath,
@@ -2994,7 +3148,9 @@ export async function createApp(): Promise<express.Express> {
             mimeType || (fotosArr ? "image/jpeg" : "application/pdf")
           );
           if (uploadRes.ok && uploadRes.publicUrl) {
-            publicUrlFinal = uploadRes.publicUrl;
+            publicUrlFinal = uploadRes.publicUrl.includes("t=")
+              ? uploadRes.publicUrl
+              : `${uploadRes.publicUrl}${uploadRes.publicUrl.includes("?") ? "&" : "?"}${tsBuster}`;
           }
         }
 
@@ -3006,7 +3162,9 @@ export async function createApp(): Promise<express.Express> {
               const fotoPath = `expedientes/${exp.id}/fotos/${foto.id}_${(foto.nombre || `foto_${i+1}.jpg`).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
               const fotoUpload = await persistirArchivoEnStorage(fotoPath, foto.url, "image/jpeg");
               if (fotoUpload.ok && fotoUpload.publicUrl) {
-                foto.url = fotoUpload.publicUrl;
+                foto.url = fotoUpload.publicUrl.includes("t=")
+                  ? fotoUpload.publicUrl
+                  : `${fotoUpload.publicUrl}${fotoUpload.publicUrl.includes("?") ? "&" : "?"}${tsBuster}`;
               }
             }
           }
@@ -3040,29 +3198,59 @@ export async function createApp(): Promise<express.Express> {
           exp.estadoFase2 = "en_preparacion";
         }
 
-        // Persistencia relacional en base de datos PostgreSQL en segundo plano
+        // Persistencia relacional garantizada en PostgreSQL (esperada antes de confirmar al cliente)
         if (supabaseAdmin) {
-          (async () => {
-            try {
+          try {
+            let subidoPorUuid: string | null = null;
+            if (req.user!.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.user!.id)) {
+              subidoPorUuid = req.user!.id;
+            } else {
               const { data: usuarioDb } = await supabaseAdmin
                 .from("perfiles_usuario")
                 .select("id")
-                .eq("username", req.user!.username)
+                .eq("username", String(req.user!.username || req.user!.id).toLowerCase())
                 .maybeSingle();
-              const subidoPorUuid = usuarioDb?.id;
+              if (usuarioDb?.id) subidoPorUuid = usuarioDb.id;
+            }
+            if (!subidoPorUuid) {
+              const { data: fallbackUser } = await supabaseAdmin
+                .from("perfiles_usuario")
+                .select("id")
+                .in("rol", ["supervisor", "administrador", "asistente"])
+                .limit(1)
+                .maybeSingle();
+              if (fallbackUser?.id) subidoPorUuid = fallbackUser.id;
+            }
 
+            let expUuid: string | null = null;
+            if (exp.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
+              expUuid = exp.id;
+            } else {
               const { data: expDb } = await supabaseAdmin
                 .from("expedientes")
                 .select("id")
                 .eq("codigo_visible", exp.codigoVisible)
                 .maybeSingle();
+              if (expDb?.id) expUuid = expDb.id;
+            }
 
-              if (expDb?.id && subidoPorUuid) {
+            if (expUuid && subidoPorUuid) {
+              let docDbId: string | null = null;
+              const { data: docExistente } = await supabaseAdmin
+                .from("documentos")
+                .select("id")
+                .eq("expediente_id", expUuid)
+                .eq("titulo", doc.titulo)
+                .maybeSingle();
+
+              if (docExistente?.id) {
+                docDbId = docExistente.id;
+              } else {
                 const { data: docDb } = await supabaseAdmin
                   .from("documentos")
                   .insert([
                     {
-                      expediente_id: expDb.id,
+                      expediente_id: expUuid,
                       titulo: doc.titulo,
                       persona_id: null,
                       predio_id: null
@@ -3070,51 +3258,53 @@ export async function createApp(): Promise<express.Express> {
                   ])
                   .select("id")
                   .maybeSingle();
+                docDbId = docDb?.id;
+              }
 
-                if (docDb?.id) {
-                  const { data: verDb } = await supabaseAdmin
-                    .from("versiones_documento")
-                    .insert([
-                      {
-                        documento_id: docDb.id,
-                        version_numero: nuevaVersion.versionNumero,
-                        storage_path: nuevaVersion.storagePath,
-                        nombre_archivo_original: nuevaVersion.nombreArchivoOriginal,
-                        mime_type: nuevaVersion.mimeType,
-                        tamano_bytes: nuevaVersion.tamanoBytes,
-                        sha256_hash: nuevaVersion.sha256Hash,
-                        subido_por: subidoPorUuid
-                      }
-                    ])
-                    .select("id")
-                    .maybeSingle();
+              if (docDbId) {
+                const { data: verDb } = await supabaseAdmin
+                  .from("versiones_documento")
+                  .insert([
+                    {
+                      documento_id: docDbId,
+                      version_numero: nuevaVersion.versionNumero,
+                      storage_path: nuevaVersion.storagePath,
+                      nombre_archivo_original: nuevaVersion.nombreArchivoOriginal,
+                      mime_type: nuevaVersion.mimeType,
+                      tamano_bytes: nuevaVersion.tamanoBytes,
+                      sha256_hash: nuevaVersion.sha256Hash,
+                      subido_por: subidoPorUuid
+                    }
+                  ])
+                  .select("id")
+                  .maybeSingle();
 
-                  const { data: reqDb } = await supabaseAdmin
+                const { data: reqDb } = await supabaseAdmin
+                  .from("requisitos_caso")
+                  .select("id")
+                  .eq("expediente_id", expUuid)
+                  .eq("codigo_requisito", reqCaso.codigoRequisito)
+                  .maybeSingle();
+
+                if (reqDb?.id && verDb?.id) {
+                  await supabaseAdmin.from("evidencias_requisito").insert([
+                    {
+                      requisito_caso_id: reqDb.id,
+                      version_documento_id: verDb.id,
+                      vinculado_por: subidoPorUuid
+                    }
+                  ]);
+
+                  await supabaseAdmin
                     .from("requisitos_caso")
-                    .select("id")
-                    .eq("expediente_id", expDb.id)
-                    .maybeSingle();
-
-                  if (reqDb?.id && verDb?.id) {
-                    await supabaseAdmin.from("evidencias_requisito").insert([
-                      {
-                        requisito_caso_id: reqDb.id,
-                        version_documento_id: verDb.id,
-                        vinculado_por: subidoPorUuid
-                      }
-                    ]);
-
-                    await supabaseAdmin
-                      .from("requisitos_caso")
-                      .update({ estado: "recibido_revision" })
-                      .eq("id", reqDb.id);
-                  }
+                    .update({ estado: "recibido_revision" })
+                    .eq("id", reqDb.id);
                 }
               }
-            } catch (err: any) {
-              console.error("[SUPABASE DB]: Error al persistir documento en PostgreSQL:", err?.message);
             }
-          })();
+          } catch (err: any) {
+            console.error("[SUPABASE DB]: Error al persistir documento en PostgreSQL:", err?.message);
+          }
         }
 
         res.status(201).json({
@@ -4642,10 +4832,10 @@ export async function createApp(): Promise<express.Express> {
 
   // 11. REGISTRO DE SALIDA Y GENERACIÓN DE TAREA DE CARTA
   app.post(
-    "/api/expedientes/:id/salida",
-    requireAuth(["supervisor"]),
-    (req: AuthRequest, res: Response) => {
-      const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
+    ["/api/expedientes/:id/salida", "/api/expedientes/:id/retiro"],
+    requireAuth(["supervisor", "administrador"]),
+    async (req: AuthRequest, res: Response) => {
+      const exp = mockDb.expedientes.find((e) => e.id === req.params.id || e.codigoVisible === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
         return;
@@ -4653,28 +4843,22 @@ export async function createApp(): Promise<express.Express> {
 
       const { motivo, fundamento } = req.body;
       if (!motivo || !fundamento) {
-        res.status(400).json({ error: "Debe indicar motivo y fundamento de la salida por no aptitud." });
+        res.status(400).json({ error: "Debe indicar motivo y fundamento de la salida por no aptitud o retiro." });
         return;
       }
 
-      exp.estadoGeneral = "salida_definitiva";
-
-      const eventoSalidaId = `sal-${Date.now()}`;
-      const eventoSalida: EventoSalida = {
-        id: eventoSalidaId,
-        expedienteId: exp.id,
+      const eventoSalida = await registrarSalidaDefinitiva(
+        exp,
         motivo,
         fundamento,
-        decididoPorId: req.user!.id,
-        fechaSalida: new Date().toISOString(),
-        faseAlcanzada: exp.faseActual
-      };
-      mockDb.eventosSalida.push(eventoSalida);
+        req.user!.id,
+        exp.faseActual
+      );
 
       // Generar tarea obligatoria al Comercial para elaborar y gestionar la carta de salida
       const cartaSalida: CartaSalida = {
         id: `cart-${Date.now()}`,
-        eventoSalidaId,
+        eventoSalidaId: eventoSalida.id,
         comercialId: exp.comercialOrigenId,
         estadoCarta: "pendiente_elaborar",
         creadoEn: new Date().toISOString()
@@ -4691,7 +4875,7 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
-      res.status(201).json({ success: true, eventoSalida, cartaSalida });
+      res.status(201).json({ success: true, expediente: exp, eventoSalida, cartaSalida });
     }
   );
 
@@ -4866,7 +5050,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/compensar/registrar-respuesta",
     requireAuth(["ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -5003,23 +5187,18 @@ export async function createApp(): Promise<express.Express> {
         });
       } else if (resultado === "rechazo_definitivo") {
         exp.validacionCompensar.estadoActual = "rechazado_definitivo";
-        exp.estadoGeneral = "salida_definitiva";
 
-        const eventoSalidaId = `sal-comp-${Date.now()}`;
-        const eventoSalida: EventoSalida = {
-          id: eventoSalidaId,
-          expedienteId: exp.id,
-          motivo: "Rechazo Compensar",
-          fundamento: `Rechazo definitivo por Compensar en Fase 3: ${observacionesDetalladas} (Radicado: ${radicadoOConcepto || "S/N"})`,
-          decididoPorId: req.user!.id,
-          fechaSalida: new Date().toISOString(),
-          faseAlcanzada: 3
-        };
-        mockDb.eventosSalida.push(eventoSalida);
+        const eventoSalida = await registrarSalidaDefinitiva(
+          exp,
+          "Rechazo Compensar",
+          `Rechazo definitivo por Compensar en Fase 3: ${observacionesDetalladas} (Radicado: ${radicadoOConcepto || "S/N"})`,
+          req.user!.id,
+          3
+        );
 
         mockDb.cartasSalida.push({
           id: `cart-comp-${Date.now()}`,
-          eventoSalidaId,
+          eventoSalidaId: eventoSalida.id,
           comercialId: exp.comercialOrigenId,
           estadoCarta: "pendiente_elaborar",
           creadoEn: new Date().toISOString()
@@ -7528,8 +7707,8 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     ["/api/expedientes/:id/solicitud-rechazo/aprobar", "/api/expedientes/:id/aprobar-rechazo"],
     requireAuth(["supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
-      const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
+    async (req: AuthRequest, res: Response) => {
+      const exp = mockDb.expedientes.find((e) => e.id === req.params.id || e.codigoVisible === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
         return;
@@ -7548,24 +7727,20 @@ export async function createApp(): Promise<express.Express> {
       exp.solicitudRechazo.fechaDecision = new Date().toISOString();
       exp.solicitudRechazo.observacionDecision = observacionSupervisor || "Rechazo del hogar formalmente aprobado por el Supervisor.";
 
-      exp.bloqueadoPorRevision = false;
-      exp.estadoGeneral = "salida_definitiva";
+      const motivoSalida = exp.solicitudRechazo.motivo || "Rechazo formal aprobado";
+      const fundamentoSalida = `${exp.solicitudRechazo.justificacion || "Solicitud de retiro aprobada"}${observacionSupervisor ? ` | Dictamen Supervisor: ${observacionSupervisor}` : ""}`;
 
-      const eventoSalidaId = `sal-${Date.now()}`;
-      const eventoSalida: EventoSalida = {
-        id: eventoSalidaId,
-        expedienteId: exp.id,
-        motivo: exp.solicitudRechazo.motivo,
-        fundamento: `${exp.solicitudRechazo.justificacion}${observacionSupervisor ? ` | Dictamen Supervisor: ${observacionSupervisor}` : ""}`,
-        decididoPorId: req.user!.id,
-        fechaSalida: new Date().toISOString(),
-        faseAlcanzada: exp.faseActual
-      };
-      mockDb.eventosSalida.push(eventoSalida);
+      const eventoSalida = await registrarSalidaDefinitiva(
+        exp,
+        motivoSalida,
+        fundamentoSalida,
+        req.user!.id,
+        exp.faseActual
+      );
 
       const cartaSalida: CartaSalida = {
         id: `cart-${Date.now()}`,
-        eventoSalidaId,
+        eventoSalidaId: eventoSalida.id,
         comercialId: exp.comercialOrigenId,
         estadoCarta: "pendiente_elaborar",
         creadoEn: new Date().toISOString()

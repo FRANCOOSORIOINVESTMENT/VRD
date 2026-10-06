@@ -83,7 +83,15 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [tieneGaleria, fotos?.length, onClose, fotoActivaIndex]);
 
-  const urlVisualizar = fotoActual ? fotoActual.url : archivoDataUrl;
+  const aplicarParametroAntiCache = (url?: string) => {
+    if (!url || url.startsWith("data:")) return url;
+    if (url.includes("t=")) return url;
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}t=${new Date().getTime()}`;
+  };
+
+  const urlBase = fotoActual ? fotoActual.url : archivoDataUrl;
+  const urlVisualizar = aplicarParametroAntiCache(urlBase);
   const nombreDescargar = fotoActual ? fotoActual.nombre : nombreArchivo;
 
   return (

@@ -97,19 +97,6 @@ export const CUENTAS_FICTICIAS: (PerfilUsuario & {
     password_hash: HASH_DEFECTO_BCRYPT,
     requiereCambioPassword: false,
     requiere_cambio_password: false
-  },
-  {
-    id: "b59d95b6-75da-48cb-a827-0cf4957e8c4c",
-    username: "planeacion.franco",
-    email: "planeacion.prueba@franco.co",
-    nombreCompleto: "Arq. Diana Morales (Planeación y Auditoría)",
-    rol: "planeacion",
-    activo: true,
-    creadoEn: "2026-09-01T08:00:00Z",
-    passwordHash: HASH_DEFECTO_BCRYPT,
-    password_hash: HASH_DEFECTO_BCRYPT,
-    requiereCambioPassword: false,
-    requiere_cambio_password: false
   }
 ];
 

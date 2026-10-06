@@ -43,7 +43,8 @@ import {
   Phone,
   KeyRound,
   Printer,
-  RefreshCw
+  RefreshCw,
+  Download
 } from "lucide-react";
 import { supabase } from "./utils/supabaseClient";
 import {
@@ -256,6 +257,7 @@ export default function App() {
   const [guardandoEnvioRevision, setGuardandoEnvioRevision] = useState<boolean>(false);
   const [guardandoAprobacionFase2, setGuardandoAprobacionFase2] = useState<boolean>(false);
   const [tabCaptacion, setTabCaptacion] = useState<"activos" | "convertidos" | "todos">("todos");
+  const [tabExpedientes, setTabExpedientes] = useState<"activos" | "retirados" | "todos">("activos");
   const [filtroTextoCaptacion, setFiltroTextoCaptacion] = useState("");
   const [filtroMunicipioCaptacion, setFiltroMunicipioCaptacion] = useState("");
   const [filtroOrigenCaptacion, setFiltroOrigenCaptacion] = useState("");
@@ -569,6 +571,15 @@ export default function App() {
     }
   };
 
+  // Generador de URL con parámetro anti-caché para forzar reactividad en el navegador
+  const obtenerUrlConAntiCache = (url?: string): string => {
+    if (!url) return "";
+    if (url.startsWith("data:")) return url;
+    if (url.includes("t=")) return url;
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}t=${new Date().getTime()}`;
+  };
+
   // Ajustar pestaña de requisitos según la fase actual activa del expediente (Cambio 2)
   useEffect(() => {
     if (detalleExp?.expediente) {
@@ -610,10 +621,11 @@ export default function App() {
       if (!res.ok) {
         throw new Error(data.error || "No fue posible aprobar el rechazo.");
       }
-      mostrarToast(data.mensaje || "Rechazo aprobado. Expediente en Salida Definitiva.");
+      mostrarToast(data.mensaje || "Rechazo aprobado. Expediente trasladado a Retirados / Histórico.");
       setModalAprobarRechazoHogar(false);
       await cargarDetalleExpediente(detalleExp.expediente.id);
       await cargarExpedientes();
+      setTabExpedientes("retirados");
     } catch (err: any) {
       mostrarToast(err.message, "error");
     } finally {
@@ -762,7 +774,7 @@ export default function App() {
   };
 
   const cargarExpedientes = (): Promise<void> => {
-    return authFetch("/api/expedientes")
+    return authFetch(`/api/expedientes?t=${Date.now()}`)
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) {
@@ -777,7 +789,7 @@ export default function App() {
   const cargarInteresados = (): Promise<void> => {
     const rolesAutorizados = ["comercial", "administrador", "planeacion", "supervisor", "asistente"];
     if (!currentUser || !rolesAutorizados.includes(currentUser.rol)) return Promise.resolve();
-    return authFetch("/api/interesados")
+    return authFetch(`/api/interesados?t=${Date.now()}`)
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) {
@@ -790,19 +802,23 @@ export default function App() {
   };
 
   const cargarDetalleExpediente = (id: string): Promise<any> => {
-    return authFetch(`/api/expedientes/${id}`)
+    return authFetch(`/api/expedientes/${id}?t=${Date.now()}`)
       .then((res) => res.json())
       .then((data) => {
-        setDetalleExp(data);
+        if (data && data.expediente) {
+          setDetalleExp({ ...data });
+        } else {
+          setDetalleExp(data);
+        }
         if (data?.expediente) {
           const compAprob = data.expediente.validacionCompensar?.estadoActual === "aprobado";
           const faseEfectiva = compAprob && data.expediente.faseActual < 4 ? 4 : (data.expediente.faseActual || 1);
-          // Bloqueo de retroceso: asegura que al consultar el expediente se posicione en la fase activa
+          // Bloqueo de retroceso: asegura que al consultar el expediente se posicione en la fase activa (excepto admin y planeacion que tienen visibilidad libre)
           setTabRequisitos((prev) => {
-            if (currentUser?.rol !== "administrador") {
+            if (currentUser?.rol !== "administrador" && currentUser?.rol !== "planeacion") {
               return faseEfectiva;
             }
-            return prev && prev <= faseEfectiva ? prev : faseEfectiva;
+            return prev || faseEfectiva;
           });
         }
         return data;
@@ -1558,6 +1574,33 @@ export default function App() {
         }
       }
 
+      // Si el cliente supabase de frontend está disponible, asegurar subida directa a Storage en Supabase
+      let publicStorageUrl: string | undefined = undefined;
+      if (supabase) {
+        try {
+          const timestampSubida = new Date().getTime();
+          const rutaStorageFrontend = `expedientes/${expedienteSeleccionadoId}/${requisito.codigoRequisito}_v${timestampSubida}_${archivoParaCargar.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+          const { error: storageErr } = await supabase.storage
+            .from("expedientes-archivos")
+            .upload(rutaStorageFrontend, archivoParaCargar, {
+              upsert: true,
+              contentType: archivoParaCargar.type || "application/pdf"
+            });
+          if (storageErr) {
+            console.warn("[STORAGE CLIENT UPLOAD]:", storageErr.message);
+          } else {
+            const { data: pubData } = supabase.storage
+              .from("expedientes-archivos")
+              .getPublicUrl(rutaStorageFrontend);
+            if (pubData?.publicUrl) {
+              publicStorageUrl = `${pubData.publicUrl}?t=${timestampSubida}`;
+            }
+          }
+        } catch (storageErr) {
+          console.warn("[STORAGE CLIENT UPLOAD]:", storageErr);
+        }
+      }
+
       // Convertir archivo a Data URL base64 real
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -1578,7 +1621,7 @@ export default function App() {
             nombreArchivo: archivoParaCargar.name,
             mimeType: archivoParaCargar.type || "application/pdf",
             tamanoBytes: archivoParaCargar.size,
-            archivoDataUrl: dataUrl,
+            archivoDataUrl: publicStorageUrl || dataUrl,
             sha256Hash,
             codigoRequisito: requisito.codigoRequisito,
             fase: requisito.fase,
@@ -1591,6 +1634,7 @@ export default function App() {
         setModalSubirArchivoReq(null);
         setArchivoSeleccionadoSubir(null);
         mostrarToast(`Documento "${archivoParaCargar.name}" cargado exitosamente.`);
+        // Forzar re-fetch inmediato y reactivo de la lista de documentos y estado del expediente
         await cargarDetalleExpediente(expedienteSeleccionadoId);
         await cargarExpedientes();
       } else {
@@ -2153,8 +2197,25 @@ export default function App() {
     ])
   );
 
-  // Filtrado de expedientes (Cambio 1: Filtro Fase, Cambio 7: Filtro Responsable y Tiempo)
+  // Contadores para pestañas de expedientes (Activos vs Retirados / Histórico)
+  const conteoExpedientesActivos = useMemo(() => {
+    return expedientes.filter((e) => e.estadoGeneral !== "salida_definitiva").length;
+  }, [expedientes]);
+
+  const conteoExpedientesRetirados = useMemo(() => {
+    return expedientes.filter((e) => e.estadoGeneral === "salida_definitiva").length;
+  }, [expedientes]);
+
+  // Filtrado de expedientes (Cambio 1: Filtro Fase, Cambio 7: Filtro Responsable y Tiempo, Flujo de Retiro)
   const expedientesFiltrados = expedientes.filter((exp) => {
+    // 1. Filtrado estricto por pestaña de navegación: Activos excluye 'salida_definitiva'
+    if (tabExpedientes === "activos" && exp.estadoGeneral === "salida_definitiva") {
+      return false;
+    }
+    if (tabExpedientes === "retirados" && exp.estadoGeneral !== "salida_definitiva") {
+      return false;
+    }
+
     const texto = filtroTexto.toLowerCase();
     const munInfo = CATALOGO_MUNICIPIOS.find(
       (m) =>
@@ -2691,6 +2752,79 @@ export default function App() {
               </div>
             </div>
 
+            {/* PESTAÑAS PRINCIPALES: ACTIVOS vs RETIRADOS / HISTÓRICO vs TODOS */}
+            <div className="flex items-center space-x-2 mb-4 border-b border-slate-200">
+              <button
+                type="button"
+                onClick={() => {
+                  setTabExpedientes("activos");
+                  if (filtroEstado === "salida_definitiva") setFiltroEstado("");
+                }}
+                className={`pb-2.5 px-3.5 text-xs font-bold border-b-2 transition-all flex items-center space-x-2 cursor-pointer -mb-[1px] ${
+                  tabExpedientes === "activos"
+                    ? "border-[#3F7D58] text-[#285943]"
+                    : "border-transparent text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                <span>Expedientes Activos</span>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    tabExpedientes === "activos"
+                      ? "bg-[#EBF3EE] text-[#285943] border border-[#3F7D58]/30"
+                      : "bg-slate-100 text-slate-600"
+                  }`}
+                >
+                  {conteoExpedientesActivos}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setTabExpedientes("retirados");
+                }}
+                className={`pb-2.5 px-3.5 text-xs font-bold border-b-2 transition-all flex items-center space-x-2 cursor-pointer -mb-[1px] ${
+                  tabExpedientes === "retirados"
+                    ? "border-rose-600 text-rose-700"
+                    : "border-transparent text-slate-500 hover:text-rose-700"
+                }`}
+              >
+                <span>Retirados / Histórico</span>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    tabExpedientes === "retirados"
+                      ? "bg-rose-100 text-rose-800 border border-rose-300"
+                      : "bg-slate-100 text-slate-600"
+                  }`}
+                >
+                  {conteoExpedientesRetirados}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setTabExpedientes("todos");
+                }}
+                className={`pb-2.5 px-3.5 text-xs font-bold border-b-2 transition-all flex items-center space-x-2 cursor-pointer -mb-[1px] ${
+                  tabExpedientes === "todos"
+                    ? "border-blue-600 text-blue-700"
+                    : "border-transparent text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                <span>Todos</span>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    tabExpedientes === "todos"
+                      ? "bg-blue-100 text-blue-800 border border-blue-200"
+                      : "bg-slate-100 text-slate-600"
+                  }`}
+                >
+                  {expedientes.length}
+                </span>
+              </button>
+            </div>
+
             {/* BARRA DE BÚSQUEDA Y FILTROS (Cambio 1: Filtro Fase, Cambio 7: Filtro Responsable y Tiempo) */}
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs mb-6 space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -2738,7 +2872,15 @@ export default function App() {
                 <div>
                   <select
                     value={filtroEstado}
-                    onChange={(e) => setFiltroEstado(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFiltroEstado(val);
+                      if (val === "salida_definitiva" && tabExpedientes === "activos") {
+                        setTabExpedientes("retirados");
+                      } else if (val && val !== "salida_definitiva" && tabExpedientes === "retirados") {
+                        setTabExpedientes("activos");
+                      }
+                    }}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg outline-none focus:border-blue-500 text-slate-700 bg-white"
                   >
                     <option value="">Todos los estados</option>
@@ -4059,7 +4201,7 @@ export default function App() {
 
               return (
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs mb-6">
-                  {/* PESTAÑAS DE NAVEGACIÓN ENTRE FASES (1 A 7) — BLOQUEO ESTRICTO DE RETROCESO */}
+                  {/* PESTAÑAS DE NAVEGACIÓN ENTRE FASES (1 A 7) — BLOQUEO ESTRICTO DE RETROCESO (EXCEPTO ADMIN Y PLANEACIÓN) */}
                   <div className="flex items-center gap-2 border-b border-slate-200 mb-6 pb-0 overflow-x-auto scroll-smooth">
                     {fasesConfig.map((f) => {
                       const reqsDeEstaFase = detalleExp.requisitos.filter((r) => (f.num === 1 ? r.fase === 1 || !r.fase : r.fase === f.num));
@@ -4070,16 +4212,26 @@ export default function App() {
                       const esFaseAnterior = f.num < faseEfectivaActual;
                       const esFaseFutura = f.num > faseEfectivaActual;
 
+                      const esPlaneacion = currentUser.rol === "planeacion";
+                      const esAdmin = currentUser.rol === "administrador";
+
                       // Regla de Negocio VRD: Fase activa habilitada; si Compensar aprobó Fase 3, Fase 4 está habilitada;
                       // los administradores pueden consultar fases previas para auditoría.
+                      // El rol Planeación tiene acceso total e irrestricto a todas las fases (sin bloqueo visual) para auditoría y descarga.
                       const estaHabilitada =
+                        esPlaneacion ||
                         esFaseActual ||
                         (f.num === 4 && validacionCompensarAprobada) ||
-                        (currentUser.rol === "administrador" && f.num <= faseEfectivaActual);
+                        (esAdmin && f.num <= faseEfectivaActual);
                       const esSeleccionada = tabRequisitos === f.num;
                       const aceptados = reqsDeEstaFase.filter((r) => r.estado === "aceptado").length;
 
                       const getBadgeTexto = () => {
+                        if (esPlaneacion) {
+                          if (esFaseActual) return "Fase Activa";
+                          if (esFaseFutura) return "Auditoría";
+                          return "Histórico";
+                        }
                         if (esFaseAnterior) return "Cerrada / Bloqueada";
                         if (esFaseFutura) return "Bloqueada";
                         if (f.num === 6) {
@@ -4107,7 +4259,7 @@ export default function App() {
                           disabled={!estaHabilitada}
                           onClick={async () => {
                             if (estaHabilitada) {
-                              if (f.num === 4 && validacionCompensarAprobada && detalleExp.expediente.faseActual < 4) {
+                              if (f.num === 4 && validacionCompensarAprobada && detalleExp.expediente.faseActual < 4 && !esPlaneacion) {
                                 try {
                                   await authFetch(`/api/expedientes/${detalleExp.expediente.id}/compensar/avanzar-fase4`, { method: "POST" });
                                   await cargarDetalleExpediente(detalleExp.expediente.id);
@@ -4120,8 +4272,10 @@ export default function App() {
                             }
                           }}
                           title={
-                            esFaseAnterior
-                              ? (currentUser.rol === "administrador" 
+                            esPlaneacion
+                              ? `Fase ${f.num}: ${f.label} (Visibilidad total de auditoría y descarga - Solo Lectura)`
+                              : esFaseAnterior
+                              ? (esAdmin 
                                   ? "Fase superada y cerrada (Auditoría Administrativa)" 
                                   : "Fase completada y bloqueada. No está permitido retroceder entre fases.")
                               : esFaseFutura && !(f.num === 4 && validacionCompensarAprobada)
@@ -4137,14 +4291,16 @@ export default function App() {
                           }`}
                         >
                           <div className="flex items-center space-x-1.5">
-                            {((esFaseAnterior && currentUser.rol !== "administrador") || (esFaseFutura && !(f.num === 4 && validacionCompensarAprobada))) && (
+                            {!esPlaneacion && ((esFaseAnterior && !esAdmin) || (esFaseFutura && !(f.num === 4 && validacionCompensarAprobada))) && (
                               <Lock className={`w-3.5 h-3.5 ${esFaseAnterior ? "text-slate-400" : "text-slate-300"}`} />
                             )}
                             <span>{f.label}</span>
                           </div>
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                              esFaseAnterior
+                              esPlaneacion
+                                ? (esSeleccionada ? "bg-teal-100 text-teal-800 border border-teal-200" : "bg-slate-100 text-slate-600")
+                                : esFaseAnterior
                                 ? "bg-slate-100 text-slate-500 border border-slate-200"
                                 : esFaseFutura
                                 ? "bg-slate-100 text-slate-400"
@@ -4411,7 +4567,7 @@ export default function App() {
                                       tamanoBytes: req.documentoAsociado!.versionActual!.tamanoBytes,
                                       subidoPor: req.documentoAsociado!.versionActual!.subidoPorNombre,
                                       subidoEn: req.documentoAsociado!.versionActual!.subidoEn,
-                                      archivoDataUrl: req.documentoAsociado!.versionActual!.archivoDataUrl,
+                                      archivoDataUrl: obtenerUrlConAntiCache(req.documentoAsociado!.versionActual!.archivoDataUrl),
                                       fotos: req.documentoAsociado!.versionActual!.fotos
                                     });
                                   }}
@@ -4422,8 +4578,20 @@ export default function App() {
                                 </button>
                               )}
 
+                              {/* Descargar directamente con anti-caché */}
+                              {req.documentoAsociado?.versionActual && (
+                                <a
+                                  href={obtenerUrlConAntiCache(req.documentoAsociado.versionActual.archivoDataUrl)}
+                                  download={req.documentoAsociado.versionActual.nombreArchivoOriginal}
+                                  className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors border border-slate-200 cursor-pointer"
+                                  title="Descargar documento directamente"
+                                >
+                                  <Download className="w-4 h-4" />
+                                </a>
+                              )}
+
                               {/* Cargar / Reemplazar en Fase 1 según Rol y Estado de Revisión */}
-                              {!esSalidaDefinitiva && (() => {
+                              {!esSalidaDefinitiva && currentUser.rol !== "planeacion" && (() => {
                                 const puedeCargar = currentUser.rol === "administrador" ||
                                   currentUser.rol === "supervisor" ||
                                   (!detalleExp.expediente.bloqueadoPorRevision && (currentUser.rol === "comercial" || currentUser.rol === "asistente"));
@@ -4794,7 +4962,7 @@ export default function App() {
                                             tamanoBytes: req.documentoAsociado!.versionActual!.tamanoBytes,
                                             subidoPor: req.documentoAsociado!.versionActual!.subidoPorNombre,
                                             subidoEn: req.documentoAsociado!.versionActual!.subidoEn,
-                                            archivoDataUrl: req.documentoAsociado!.versionActual!.archivoDataUrl,
+                                            archivoDataUrl: obtenerUrlConAntiCache(req.documentoAsociado!.versionActual!.archivoDataUrl),
                                             fotos: req.documentoAsociado!.versionActual!.fotos
                                           });
                                         }}
@@ -4805,8 +4973,20 @@ export default function App() {
                                       </button>
                                     )}
 
+                                    {/* Descargar directamente con anti-caché */}
+                                    {req.documentoAsociado?.versionActual && (
+                                      <a
+                                        href={obtenerUrlConAntiCache(req.documentoAsociado.versionActual.archivoDataUrl)}
+                                        download={req.documentoAsociado.versionActual.nombreArchivoOriginal}
+                                        className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors border border-slate-200 cursor-pointer"
+                                        title="Descargar documento directamente"
+                                      >
+                                        <Download className="w-4 h-4" />
+                                      </a>
+                                    )}
+
                                     {/* ASISTENTE O ADMIN: CARGAR / REEMPLAZAR DOCUMENTO (Y COMERCIAL EN FASE 1) */}
-                                    {!esSalidaDefinitiva && (() => {
+                                    {!esSalidaDefinitiva && currentUser.rol !== "planeacion" && (() => {
                                       const puedeCargarF2 = currentUser.rol === "administrador" ||
                                         currentUser.rol === "supervisor" ||
                                         (!detalleExp.expediente.bloqueadoPorRevision && (currentUser.rol === "asistente" || (currentUser.rol === "comercial" && (req.fase === 1 || !req.fase || req.origenFase1))));
@@ -4892,7 +5072,7 @@ export default function App() {
                   {/* CONTENIDO PESTAÑA 3: VALIDACIÓN COMPENSAR (CAMBIO 5) */}
                   {tabRequisitos === 3 && (
                     <div>
-                      {detalleExp.expediente.faseActual < 3 ? (
+                      {detalleExp.expediente.faseActual < 3 && currentUser.rol !== "planeacion" ? (
                         <div className="p-6 bg-amber-50/70 border border-amber-200 rounded-xl text-amber-900 flex items-start space-x-3.5">
                           <Lock className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
                           <div>
@@ -4929,7 +5109,7 @@ export default function App() {
                   {/* CONTENIDO PESTAÑA 4: GESTIÓN DE 3 FRENTES EN PARALELO + PRESUPUESTO OFICIAL APU */}
                   {tabRequisitos === 4 && (
                     <div>
-                      {detalleExp.expediente.faseActual < 4 && detalleExp.expediente.validacionCompensar?.estadoActual !== "aprobado" ? (
+                      {detalleExp.expediente.faseActual < 4 && detalleExp.expediente.validacionCompensar?.estadoActual !== "aprobado" && currentUser.rol !== "planeacion" ? (
                         <div className="p-6 bg-amber-50/70 border border-amber-200 rounded-xl text-amber-900 flex items-start space-x-3.5">
                           <Lock className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
                           <div>
@@ -4960,7 +5140,7 @@ export default function App() {
                   {/* CONTENIDO PESTAÑA 5: SEGUIMIENTO DE TRÁMITE DE LICENCIA DE CONSTRUCCIÓN (MUNICIPAL / CURADURÍA) */}
                   {tabRequisitos === 5 && (
                     <div>
-                      {detalleExp.expediente.faseActual < 5 ? (
+                      {detalleExp.expediente.faseActual < 5 && currentUser.rol !== "planeacion" ? (
                         <div className="p-6 bg-amber-50/70 border border-amber-200 rounded-xl text-amber-900 flex items-start space-x-3.5">
                           <Lock className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
                           <div>
@@ -5016,7 +5196,7 @@ export default function App() {
                   {/* CONTENIDO PESTAÑA 6: EN POSTULACIÓN (COMPENSAR E INDICACIÓN DE INICIO DE OBRA) */}
                   {tabRequisitos === 6 && (
                     <div>
-                      {detalleExp.expediente.faseActual < 6 ? (
+                      {detalleExp.expediente.faseActual < 6 && currentUser.rol !== "planeacion" ? (
                         <div className="p-6 bg-amber-50/70 border border-amber-200 rounded-xl text-amber-900 flex items-start space-x-3.5">
                           <Lock className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
                           <div>
@@ -5050,7 +5230,7 @@ export default function App() {
                   {/* CONTENIDO PESTAÑA 7: EN CONSTRUCCIÓN Y COBRO SUBSIDIO (OBRA Y LIQUIDACIÓN) */}
                   {tabRequisitos >= 7 && (
                     <div>
-                      {detalleExp.expediente.faseActual < tabRequisitos ? (
+                      {detalleExp.expediente.faseActual < tabRequisitos && currentUser.rol !== "planeacion" ? (
                         <div className="p-6 bg-amber-50/70 border border-amber-200 rounded-xl text-amber-900 flex items-start space-x-3.5">
                           <Lock className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
                           <div>
@@ -5210,7 +5390,7 @@ export default function App() {
                                             tamanoBytes: req.documentoAsociado!.versionActual!.tamanoBytes,
                                             subidoPor: req.documentoAsociado!.versionActual!.subidoPorNombre,
                                             subidoEn: req.documentoAsociado!.versionActual!.subidoEn,
-                                            archivoDataUrl: req.documentoAsociado!.versionActual!.archivoDataUrl,
+                                            archivoDataUrl: obtenerUrlConAntiCache(req.documentoAsociado!.versionActual!.archivoDataUrl),
                                             fotos: req.documentoAsociado!.versionActual!.fotos
                                           });
                                         }}
@@ -5221,7 +5401,19 @@ export default function App() {
                                       </button>
                                     )}
 
-                                    {!esSalidaDefinitiva && (currentUser.rol === "asistente" || currentUser.rol === "administrador" || currentUser.rol === "ingenieria") && (
+                                    {/* Descargar directamente con anti-caché */}
+                                    {req.documentoAsociado?.versionActual && (
+                                      <a
+                                        href={obtenerUrlConAntiCache(req.documentoAsociado.versionActual.archivoDataUrl)}
+                                        download={req.documentoAsociado.versionActual.nombreArchivoOriginal}
+                                        className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors border border-slate-200 cursor-pointer"
+                                        title="Descargar documento directamente"
+                                      >
+                                        <Download className="w-4 h-4" />
+                                      </a>
+                                    )}
+
+                                    {!esSalidaDefinitiva && currentUser.rol !== "planeacion" && (currentUser.rol === "asistente" || currentUser.rol === "administrador" || currentUser.rol === "ingenieria") && (
                                       !detalleExp.expediente.bloqueadoPorRevision || currentUser.rol === "administrador" ? (
                                         <button
                                           type="button"
@@ -7491,6 +7683,26 @@ export default function App() {
           requisitos={detalleExp.requisitos}
           onCerrar={() => setMostrarFichaImprimible(false)}
         />
+      )}
+
+      {/* OVERLAY DE CARGA Y SINCRONIZACIÓN DE ARCHIVO (REACTIVIDAD Y BLOQUEO DE INTERACCIÓN) */}
+      {subiendoArchivo && (
+        <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 border border-slate-200 max-w-sm w-full text-center space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="inline-flex p-3 bg-emerald-50 text-emerald-600 rounded-full">
+              <Loader2 className="w-8 h-8 animate-spin" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-slate-900">Sincronizando archivo y documento...</h4>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                Guardando en Supabase Storage y actualizando el historial inmutable en versiones_documento. Por favor espere.
+              </p>
+            </div>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div className="bg-emerald-600 h-1.5 rounded-full animate-pulse w-3/4"></div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* TOAST FLOTANTE */}
