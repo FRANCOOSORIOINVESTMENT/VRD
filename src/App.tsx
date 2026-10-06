@@ -794,13 +794,15 @@ export default function App() {
       .then((res) => res.json())
       .then((data) => {
         setDetalleExp(data);
-        if (data?.expediente?.faseActual) {
+        if (data?.expediente) {
+          const compAprob = data.expediente.validacionCompensar?.estadoActual === "aprobado";
+          const faseEfectiva = compAprob && data.expediente.faseActual < 4 ? 4 : (data.expediente.faseActual || 1);
           // Bloqueo de retroceso: asegura que al consultar el expediente se posicione en la fase activa
           setTabRequisitos((prev) => {
             if (currentUser?.rol !== "administrador") {
-              return data.expediente.faseActual;
+              return faseEfectiva;
             }
-            return prev && prev <= data.expediente.faseActual ? prev : data.expediente.faseActual;
+            return prev && prev <= faseEfectiva ? prev : faseEfectiva;
           });
         }
         return data;
@@ -2312,7 +2314,7 @@ export default function App() {
             )}
 
             {/* Formulario */}
-            <form onSubmit={handleLogin} className="space-y-4">
+            <form onSubmit={handleLogin} className="space-y-4" autoComplete="off">
               {/* Campo Usuario */}
               <div>
                 <label
@@ -2333,7 +2335,7 @@ export default function App() {
                     className="w-full h-12 pl-10 pr-4 text-sm bg-white border border-slate-200 rounded-xl focus:border-[#3F7D58] focus:ring-4 focus:ring-[#3F7D58]/10 hover:border-slate-300 outline-none transition-all duration-200 text-slate-800 placeholder:text-slate-400 font-medium shadow-2xs"
                     placeholder="Usuario institucional"
                     required
-                    autoComplete="username"
+                    autoComplete="off"
                   />
                 </div>
               </div>
@@ -2358,7 +2360,7 @@ export default function App() {
                     className="w-full h-12 pl-10 pr-11 text-sm bg-white border border-slate-200 rounded-xl focus:border-[#3F7D58] focus:ring-4 focus:ring-[#3F7D58]/10 hover:border-slate-300 outline-none transition-all duration-200 text-slate-800 placeholder:text-slate-400 font-medium shadow-2xs"
                     placeholder="••••••••"
                     required
-                    autoComplete="current-password"
+                    autoComplete="new-password"
                   />
                   <button
                     type="button"
@@ -4061,13 +4063,19 @@ export default function App() {
                   <div className="flex items-center gap-2 border-b border-slate-200 mb-6 pb-0 overflow-x-auto scroll-smooth">
                     {fasesConfig.map((f) => {
                       const reqsDeEstaFase = detalleExp.requisitos.filter((r) => (f.num === 1 ? r.fase === 1 || !r.fase : r.fase === f.num));
-                      const esFaseActual = detalleExp.expediente.faseActual === f.num;
-                      const esFaseAnterior = f.num < detalleExp.expediente.faseActual;
-                      const esFaseFutura = f.num > detalleExp.expediente.faseActual;
+                      const validacionCompensarAprobada = detalleExp.expediente.validacionCompensar?.estadoActual === "aprobado";
+                      const faseEfectivaActual = validacionCompensarAprobada && detalleExp.expediente.faseActual < 4 ? 4 : detalleExp.expediente.faseActual;
 
-                      // Regla de Negocio VRD: Al avanzar de fase, las fases previas y futuras quedan estrictamente bloqueadas.
-                      // La navegación se mantiene fija y exclusiva en la fase activa en curso.
-                      const estaHabilitada = esFaseActual;
+                      const esFaseActual = faseEfectivaActual === f.num;
+                      const esFaseAnterior = f.num < faseEfectivaActual;
+                      const esFaseFutura = f.num > faseEfectivaActual;
+
+                      // Regla de Negocio VRD: Fase activa habilitada; si Compensar aprobó Fase 3, Fase 4 está habilitada;
+                      // los administradores pueden consultar fases previas para auditoría.
+                      const estaHabilitada =
+                        esFaseActual ||
+                        (f.num === 4 && validacionCompensarAprobada) ||
+                        (currentUser.rol === "administrador" && f.num <= faseEfectivaActual);
                       const esSeleccionada = tabRequisitos === f.num;
                       const aceptados = reqsDeEstaFase.filter((r) => r.estado === "aceptado").length;
 
@@ -4097,8 +4105,17 @@ export default function App() {
                           key={f.num}
                           type="button"
                           disabled={!estaHabilitada}
-                          onClick={() => {
+                          onClick={async () => {
                             if (estaHabilitada) {
+                              if (f.num === 4 && validacionCompensarAprobada && detalleExp.expediente.faseActual < 4) {
+                                try {
+                                  await authFetch(`/api/expedientes/${detalleExp.expediente.id}/compensar/avanzar-fase4`, { method: "POST" });
+                                  await cargarDetalleExpediente(detalleExp.expediente.id);
+                                  await cargarExpedientes();
+                                } catch (e) {
+                                  console.error("Error avanzando formalmente a fase 4:", e);
+                                }
+                              }
                               setTabRequisitos(f.num);
                             }
                           }}
@@ -4107,7 +4124,7 @@ export default function App() {
                               ? (currentUser.rol === "administrador" 
                                   ? "Fase superada y cerrada (Auditoría Administrativa)" 
                                   : "Fase completada y bloqueada. No está permitido retroceder entre fases.")
-                              : esFaseFutura
+                              : esFaseFutura && !(f.num === 4 && validacionCompensarAprobada)
                               ? "Fase bloqueada. Requiere completar la fase activa precedente."
                               : `Fase activa en gestión (${f.label})`
                           }
@@ -4120,7 +4137,7 @@ export default function App() {
                           }`}
                         >
                           <div className="flex items-center space-x-1.5">
-                            {(esFaseAnterior || esFaseFutura) && (
+                            {((esFaseAnterior && currentUser.rol !== "administrador") || (esFaseFutura && !(f.num === 4 && validacionCompensarAprobada))) && (
                               <Lock className={`w-3.5 h-3.5 ${esFaseAnterior ? "text-slate-400" : "text-slate-300"}`} />
                             )}
                             <span>{f.label}</span>
@@ -4895,10 +4912,14 @@ export default function App() {
                           currentUser={currentUser}
                           onAbrirVisor={(docData) => setDocVisorData(docData)}
                           onSubirDocumento={handleAbrirModalSubir}
-                          onActualizarExpediente={async () => {
+                          onActualizarExpediente={async (nuevaFase?: number) => {
                             await cargarDetalleExpediente(detalleExp.expediente.id);
                             await cargarExpedientes();
+                            if (nuevaFase) {
+                              setTabRequisitos(nuevaFase);
+                            }
                           }}
+                          onNavegarAFase={(fase) => setTabRequisitos(fase)}
                           authFetch={authFetch}
                         />
                       )}
@@ -4908,7 +4929,7 @@ export default function App() {
                   {/* CONTENIDO PESTAÑA 4: GESTIÓN DE 3 FRENTES EN PARALELO + PRESUPUESTO OFICIAL APU */}
                   {tabRequisitos === 4 && (
                     <div>
-                      {detalleExp.expediente.faseActual < 4 ? (
+                      {detalleExp.expediente.faseActual < 4 && detalleExp.expediente.validacionCompensar?.estadoActual !== "aprobado" ? (
                         <div className="p-6 bg-amber-50/70 border border-amber-200 rounded-xl text-amber-900 flex items-start space-x-3.5">
                           <Lock className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
                           <div>

@@ -405,7 +405,7 @@ export async function createApp(): Promise<express.Express> {
       integrantes
     };
 
-    return {
+    const expBase: Expediente = {
       id: row.id,
       codigoVisible: row.codigo_visible || `EXP-${String(row.id).slice(0, 8).toUpperCase()}`,
       interesadoOrigenId: row.interesado_origen_id,
@@ -421,8 +421,31 @@ export async function createApp(): Promise<express.Express> {
       actualizadoEn: row.actualizado_en || row.creado_en,
       postulante,
       predioVivienda,
-      hogar
-    } as Expediente;
+      hogar,
+      bloqueadoPorRevision: Boolean(row.bloqueado_por_revision),
+      faseEnRevision: row.fase_en_revision || undefined,
+      motivoDevolucionFase: row.motivo_devolucion_fase || undefined,
+      revisionFases: row.revision_fases || {},
+      estadoFase1: row.estado_fase1 || "en_preparacion",
+      estadoFase2: row.estado_fase2 || "en_preparacion",
+      observacionDevolucionFase2: row.observacion_devolucion_fase2 || undefined,
+      validacionCompensar: row.validacion_compensar || undefined,
+      gestionFase4: row.gestion_fase4 || undefined,
+      tramiteLicencia: row.tramite_licencia || undefined,
+      postulacionSubsidio: row.postulacion_subsidio || undefined,
+      gestionFase7: row.gestion_fase7 || undefined,
+      solicitudRechazo: row.solicitud_rechazo || undefined,
+      historialSolicitudesRechazo: row.historial_solicitudes_rechazo || [],
+      subsanacionFase3Activa: Boolean(row.subsanacion_fase3_activa),
+      subsanacionFase3Estado: row.subsanacion_fase3_estado || undefined
+    };
+
+    if (expBase.validacionCompensar?.estadoActual === "aprobado" && expBase.faseActual < 4) {
+      expBase.faseActual = 4;
+      expBase.bloqueadoPorRevision = false;
+    }
+
+    return expBase;
   }
 
   // Helper para inicializar los 11 documentos oficiales de Fase 2
@@ -1158,6 +1181,16 @@ export async function createApp(): Promise<express.Express> {
                 if (row.fase_actual) expExistente.faseActual = Number(row.fase_actual);
                 if (row.estado_general) expExistente.estadoGeneral = row.estado_general;
                 if (row.actualizado_en) expExistente.actualizadoEn = row.actualizado_en;
+                if (row.validacion_compensar) expExistente.validacionCompensar = row.validacion_compensar;
+                if (row.gestion_fase4) expExistente.gestionFase4 = row.gestion_fase4;
+                if (row.tramite_licencia) expExistente.tramiteLicencia = row.tramite_licencia;
+                if (row.postulacion_subsidio) expExistente.postulacionSubsidio = row.postulacion_subsidio;
+                if (row.gestion_fase7) expExistente.gestionFase7 = row.gestion_fase7;
+                if (row.bloqueado_por_revision !== undefined) expExistente.bloqueadoPorRevision = Boolean(row.bloqueado_por_revision);
+                if (expExistente.validacionCompensar?.estadoActual === "aprobado" && expExistente.faseActual < 4) {
+                  expExistente.faseActual = 4;
+                  expExistente.bloqueadoPorRevision = false;
+                }
                 if (row.postulante) {
                   if (row.postulante.telefono_principal) expExistente.postulante.telefonoPrincipal = row.postulante.telefono_principal;
                   if (row.postulante.correo) expExistente.postulante.correo = row.postulante.correo;
@@ -1776,6 +1809,16 @@ export async function createApp(): Promise<express.Express> {
               if (row.fase_actual) expExistente.faseActual = Number(row.fase_actual);
               if (row.estado_general) expExistente.estadoGeneral = row.estado_general;
               if (row.actualizado_en) expExistente.actualizadoEn = row.actualizado_en;
+              if (row.validacion_compensar) expExistente.validacionCompensar = row.validacion_compensar;
+              if (row.gestion_fase4) expExistente.gestionFase4 = row.gestion_fase4;
+              if (row.tramite_licencia) expExistente.tramiteLicencia = row.tramite_licencia;
+              if (row.postulacion_subsidio) expExistente.postulacionSubsidio = row.postulacion_subsidio;
+              if (row.gestion_fase7) expExistente.gestionFase7 = row.gestion_fase7;
+              if (row.bloqueado_por_revision !== undefined) expExistente.bloqueadoPorRevision = Boolean(row.bloqueado_por_revision);
+              if (expExistente.validacionCompensar?.estadoActual === "aprobado" && expExistente.faseActual < 4) {
+                expExistente.faseActual = 4;
+                expExistente.bloqueadoPorRevision = false;
+              }
               if (row.postulante) {
                 if (row.postulante.telefono_principal) expExistente.postulante.telefonoPrincipal = row.postulante.telefono_principal;
                 if (row.postulante.correo) expExistente.postulante.correo = row.postulante.correo;
@@ -2645,6 +2688,14 @@ export async function createApp(): Promise<express.Express> {
     if (!exp) {
       res.status(404).json({ error: "Expediente no encontrado." });
       return;
+    }
+
+    // Si la validación de Compensar ya fue aprobada, asegurar que la fase sea al menos 4
+    if (exp.validacionCompensar?.estadoActual === "aprobado" && exp.faseActual < 4) {
+      exp.faseActual = 4;
+      exp.bloqueadoPorRevision = false;
+      inicializarFase4(exp);
+      sincronizarExpedienteEnSupabase(exp);
     }
 
     // Si el expediente ya está en Fase 2 o superior y no tiene requisitos de Fase 2, inicializarlos
@@ -4886,6 +4937,7 @@ export async function createApp(): Promise<express.Express> {
         exp.actualizadoEn = new Date().toISOString();
 
         inicializarFase4(exp);
+        sincronizarExpedienteEnSupabase(exp);
 
         mockDb.tareas.push({
           id: `tar-f4-${Date.now()}`,
@@ -5217,12 +5269,12 @@ export async function createApp(): Promise<express.Express> {
     }
   );
 
-  // 15.3 Avanzar a Fase 4 desde Fase 3 Aprobada (Supervisor, Administrador)
+  // 15.3 Avanzar a Fase 4 desde Fase 3 Aprobada (Comercial, Asistente, Ingeniería, Supervisor, Administrador)
   app.post(
     "/api/expedientes/:id/compensar/avanzar-fase4",
-    requireAuth(["supervisor", "administrador"]),
+    requireAuth(["comercial", "asistente", "ingenieria", "supervisor", "administrador", "planeacion"]),
     (req: AuthRequest, res: Response) => {
-      const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
+      const exp = mockDb.expedientes.find((e) => e.id === req.params.id || e.codigoVisible === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
         return;
@@ -5234,7 +5286,10 @@ export async function createApp(): Promise<express.Express> {
       }
 
       exp.faseActual = 4;
+      exp.bloqueadoPorRevision = false;
       exp.actualizadoEn = new Date().toISOString();
+      inicializarFase4(exp);
+      sincronizarExpedienteEnSupabase(exp);
 
       mockDb.notas.push({
         id: `not-fase4-${Date.now()}`,
@@ -5242,11 +5297,11 @@ export async function createApp(): Promise<express.Express> {
         autorId: req.user!.id,
         autorNombre: req.user!.nombreCompleto,
         tipo: "hito",
-        contenido: `Fase 3 (En Validación Inicial Compensar) concluida y avalada por el Supervisor ${req.user!.nombreCompleto}. El expediente avanzó a Fase 4: En Recolección de Documentos Técnicos.`,
+        contenido: `Fase 3 (En Validación Inicial Compensar) concluida y avalada por ${req.user!.nombreCompleto}. El expediente avanzó a Fase 4: En Recolección de Documentos Técnicos.`,
         creadoEn: new Date().toISOString()
       });
 
-      res.json({ success: true, expediente: exp });
+      res.json({ success: true, expediente: exp, mensaje: "Expediente transferido con éxito a Fase 4." });
     }
   );
 

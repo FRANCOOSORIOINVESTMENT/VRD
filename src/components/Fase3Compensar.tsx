@@ -50,7 +50,8 @@ interface Fase3CompensarProps {
     fotoInicialIndex?: number;
   }) => void;
   onSubirDocumento?: (req: RequisitoCaso) => void;
-  onActualizarExpediente: () => Promise<void>;
+  onActualizarExpediente: (nuevaFase?: number) => Promise<void>;
+  onNavegarAFase?: (fase: number) => void;
   authFetch: (url: string, options?: RequestInit) => Promise<Response>;
 }
 
@@ -61,6 +62,7 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
   onAbrirVisor,
   onSubirDocumento,
   onActualizarExpediente,
+  onNavegarAFase,
   authFetch
 }) => {
   const validacion = expediente.validacionCompensar;
@@ -363,11 +365,43 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
       }
 
       setModalRespuesta(false);
-      await onActualizarExpediente();
+      if (tipoResultado === "aprobado") {
+        if (onNavegarAFase) onNavegarAFase(4);
+        await onActualizarExpediente(4);
+      } else {
+        await onActualizarExpediente();
+      }
     } catch (err: any) {
       setErrorRespuesta(err.message || "Error al registrar la respuesta.");
     } finally {
       setGuardandoRespuesta(false);
+    }
+  };
+
+  const [avanzandoFase4, setAvanzandoFase4] = useState<boolean>(false);
+
+  const handleAvanzarFase4 = async () => {
+    setAvanzandoFase4(true);
+    try {
+      const res = await authFetch(`/api/expedientes/${expediente.id}/compensar/avanzar-fase4`, {
+        method: "POST"
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        console.warn("[AVANCE FASE 4 AVISO]:", data.error);
+      }
+      if (onNavegarAFase) {
+        onNavegarAFase(4);
+      }
+      await onActualizarExpediente(4);
+    } catch (err: any) {
+      console.warn("[AVANCE FASE 4 FALLBACK]:", err.message);
+      if (onNavegarAFase) {
+        onNavegarAFase(4);
+      }
+      await onActualizarExpediente(4);
+    } finally {
+      setAvanzandoFase4(false);
     }
   };
 
@@ -432,11 +466,23 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
               </button>
             )}
 
-            {/* CAMBIO 7: Cierre automático al aprobar. Ya no se requiere autorización del Analista Documental */}
+            {/* CAMBIO 7: Cierre automático al aprobar. Botón para avanzar a Fase 4 */}
             {estadoActual === "aprobado" && (
-              <div className="text-xs text-emerald-800 bg-emerald-100 border border-emerald-300 px-3.5 py-2 rounded-lg font-semibold flex items-center space-x-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Validación Aprobada por Compensar • Expediente Transferido a Fase 4</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="text-xs text-emerald-800 bg-emerald-100 border border-emerald-300 px-3.5 py-2 rounded-lg font-semibold flex items-center space-x-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Validación Aprobada por Compensar • Expediente Transferido a Fase 4</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleAvanzarFase4}
+                  disabled={avanzandoFase4}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-lg text-xs font-bold transition-all shadow-sm flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                  title="Continuar a la Fase 4: Recolección de Documentos Técnicos"
+                >
+                  <span>{avanzandoFase4 ? "Accediendo a Fase 4..." : "Continuar a Fase 4: Gestión Técnica"}</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
               </div>
             )}
           </div>
