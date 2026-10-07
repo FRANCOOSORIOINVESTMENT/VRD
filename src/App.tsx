@@ -44,7 +44,8 @@ import {
   KeyRound,
   Printer,
   RefreshCw,
-  Download
+  Download,
+  Sparkles
 } from "lucide-react";
 import { supabase } from "./utils/supabaseClient";
 import {
@@ -799,6 +800,26 @@ export default function App() {
       .catch((err) => {
         console.error("[CARGA INTERESADOS ERROR]:", err);
       });
+  };
+
+  const [cargandoCasosEjemplo, setCargandoCasosEjemplo] = useState<boolean>(false);
+
+  const handleGenerarCasosEjemplo = async () => {
+    setCargandoCasosEjemplo(true);
+    try {
+      const res = await authFetch("/api/admin/crear-casos-ejemplo", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        mostrarToast(data.mensaje || "Se han generado los 7 casos de ejemplo (uno por fase) con éxito.", "exito");
+        await cargarExpedientes();
+      } else {
+        mostrarToast(data.error || "Error al generar casos de ejemplo", "error");
+      }
+    } catch (err: any) {
+      mostrarToast("Error de conexión al generar casos de ejemplo", "error");
+    } finally {
+      setCargandoCasosEjemplo(false);
+    }
   };
 
   const cargarDetalleExpediente = (id: string): Promise<any> => {
@@ -2740,6 +2761,17 @@ export default function App() {
                 </p>
               </div>
               <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={handleGenerarCasosEjemplo}
+                  disabled={cargandoCasosEjemplo}
+                  className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-[#285943] hover:bg-[#1E4332] active:bg-[#163326] text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                  title="Generar o actualizar un caso de ejemplo para cada una de las 7 fases operativas"
+                >
+                  <Sparkles className={`w-4 h-4 ${cargandoCasosEjemplo ? "animate-spin" : ""}`} />
+                  <span>{cargandoCasosEjemplo ? "Generando..." : "Casos de Ejemplo (Fases 1 a 7)"}</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => window.print()}

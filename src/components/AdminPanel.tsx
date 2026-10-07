@@ -53,7 +53,8 @@ import {
   ExternalLink,
   Terminal,
   Trash2,
-  Loader2
+  Loader2,
+  Sparkles
 } from "lucide-react";
 
 interface AdminPanelProps {
@@ -176,6 +177,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       mostrarToast("Error de conexión al limpiar expedientes", "error");
     } finally {
       setCargandoLimpieza(false);
+    }
+  };
+
+  const [cargandoCasosEjemplo, setCargandoCasosEjemplo] = useState<boolean>(false);
+
+  const ejecutarCrearCasosEjemplo = async () => {
+    setCargandoCasosEjemplo(true);
+    try {
+      const res = await fetch("/api/admin/crear-casos-ejemplo", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${currentUser.id}`
+        }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        mostrarToast(data.mensaje || "Se han generado los 7 casos de ejemplo (uno por fase) con éxito.", "exito");
+        cargarDatos();
+      } else {
+        mostrarToast(data.error || "Error al generar casos de ejemplo", "error");
+      }
+    } catch (err: any) {
+      mostrarToast("Error de conexión al generar casos de ejemplo", "error");
+    } finally {
+      setCargandoCasosEjemplo(false);
     }
   };
 
@@ -1565,6 +1592,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   >
                     <Download className={`w-3.5 h-3.5 ${cargandoSeed ? "animate-spin" : ""}`} />
                     <span>{cargandoSeed ? "Sincronizando..." : "Poblar Municipios y Usuarios"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={ejecutarCrearCasosEjemplo}
+                    disabled={cargandoCasosEjemplo}
+                    className="px-3.5 py-2 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                    title="Crea automáticamente 7 expedientes de ejemplo realistas, uno para cada fase operativa (Fase 1 a Fase 7)"
+                  >
+                    <Sparkles className={`w-3.5 h-3.5 ${cargandoCasosEjemplo ? "animate-spin" : ""}`} />
+                    <span>{cargandoCasosEjemplo ? "Generando..." : "Generar Casos de Ejemplo (Fases 1 a 7)"}</span>
                   </button>
 
                   <button

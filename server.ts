@@ -71,6 +71,7 @@ import {
 } from "./src/types";
 import { CATALOGO_MUNICIPIOS } from "./src/data/municipios";
 import { normalizarTextoNombre, construirNombreCompleto } from "./src/utils/normalizacion";
+import { generarCasosEjemploParaCadaFase } from "./src/server/seedCasosEjemplo";
 
 interface AuthRequest extends Request {
   user?: PerfilUsuario & {
@@ -8692,6 +8693,27 @@ export async function createApp(): Promise<express.Express> {
       });
     } catch (err: any) {
       res.status(500).json({ error: "Error al limpiar expedientes de prueba: " + (err?.message || "error desconocido") });
+    }
+  });
+
+  // 2.11 Generar o poblar casos de ejemplo para cada una de las 7 fases operativas
+  app.post("/api/admin/crear-casos-ejemplo", requireAuth(["administrador", "planeacion", "supervisor", "comercial", "asistente", "ingenieria"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const resultado = await generarCasosEjemploParaCadaFase(supabaseAdmin, mockDb);
+      res.json(resultado);
+    } catch (err: any) {
+      console.error("[CASOS EJEMPLO ERROR]:", err?.message);
+      res.status(500).json({ error: "Error al generar casos de ejemplo: " + (err?.message || "error desconocido") });
+    }
+  });
+
+  app.get("/api/admin/crear-casos-ejemplo", requireAuth(["administrador", "planeacion", "supervisor", "comercial", "asistente", "ingenieria"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const resultado = await generarCasosEjemploParaCadaFase(supabaseAdmin, mockDb);
+      res.json(resultado);
+    } catch (err: any) {
+      console.error("[CASOS EJEMPLO ERROR]:", err?.message);
+      res.status(500).json({ error: "Error al generar casos de ejemplo: " + (err?.message || "error desconocido") });
     }
   });
 
