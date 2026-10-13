@@ -437,10 +437,10 @@ export async function createApp(): Promise<express.Express> {
       postulacionSubsidio: row.postulacion_subsidio || undefined,
       gestionFase7: row.gestion_fase7 || undefined,
       solicitudRechazo: row.solicitud_rechazo || undefined,
-      historialSolicitudesRechazo: row.historial_solicitudes_rechazo || [],
       subsanacionFase3Activa: Boolean(row.subsanacion_fase3_activa),
-      subsanacionFase3Estado: row.subsanacion_fase3_estado || undefined
-    };
+      subsanacionFase3Estado: row.subsanacion_fase3_estado || undefined,
+      _persistidoEnSupabase: true
+    } as Expediente;
 
     if (expBase.validacionCompensar?.estadoActual === "aprobado" && expBase.faseActual < 4) {
       expBase.faseActual = 4;
@@ -1191,10 +1191,11 @@ export async function createApp(): Promise<express.Express> {
         actualizado_en: new Date().toISOString()
       };
 
-      const { error } = await supabaseAdmin
+      const { data: updated, error } = await supabaseAdmin
         .from("expedientes")
         .update(payload)
-        .eq("codigo_visible", exp.codigoVisible);
+        .eq("codigo_visible", exp.codigoVisible)
+        .select("id");
 
       if (error) {
         console.error(`[SUPABASE]: Error actualizando expediente ${exp.codigoVisible} por código:`, error.message);
@@ -1204,8 +1205,22 @@ export async function createApp(): Promise<express.Express> {
             .update(payload)
             .eq("id", exp.id);
         }
-      } else {
+      } else if (updated && updated.length > 0) {
+        (exp as any)._persistidoEnSupabase = true;
         console.log(`[SUPABASE]: Expediente ${exp.codigoVisible} sincronizado en PostgreSQL (Fase ${exp.faseActual}).`);
+      } else {
+        // Si no se encontró por código visible, intentar por UUID
+        if (exp.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
+          const { data: updatedById } = await supabaseAdmin
+            .from("expedientes")
+            .update(payload)
+            .eq("id", exp.id)
+            .select("id");
+          if (updatedById && updatedById.length > 0) {
+            (exp as any)._persistidoEnSupabase = true;
+            console.log(`[SUPABASE]: Expediente ${exp.codigoVisible} (${exp.id}) sincronizado por UUID.`);
+          }
+        }
       }
     } catch (e: any) {
       console.error("[SUPABASE]: Excepción sincronizando expediente:", e?.message);
@@ -1498,9 +1513,16 @@ export async function createApp(): Promise<express.Express> {
               }
             }
 
-            // Preservar expedientes locales y remotos evitando descarte de datos
+            // Sincronizar eliminaciones: Si Supabase retornó los registros de la base de datos,
+            // purgar de la memoria viva aquellos expedientes que fueron eliminados de Supabase
             mockDb.expedientes = mockDb.expedientes.filter((e) => {
-              return Boolean(e && (e.id || e.codigoVisible));
+              if (!e) return false;
+              const esUuid = Boolean(e.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(e.id));
+              const vinoDeDb = Boolean((e as any)._persistidoEnSupabase);
+              if (esUuid || vinoDeDb) {
+                return idsEnDb.has(e.id) || (e.codigoVisible && codigosEnDb.has(e.codigoVisible));
+              }
+              return Boolean(e.id || e.codigoVisible);
             });
           }
         } catch (dbErr: any) {
@@ -2148,9 +2170,16 @@ export async function createApp(): Promise<express.Express> {
             }
           }
 
-          // 1.3 Preservar expedientes locales y remotos para evitar pérdidas de datos
+          // 1.3 Sincronizar eliminaciones: Si Supabase retornó los registros de la base de datos,
+          // purgar de la memoria viva aquellos expedientes que fueron eliminados de Supabase
           mockDb.expedientes = mockDb.expedientes.filter((e) => {
-            return Boolean(e && (e.id || e.codigoVisible));
+            if (!e) return false;
+            const esUuid = Boolean(e.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(e.id));
+            const vinoDeDb = Boolean((e as any)._persistidoEnSupabase);
+            if (esUuid || vinoDeDb) {
+              return idsEnDb.has(e.id) || (e.codigoVisible && codigosEnDb.has(e.codigoVisible));
+            }
+            return Boolean(e.id || e.codigoVisible);
           });
         }
       } catch (dbErr: any) {
@@ -3104,6 +3133,69 @@ export async function createApp(): Promise<express.Express> {
       notas,
       tareas,
       salida: eventoSalida ? { ...eventoSalida, carta: cartaSalida } : null
+    });
+  });
+
+  // 6.1 ELIMINACIÓN DE EXPEDIENTE (SOLO ADMINISTRADOR O SUPERVISOR)
+  app.delete("/api/expedientes/:id", requireAuth(["administrador", "supervisor"]), async (req: AuthRequest, res: Response) => {
+    const targetId = req.params.id;
+    const expIndex = mockDb.expedientes.findIndex((e) => e.id === targetId || e.codigoVisible === targetId);
+
+    if (expIndex === -1 && !supabaseAdmin) {
+      res.status(404).json({ error: "Expediente no encontrado para eliminar." });
+      return;
+    }
+
+    const expEliminar = expIndex !== -1 ? mockDb.expedientes[expIndex] : null;
+    const expId = expEliminar?.id || targetId;
+    const codigoVisible = expEliminar?.codigoVisible || targetId;
+
+    let supabaseEliminado = false;
+    let supabaseErrorMsg: string | null = null;
+
+    // 1. Eliminar en Supabase (tabla expedientes con CASCADE elimina requisitos, versiones, eventos, etc.)
+    if (supabaseAdmin) {
+      try {
+        const { error: sbDelErr } = await supabaseAdmin
+          .from("expedientes")
+          .delete()
+          .or(`id.eq.${expId},codigo_visible.eq.${codigoVisible}`);
+
+        if (sbDelErr) {
+          supabaseErrorMsg = sbDelErr.message;
+          console.error(`[SUPABASE DELETE ERROR]: Error eliminando expediente ${codigoVisible}:`, sbDelErr.message);
+        } else {
+          supabaseEliminado = true;
+          console.log(`[SUPABASE DELETE SUCCESS]: Expediente ${codigoVisible} (UUID ${expId}) eliminado de la base de datos PostgreSQL.`);
+        }
+      } catch (err: any) {
+        supabaseErrorMsg = err?.message;
+        console.error(`[SUPABASE DELETE EXCEPTION]:`, err?.message);
+      }
+    }
+
+    // 2. Eliminar de memoria viva mockDb
+    if (expIndex !== -1) {
+      mockDb.expedientes.splice(expIndex, 1);
+    }
+    mockDb.requisitosCaso = mockDb.requisitosCaso.filter((r) => r.expedienteId !== expId && r.expedienteId !== targetId);
+    mockDb.notas = mockDb.notas.filter((n) => n.expedienteId !== expId && n.expedienteId !== targetId);
+    mockDb.eventosSalida = mockDb.eventosSalida.filter((s) => s.expedienteId !== expId && s.expedienteId !== targetId);
+
+    // 3. Restaurar estado de interesado origen si existía
+    if (expEliminar?.interesadoOrigenId) {
+      const interesado = mockDb.interesados.find((i) => i.id === expEliminar.interesadoOrigenId);
+      if (interesado) {
+        interesado.convertidoAExpedienteId = undefined;
+        interesado.estadoComercial = "contacto_inicial";
+      }
+    }
+
+    res.json({
+      ok: true,
+      mensaje: `Expediente ${codigoVisible} eliminado exitosamente del sistema.`,
+      supabaseEliminado,
+      supabaseErrorMsg
     });
   });
 
