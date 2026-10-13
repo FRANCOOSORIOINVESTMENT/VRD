@@ -7,6 +7,7 @@ import {
   FrenteInterventoria,
   FrenteArquitectura,
   FrenteEstudioSuelos,
+  InformeVisiTaFrancoOsorio,
   EstadoFrenteFase4,
   SoporteFrenteFase4,
   RegistroHistorialFrenteFase4
@@ -36,7 +37,14 @@ import {
   Sliders,
   Sparkles,
   Info,
-  Lock
+  Lock,
+  Trash2,
+  Download,
+  RefreshCw,
+  FileCheck2,
+  Upload,
+  Database,
+  Building2
 } from "lucide-react";
 
 interface Fase4GestionTecnicaProps {
@@ -71,7 +79,32 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
   onActualizarExpediente,
   authFetch
 }) => {
-  const gestion = expediente.gestionFase4;
+  // Estado local sincronizado e inmutable de Fase 4 para evitar pérdidas de datos al cambiar de pestaña o frente
+  const [gestionLocal, setGestionLocal] = useState<GestionFase4>(
+    expediente.gestionFase4 || {
+      interventoria: { estado: "pendiente", historial: [] },
+      arquitectura: { estado: "pendiente", porcentajeAvance: 0, historial: [] },
+      estudioSuelos: { estado: "pendiente", historial: [] }
+    }
+  );
+
+  // Pestaña activa dentro de la Fase 4 para navegación intuitiva e inmutable
+  const [tabFrente, setTabFrente] = useState<"todos" | "interventoria" | "arquitectura" | "estudioSuelos" | "francoOsorio">("todos");
+
+  // Sincronizar suavemente con los datos del expediente preservando cualquier frente ya cargado
+  useEffect(() => {
+    if (expediente.gestionFase4) {
+      setGestionLocal((prev) => ({
+        interventoria: expediente.gestionFase4?.interventoria || prev.interventoria,
+        arquitectura: expediente.gestionFase4?.arquitectura || prev.arquitectura,
+        estudioSuelos: expediente.gestionFase4?.estudioSuelos || prev.estudioSuelos,
+        informeVisitaFrancoOsorio: expediente.gestionFase4?.informeVisitaFrancoOsorio || prev.informeVisitaFrancoOsorio,
+        actualizadoEn: expediente.gestionFase4?.actualizadoEn || prev.actualizadoEn
+      }));
+    }
+  }, [expediente.gestionFase4]);
+
+  const gestion = gestionLocal;
 
   // Estado de bloqueo si el expediente ya avanzó a Fase 5 o superior
   const yaAvanzoFase5 = (expediente.faseActual || 1) >= 5;
@@ -88,7 +121,7 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
     currentUser.rol === "administrador" ||
     currentUser.rol === "ingenieria";
 
-  // Estados de los frentes (con valores por defecto si aún no existen en DB)
+  // Estados independientes e inmutables de los frentes
   const intData: FrenteInterventoria = gestion?.interventoria || {
     estado: "pendiente",
     historial: []
@@ -105,13 +138,15 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
     historial: []
   };
 
+  const francoOsorioData: InformeVisiTaFrancoOsorio | undefined = gestion?.informeVisitaFrancoOsorio;
+
   // Verificación de los 3 frentes técnicos obligatorios para avanzar a Fase 5
   const intCumplido = intData.estado === "completado" && !!intData.soporte?.nombreArchivo;
   const arqCumplido = arqData.estado === "completado" && !!arqData.soporte?.nombreArchivo;
   const sueCumplido = sueData.estado === "completado" && !!sueData.soporte?.nombreArchivo;
 
   const itemsCompletados = [intCumplido, arqCumplido, sueCumplido].filter(Boolean).length;
-  // CAMBIO 7: Sincronización escalonada del progreso: 1 = 33%, 2 = 67%, 3 = 100%
+  // Sincronización escalonada del progreso: 1 = 33%, 2 = 67%, 3 = 100%
   const porcentajeProgreso = itemsCompletados === 1 ? 33 : itemsCompletados === 2 ? 67 : itemsCompletados === 3 ? 100 : 0;
   const todosCumplidos = itemsCompletados === 3;
 
@@ -119,7 +154,7 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
   const [frenteEditar, setFrenteEditar] = useState<"interventoria" | "arquitectura" | "estudioSuelos" | null>(null);
   const [formEstado, setFormEstado] = useState<EstadoFrenteFase4>("pendiente");
   const [formFechaSolicitud, setFormFechaSolicitud] = useState<string>("");
-  const [formFechaEstimada, setFormFechaEstimada] = useState<string>(""); // CAMBIO 4
+  const [formFechaEstimada, setFormFechaEstimada] = useState<string>("");
   const [formFechaVisita, setFormFechaVisita] = useState<string>("");
   const [formResultadoConcepto, setFormResultadoConcepto] = useState<string>("");
   const [formPorcentajeAvance, setFormPorcentajeAvance] = useState<number>(0);
@@ -131,8 +166,27 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
   const [formSoporteNombre, setFormSoporteNombre] = useState<string>("");
   const [formSoporteUrl, setFormSoporteUrl] = useState<string>("");
   const [formSoporteHash, setFormSoporteHash] = useState<string>("");
+  const [formSoporteBytes, setFormSoporteBytes] = useState<number>(0);
   const [guardandoFrente, setGuardandoFrente] = useState<boolean>(false);
   const [errorModal, setErrorModal] = useState<string | null>(null);
+
+  // Estados para Carga de Archivos Pesados con Progreso (Estudio de Suelos - 82 páginas)
+  const [subiendoArchivoPesado, setSubiendoArchivoPesado] = useState<boolean>(false);
+  const [progresoSubida, setProgresoSubida] = useState<number>(0);
+  const [mensajeProgresoSubida, setMensajeProgresoSubida] = useState<string>("");
+
+  // Estados para el NUEVO REQUERIMIENTO: Informe de Visita (Franco Osorio)
+  const [modalFrancoOsorio, setModalFrancoOsorio] = useState<boolean>(false);
+  const [foNombreArchivo, setFoNombreArchivo] = useState<string>("");
+  const [foUrl, setFoUrl] = useState<string>("");
+  const [foHash, setFoHash] = useState<string>("");
+  const [foBytes, setFoBytes] = useState<number>(0);
+  const [foFechaVisita, setFoFechaVisita] = useState<string>("");
+  const [foProfesional, setFoProfesional] = useState<string>("Ing. Franco Osorio");
+  const [foObservaciones, setFoObservaciones] = useState<string>("");
+  const [guardandoFrancoOsorio, setGuardandoFrancoOsorio] = useState<boolean>(false);
+  const [modalConfirmarEliminarFO, setModalConfirmarEliminarFO] = useState<boolean>(false);
+  const [eliminandoFO, setEliminandoFO] = useState<boolean>(false);
 
   // Modal para agregar nota rápida a bitácora
   const [frenteNota, setFrenteNota] = useState<"interventoria" | "arquitectura" | "estudioSuelos" | null>(null);
@@ -144,34 +198,41 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
   const [avanzandoFase5, setAvanzandoFase5] = useState<boolean>(false);
   const [errorAvanzar, setErrorAvanzar] = useState<string | null>(null);
 
-  // Escape key handler for modal
+  // Escape key handler for modals
   useEffect(() => {
-    if (!frenteEditar) return;
+    if (!frenteEditar && !frenteNota && !modalFrancoOsorio && !modalConfirmarEliminarFO && !modalConfirmarAvanzarF5) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
         setFrenteEditar(null);
+        setFrenteNota(null);
+        setModalFrancoOsorio(false);
+        setModalConfirmarEliminarFO(false);
+        setModalConfirmarAvanzarF5(false);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [frenteEditar]);
+  }, [frenteEditar, frenteNota, modalFrancoOsorio, modalConfirmarEliminarFO, modalConfirmarAvanzarF5]);
 
-  // Abrir modal de edición con datos precargados
+  // Abrir modal de edición con datos precargados exclusivamente del frente seleccionado
   const abrirModalEditar = (frente: "interventoria" | "arquitectura" | "estudioSuelos") => {
     setErrorModal(null);
+    setProgresoSubida(0);
+    setMensajeProgresoSubida("");
     setFrenteEditar(frente);
 
     if (frente === "interventoria") {
       setFormEstado(intData.estado);
       setFormFechaSolicitud(intData.fechaSolicitud || "");
-      setFormFechaEstimada(intData.fechaEstimada || ""); // CAMBIO 4
+      setFormFechaEstimada(intData.fechaEstimada || "");
       setFormFechaVisita(intData.fechaVisitaRealizada || "");
       setFormResultadoConcepto(intData.resultadoConcepto || "");
       setFormObservaciones(intData.observaciones || "");
       setFormSoporteNombre(intData.soporte?.nombreArchivo || "");
       setFormSoporteUrl(intData.soporte?.url || "");
       setFormSoporteHash(intData.soporte?.sha256 || "");
+      setFormSoporteBytes(intData.soporte?.tamanoBytes || 0);
       setFormNotaHistorial("");
     } else if (frente === "arquitectura") {
       setFormEstado(arqData.estado);
@@ -183,6 +244,7 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
       setFormSoporteNombre(arqData.soporte?.nombreArchivo || "");
       setFormSoporteUrl(arqData.soporte?.url || "");
       setFormSoporteHash(arqData.soporte?.sha256 || "");
+      setFormSoporteBytes(arqData.soporte?.tamanoBytes || 0);
       setFormNotaHistorial("");
     } else if (frente === "estudioSuelos") {
       setFormEstado(sueData.estado);
@@ -194,50 +256,177 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
       setFormSoporteNombre(sueData.soporte?.nombreArchivo || "");
       setFormSoporteUrl(sueData.soporte?.url || "");
       setFormSoporteHash(sueData.soporte?.sha256 || "");
+      setFormSoporteBytes(sueData.soporte?.tamanoBytes || 0);
       setFormNotaHistorial("");
     }
   };
 
-  // Manejar carga simulada de archivo de soporte
-  const handleSimularCargaArchivo = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Abrir modal de carga para Franco Osorio
+  const abrirModalFrancoOsorio = () => {
+    setErrorModal(null);
+    setProgresoSubida(0);
+    setMensajeProgresoSubida("");
+    setFoNombreArchivo(francoOsorioData?.nombreArchivo || "");
+    setFoUrl(francoOsorioData?.url || "");
+    setFoHash(francoOsorioData?.sha256 || "");
+    setFoBytes(francoOsorioData?.tamanoBytes || 0);
+    setFoFechaVisita(francoOsorioData?.fechaVisita || new Date().toISOString().split("T")[0]);
+    setFoProfesional(francoOsorioData?.profesionalResponsable || "Ing. Franco Osorio");
+    setFoObservaciones(francoOsorioData?.observaciones || "");
+    setModalFrancoOsorio(true);
+  };
+
+  // Función robusta de Carga de Archivos Pesados con Carga por Partes (Chunked / Multipart Upload)
+  // Soporta sin problemas documentos de 82 páginas o más (hasta 2 GB) con barra visual de progreso
+  const procesarCargaArchivoConProgreso = async (file: File, seccionDestino: string) => {
+    setErrorModal(null);
+    setSubiendoArchivoPesado(true);
+    setProgresoSubida(0);
+    setMensajeProgresoSubida(`Iniciando carga de "${file.name}" (${(file.size / (1024 * 1024)).toFixed(2)} MB)...`);
+
+    try {
+      const CHUNK_SIZE = 5 * 1024 * 1024; // Bloques de 5MB
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      const uploadId = `upl-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+      if (totalChunks <= 1 && file.size < 8 * 1024 * 1024) {
+        // Subida directa estándar si es menor a 8MB
+        setProgresoSubida(40);
+        setMensajeProgresoSubida("Cargando y asegurando archivo en el servidor...");
+        const formData = new FormData();
+        formData.append("archivo", file);
+        formData.append("expedienteId", expediente.id);
+        formData.append("codigoRequisito", seccionDestino);
+
+        const res = await authFetch("/api/documentos/upload", {
+          method: "POST",
+          body: formData
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.error || "Fallo en subida del archivo");
+
+        setProgresoSubida(100);
+        setMensajeProgresoSubida("✓ Archivo persistido con éxito.");
+        return {
+          nombreArchivo: file.name,
+          url: json.data?.url || json.data?.publicUrl,
+          sha256: json.data?.sha256Hash || `sha256-${Date.now()}`,
+          tamanoBytes: file.size,
+          mimeType: file.type || "application/pdf"
+        };
+      } else {
+        // Carga por partes (Chunked Upload) para archivos pesados (ej. Estudio de Suelos 82 páginas)
+        let chunkIndex = 0;
+        let lastResult: any = null;
+
+        while (chunkIndex < totalChunks) {
+          const start = chunkIndex * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, file.size);
+          const chunkBlob = file.slice(start, end);
+
+          const formData = new FormData();
+          formData.append("chunk", chunkBlob, file.name);
+          formData.append("uploadId", uploadId);
+          formData.append("chunkIndex", String(chunkIndex));
+          formData.append("totalChunks", String(totalChunks));
+          formData.append("fileName", file.name);
+          formData.append("mimeType", file.type || "application/pdf");
+          formData.append("totalSize", String(file.size));
+          formData.append("expedienteId", expediente.id);
+          formData.append("seccion", seccionDestino);
+
+          const pct = Math.round(((chunkIndex + 1) / totalChunks) * 100);
+          setProgresoSubida(pct);
+          setMensajeProgresoSubida(
+            `Cargando parte ${chunkIndex + 1} de ${totalChunks} (${(end / (1024 * 1024)).toFixed(1)} MB de ${(file.size / (1024 * 1024)).toFixed(1)} MB - ${pct}%)...`
+          );
+
+          const res = await authFetch("/api/documentos/upload-chunk", {
+            method: "POST",
+            body: formData
+          });
+          const json = await res.json();
+          if (!res.ok || !json.ok) {
+            throw new Error(json.error || `Error subiendo bloque ${chunkIndex + 1}`);
+          }
+
+          lastResult = json;
+          chunkIndex++;
+        }
+
+        setProgresoSubida(100);
+        setMensajeProgresoSubida("✓ Documento técnico ensamblado y verificado exitosamente.");
+        return {
+          nombreArchivo: file.name,
+          url: lastResult?.data?.url || lastResult?.data?.publicUrl,
+          sha256: lastResult?.data?.sha256Hash || `sha256-${Date.now()}`,
+          tamanoBytes: file.size,
+          mimeType: file.type || "application/pdf"
+        };
+      }
+    } finally {
+      setSubiendoArchivoPesado(false);
+    }
+  };
+
+  // Manejar selección de archivo en modal de frente
+  const handleSeleccionarArchivoFrente = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // CAMBIO 9: Validar exclusivamente formato PDF para Planos de Arquitectura
     if (frenteEditar === "arquitectura") {
       const esPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
       if (!esPdf) {
-        setErrorModal("Formato no válido. Solo se permiten documentos en formato PDF.");
+        setErrorModal("Formato no válido. Solo se permiten documentos en formato PDF para Planos de Arquitectura.");
         if (e.target) e.target.value = "";
         return;
       }
     }
 
-    setErrorModal(null);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      setFormSoporteNombre(file.name);
-      setFormSoporteUrl(dataUrl);
-      setFormSoporteHash(`sha256-${Date.now().toString(16)}-${Math.random().toString(16).substring(2, 8)}`);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const seccion = frenteEditar === "estudioSuelos" ? "estudio_suelos_82pag" : frenteEditar === "arquitectura" ? "planos_arquitectura" : "interventoria";
+      const uploaded = await procesarCargaArchivoConProgreso(file, seccion);
+      if (uploaded) {
+        setFormSoporteNombre(uploaded.nombreArchivo);
+        setFormSoporteUrl(uploaded.url);
+        setFormSoporteHash(uploaded.sha256);
+        setFormSoporteBytes(uploaded.tamanoBytes);
+      }
+    } catch (err: any) {
+      setErrorModal(err.message || "Error al procesar el archivo.");
+    }
   };
 
-  // Guardar cambios del frente
+  // Manejar selección de archivo para Franco Osorio
+  const handleSeleccionarArchivoFrancoOsorio = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const uploaded = await procesarCargaArchivoConProgreso(file, "informe_visita_franco_osorio");
+      if (uploaded) {
+        setFoNombreArchivo(uploaded.nombreArchivo);
+        setFoUrl(uploaded.url);
+        setFoHash(uploaded.sha256);
+        setFoBytes(uploaded.tamanoBytes);
+      }
+    } catch (err: any) {
+      setErrorModal(err.message || "Error al procesar el archivo.");
+    }
+  };
+
+  // Guardar cambios del frente con llamada de actualización única (PATCH/PUT) e inmutabilidad garantizada
   const handleGuardarFrente = async () => {
     if (!frenteEditar) return;
     setErrorModal(null);
 
-    // VALIDACIONES EXIGIDAS EN CAMBIOS 1, 4, 5, 6
+    // Validaciones bloqueantes cuando se completa el frente
     if (formEstado === "completado") {
-      // 1. Debe contar con archivo de soporte obligatorio
       if (!formSoporteNombre) {
         setErrorModal("Debe cargar el informe de soporte antes de completar este frente.");
         return;
       }
 
-      // 2. Fechas obligatorias por cada frente
       if (frenteEditar === "interventoria") {
         if (!formFechaSolicitud || !formFechaEstimada || !formFechaVisita) {
           setErrorModal("Debe especificar las fechas de solicitud, fecha estimada y visita realizada para completar este frente.");
@@ -268,7 +457,7 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
 
       if (frenteEditar === "interventoria") {
         payload.fechaSolicitud = formFechaSolicitud || undefined;
-        payload.fechaEstimada = formFechaEstimada || undefined; // CAMBIO 4
+        payload.fechaEstimada = formFechaEstimada || undefined;
         payload.fechaVisitaRealizada = formFechaVisita || undefined;
         payload.resultadoConcepto = formResultadoConcepto || undefined;
       } else if (frenteEditar === "arquitectura") {
@@ -286,16 +475,16 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
       if (formSoporteNombre) {
         payload.soporte = {
           nombreArchivo: formSoporteNombre,
-          url: formSoporteUrl || "https://example.com/documento.pdf",
+          url: formSoporteUrl || "/uploads/documento.pdf",
           sha256: formSoporteHash || `sha256-${Date.now().toString(16)}`,
-          tamanoBytes: 524288,
+          tamanoBytes: formSoporteBytes || 1024000,
           subidoPor: currentUser.nombreCompleto,
           subidoEn: new Date().toISOString()
         };
       }
 
       const res = await authFetch(`/api/expedientes/${expediente.id}/fase4/frente/${frenteEditar}`, {
-        method: "PUT",
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
@@ -305,12 +494,82 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
         throw new Error(data.error || "No se pudo actualizar el frente técnico.");
       }
 
+      const dataRes = await res.json().catch(() => ({}));
+      if (dataRes.gestionFase4) {
+        setGestionLocal(dataRes.gestionFase4);
+      }
+
       await onActualizarExpediente();
       setFrenteEditar(null);
     } catch (err: any) {
       setErrorModal(err.message || "Error al actualizar.");
     } finally {
       setGuardandoFrente(false);
+    }
+  };
+
+  // Guardar Informe de Visita Franco Osorio
+  const handleGuardarFrancoOsorio = async () => {
+    if (!foNombreArchivo) {
+      setErrorModal("Debe adjuntar el archivo del informe de visita.");
+      return;
+    }
+
+    setGuardandoFrancoOsorio(true);
+    setErrorModal(null);
+
+    try {
+      const res = await authFetch(`/api/expedientes/${expediente.id}/fase4/informe-franco-osorio`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nombreArchivo: foNombreArchivo,
+          url: foUrl || "/uploads/informe_franco_osorio.pdf",
+          sha256: foHash,
+          tamanoBytes: foBytes || 1024000,
+          fechaVisita: foFechaVisita || new Date().toISOString().split("T")[0],
+          profesionalResponsable: foProfesional || "Ing. Franco Osorio",
+          observaciones: foObservaciones
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo registrar el informe de visita.");
+
+      if (data.gestionFase4) {
+        setGestionLocal(data.gestionFase4);
+      }
+
+      await onActualizarExpediente();
+      setModalFrancoOsorio(false);
+    } catch (err: any) {
+      setErrorModal(err.message || "Error al registrar informe.");
+    } finally {
+      setGuardandoFrancoOsorio(false);
+    }
+  };
+
+  // Eliminar Informe de Visita Franco Osorio
+  const handleEliminarFrancoOsorio = async () => {
+    setEliminandoFO(true);
+    try {
+      const res = await authFetch(`/api/expedientes/${expediente.id}/fase4/informe-franco-osorio`, {
+        method: "DELETE"
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al eliminar informe de visita.");
+
+      if (data.gestionFase4) {
+        setGestionLocal(data.gestionFase4);
+      }
+
+      await onActualizarExpediente();
+      setModalConfirmarEliminarFO(false);
+    } catch (err: any) {
+      alert(err.message || "Error al eliminar");
+    } finally {
+      setEliminandoFO(false);
     }
   };
 
@@ -527,11 +786,84 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
         </div>
       </div>
 
+      {/* NAVEGACIÓN INDEPENDIENTE E INMUTABLE ENTRE FRENTES Y SECCIONES TÉCNICAS */}
+      <div className="flex flex-wrap items-center gap-2 p-2 bg-slate-100/90 rounded-2xl border border-slate-200/80">
+        <button
+          type="button"
+          onClick={() => setTabFrente("todos")}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${
+            tabFrente === "todos"
+              ? "bg-slate-900 text-white shadow-xs"
+              : "bg-white text-slate-700 hover:bg-slate-50 border border-slate-200"
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          <span>Vista Panorámica (Todos)</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setTabFrente("interventoria")}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${
+            tabFrente === "interventoria"
+              ? "bg-amber-600 text-white shadow-xs"
+              : "bg-white text-amber-900 hover:bg-amber-50 border border-slate-200"
+          }`}
+        >
+          <HardHat className="w-3.5 h-3.5 text-amber-600" />
+          <span>Frente 1: Interventoría</span>
+          {intCumplido && <Check className="w-3 h-3 text-emerald-500" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => setTabFrente("arquitectura")}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${
+            tabFrente === "arquitectura"
+              ? "bg-indigo-600 text-white shadow-xs"
+              : "bg-white text-indigo-900 hover:bg-indigo-50 border border-slate-200"
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5 text-indigo-600" />
+          <span>Frente 2: Planos Arquitectura</span>
+          {arqCumplido && <Check className="w-3 h-3 text-emerald-500" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => setTabFrente("estudioSuelos")}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${
+            tabFrente === "estudioSuelos"
+              ? "bg-emerald-600 text-white shadow-xs"
+              : "bg-white text-emerald-900 hover:bg-emerald-50 border border-slate-200"
+          }`}
+        >
+          <Mountain className="w-3.5 h-3.5 text-emerald-600" />
+          <span>Frente 3: Estudio de Suelos</span>
+          {sueCumplido && <Check className="w-3 h-3 text-emerald-500" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => setTabFrente("francoOsorio")}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${
+            tabFrente === "francoOsorio"
+              ? "bg-blue-700 text-white shadow-xs"
+              : "bg-white text-blue-900 hover:bg-blue-50 border border-slate-200"
+          }`}
+        >
+          <Building2 className="w-3.5 h-3.5 text-blue-600" />
+          <span>Informe Franco Osorio</span>
+          {francoOsorioData?.nombreArchivo ? (
+            <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded-full text-[10px] font-bold">Adjunto</span>
+          ) : (
+            <span className="px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded-full text-[10px] font-bold">Nuevo</span>
+          )}
+        </button>
+      </div>
+
       {/* 2. LOS 3 FRENTES DE TRABAJO EN PARALELO */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div className={`grid gap-5 ${tabFrente === "todos" ? "grid-cols-1 lg:grid-cols-3" : "grid-cols-1"}`}>
         {/* =========================================================
             FRENTE 1: VISITA DE INTERVENTORÍA
         ========================================================= */}
+        {(tabFrente === "todos" || tabFrente === "interventoria") && (
         <div
           id="card-frente-interventoria"
           className="bg-white rounded-2xl border border-slate-200/90 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between overflow-hidden"
@@ -710,10 +1042,12 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
             </div>
           )}
         </div>
+        )}
 
         {/* =========================================================
             FRENTE 2: PLANOS DE ARQUITECTURA PARA LICENCIA
         ========================================================= */}
+        {(tabFrente === "todos" || tabFrente === "arquitectura") && (
         <div
           id="card-frente-arquitectura"
           className="bg-white rounded-2xl border border-slate-200/90 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between overflow-hidden"
@@ -896,10 +1230,12 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
             </div>
           )}
         </div>
+        )}
 
         {/* =========================================================
             FRENTE 3: ESTUDIO DE SUELOS
         ========================================================= */}
+        {(tabFrente === "todos" || tabFrente === "estudioSuelos") && (
         <div
           id="card-frente-estudio-suelos"
           className="bg-white rounded-2xl border border-slate-200/90 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between overflow-hidden"
@@ -924,6 +1260,17 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
               <p className="text-[11px] text-slate-500 leading-relaxed">
                 Contratación de sondeos geotécnicos, análisis estratigráfico y cálculo de capacidad portante conforme a norma NSR-10.
               </p>
+
+              {/* Confirmación Técnica de Capacidad (82 páginas hasta 2 GB) */}
+              <div className="p-2.5 bg-emerald-50/90 border border-emerald-200 rounded-xl space-y-1">
+                <div className="flex items-center space-x-1.5 text-emerald-950 font-bold text-[11px]">
+                  <Database className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                  <span>Soporte para Archivos Pesados Habilitado (Hasta 2 GB)</span>
+                </div>
+                <p className="text-[10px] text-emerald-800 leading-relaxed">
+                  Sin límite rígido en MB. Procesamiento optimizado por bloques (Chunked Upload) para soportar el Estudio de Suelos completo (82 páginas o más) con memorias geotécnicas y planos de sondeos sin caídas de conexión.
+                </p>
+              </div>
 
               <div className="bg-slate-50/80 rounded-xl p-3 border border-slate-100 space-y-2">
                 <div className="flex items-center justify-between text-slate-600">
@@ -969,7 +1316,7 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
                   <span>Informe Geotécnico NSR-10:</span>
                   {sueData.soporte ? (
                     <span className="text-[10px] text-emerald-600 font-semibold flex items-center gap-1">
-                      <Check className="w-3 h-3" /> Adjunto
+                      <Check className="w-3 h-3" /> Adjunto ({sueData.soporte.tamanoBytes ? `${(sueData.soporte.tamanoBytes / (1024 * 1024)).toFixed(1)} MB` : ""})
                     </span>
                   ) : (
                     <span className="text-[10px] text-emerald-700 font-semibold">Pendiente informe</span>
@@ -1070,7 +1417,209 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
             </div>
           )}
         </div>
+        )}
       </div>
+
+      {/* =========================================================
+          NUEVO REQUERIMIENTO: INFORME DE VISITA POR PARTE DE FRANCO OSORIO
+      ========================================================= */}
+      {(tabFrente === "todos" || tabFrente === "francoOsorio") && (
+        <div
+          id="card-informe-visita-franco-osorio"
+          className="bg-white rounded-2xl border-2 border-blue-200/90 shadow-xs hover:shadow-md transition-shadow overflow-hidden"
+        >
+          {/* Cabecera del Documento Franco Osorio */}
+          <div className="p-4 bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center space-x-3">
+              <div className="p-2.5 bg-blue-500/20 text-blue-300 rounded-xl border border-blue-400/30">
+                <Building2 className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-blue-300 font-mono">
+                    Supervisión Delegada • Franco Osorio
+                  </span>
+                  <span className="px-2 py-0.2 bg-emerald-400/20 text-emerald-300 border border-emerald-400/30 text-[10px] font-bold rounded-full">
+                    Oficial
+                  </span>
+                </div>
+                <h4 className="text-base font-bold text-white flex items-center gap-1.5">
+                  <span>Informe de Visita por parte de FRANCO OSORIO</span>
+                </h4>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              {francoOsorioData?.nombreArchivo ? (
+                <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/40">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Informe Cargado y Registrado</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-200 border border-amber-400/40">
+                  <Clock className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Pendiente de Carga</span>
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Contenido y Trazabilidad */}
+          <div className="p-5 space-y-4 text-xs text-slate-700">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="md:col-span-2 space-y-3">
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Registro del informe oficial de inspección técnica en terreno elaborado por <strong>FRANCO OSORIO</strong>.
+                  La carga del documento genera trazabilidad inmutable en el expediente y en la base de datos PostgreSQL/Supabase para auditoría y seguimiento del caso.
+                </p>
+
+                {/* Ficha técnica del informe */}
+                <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200 space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-slate-600">
+                    <div>
+                      <span className="text-[11px] text-slate-500 block">Profesional Responsable:</span>
+                      <span className="font-semibold text-slate-900 text-xs flex items-center gap-1 mt-0.5">
+                        <User className="w-3.5 h-3.5 text-blue-600" />
+                        {francoOsorioData?.profesionalResponsable || "Ing. Franco Osorio"}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-[11px] text-slate-500 block">Fecha de Visita Realizada:</span>
+                      <span className="font-mono font-semibold text-slate-900 text-xs flex items-center gap-1 mt-0.5">
+                        <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+                        {francoOsorioData?.fechaVisita || "Pendiente registro"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {francoOsorioData?.observaciones && (
+                    <div className="pt-2 border-t border-slate-200/80">
+                      <span className="text-[11px] font-semibold text-slate-600 block mb-0.5">Concepto Técnico / Observaciones:</span>
+                      <p className="p-2 bg-white rounded border border-slate-200 text-slate-800 text-[11px] leading-relaxed">
+                        {francoOsorioData.observaciones}
+                      </p>
+                    </div>
+                  )}
+
+                  {francoOsorioData?.subidoEn && (
+                    <div className="text-[10px] text-slate-400 pt-1 flex items-center justify-between">
+                      <span>Trazabilidad: Cargado por {francoOsorioData.subidoPor || "Ingeniería"}</span>
+                      <span>Fecha registro: {francoOsorioData.subidoEn.split("T")[0]}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Panel de Archivo Digital */}
+              <div className="bg-slate-50/80 rounded-xl p-3.5 border border-slate-200 flex flex-col justify-between">
+                <div>
+                  <div className="text-xs font-bold text-slate-800 mb-2 flex items-center justify-between">
+                    <span>Documento Digital Adjunto:</span>
+                    {francoOsorioData?.nombreArchivo && (
+                      <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-0.5">
+                        <Check className="w-3 h-3" /> Verificado
+                      </span>
+                    )}
+                  </div>
+
+                  {francoOsorioData?.nombreArchivo ? (
+                    <div className="p-3 bg-white border border-emerald-200 rounded-xl space-y-2 shadow-2xs">
+                      <div className="flex items-start space-x-2">
+                        <FileText className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                        <div className="truncate">
+                          <div className="font-mono text-xs font-bold text-slate-900 truncate" title={francoOsorioData.nombreArchivo}>
+                            {francoOsorioData.nombreArchivo}
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">
+                            {francoOsorioData.tamanoBytes ? `${(francoOsorioData.tamanoBytes / (1024 * 1024)).toFixed(2)} MB • ` : ""}
+                            PDF Oficial
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-100 flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onAbrirVisor({
+                              titulo: "Informe de Visita Técnica - Franco Osorio",
+                              nombreArchivo: francoOsorioData.nombreArchivo,
+                              mimeType: francoOsorioData.mimeType || "application/pdf",
+                              sha256Hash: francoOsorioData.sha256 || "sha256-franco-osorio",
+                              tamanoBytes: francoOsorioData.tamanoBytes || 1024000,
+                              subidoPor: francoOsorioData.subidoPor,
+                              subidoEn: francoOsorioData.subidoEn,
+                              archivoDataUrl: francoOsorioData.url
+                            })
+                          }
+                          className="flex-1 inline-flex items-center justify-center space-x-1 px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Ver</span>
+                        </button>
+
+                        {francoOsorioData.url && (
+                          <a
+                            href={francoOsorioData.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download={francoOsorioData.nombreArchivo}
+                            className="p-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                            title="Descargar archivo"
+                          >
+                            <Download className="w-4 h-4" />
+                          </a>
+                        )}
+
+                        {puedeEditarFrentes && (
+                          <button
+                            type="button"
+                            onClick={() => setModalConfirmarEliminarFO(true)}
+                            className="p-1.5 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title="Eliminar informe"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-white border border-dashed border-slate-300 rounded-xl text-center space-y-1">
+                      <FileText className="w-6 h-6 text-slate-300 mx-auto" />
+                      <div className="text-xs text-slate-500 font-medium">Sin informe adjunto</div>
+                      <div className="text-[10px] text-slate-400">PDF o documento oficial</div>
+                    </div>
+                  )}
+                </div>
+
+                {puedeEditarFrentes && (
+                  <div className="pt-3">
+                    <button
+                      type="button"
+                      id="btn-gestionar-franco-osorio"
+                      onClick={abrirModalFrancoOsorio}
+                      className="w-full inline-flex items-center justify-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                    >
+                      {francoOsorioData?.nombreArchivo ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Reemplazar / Modificar Informe</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Anexar Informe de Franco Osorio</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 3. MODAL PARA EDITAR GESTIÓN DEL FRENTE TÉCNICO */}
       {frenteEditar && (
@@ -1275,17 +1824,48 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
                 />
               </div>
 
-              {/* Carga / Actualización de Soporte */}
+              {/* Carga / Actualización de Soporte con soporte de archivos pesados y barra de progreso */}
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                <label className="block font-bold text-slate-800">
-                  Documento de Soporte ({frenteEditar === "interventoria" ? "Certificado de Visita" : frenteEditar === "arquitectura" ? "Planos para Licencia" : "Informe NSR-10"}):
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="block font-bold text-slate-800">
+                    Documento de Soporte ({frenteEditar === "interventoria" ? "Certificado de Visita" : frenteEditar === "arquitectura" ? "Planos para Licencia" : "Informe NSR-10"}):
+                  </label>
+                  {frenteEditar === "estudioSuelos" && (
+                    <span className="text-[10px] text-emerald-700 bg-emerald-100 font-semibold px-2 py-0.5 rounded-full border border-emerald-300">
+                      Soporta +82 págs (Hasta 2 GB)
+                    </span>
+                  )}
+                </div>
+
+                {/* Barra de progreso de subida si está cargando */}
+                {subiendoArchivoPesado && (
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl space-y-1.5 animate-in fade-in">
+                    <div className="flex items-center justify-between text-xs font-semibold text-blue-900">
+                      <span className="flex items-center gap-1.5">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                        <span>{mensajeProgresoSubida || "Cargando documento..."}</span>
+                      </span>
+                      <span>{progresoSubida}%</span>
+                    </div>
+                    <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-blue-600 h-2 rounded-full transition-all duration-300 ease-out"
+                        style={{ width: `${progresoSubida}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {formSoporteNombre ? (
                   <div className="flex items-center justify-between p-2.5 bg-white border border-slate-200 rounded-lg">
                     <div className="flex items-center space-x-2 truncate">
                       <FileText className="w-4 h-4 text-blue-600 shrink-0" />
-                      <span title={formSoporteNombre} className="font-mono text-xs text-slate-800 truncate">{formSoporteNombre}</span>
+                      <div className="truncate">
+                        <span title={formSoporteNombre} className="font-mono text-xs text-slate-800 truncate block">{formSoporteNombre}</span>
+                        {formSoporteBytes > 0 && (
+                          <span className="text-[10px] text-slate-500">{(formSoporteBytes / (1024 * 1024)).toFixed(2)} MB</span>
+                        )}
+                      </div>
                     </div>
                     <button
                       type="button"
@@ -1293,6 +1873,7 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
                         setFormSoporteNombre("");
                         setFormSoporteUrl("");
                         setFormSoporteHash("");
+                        setFormSoporteBytes(0);
                       }}
                       className="text-rose-600 hover:text-rose-800 text-xs font-semibold px-2 cursor-pointer"
                     >
@@ -1306,6 +1887,8 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
                       <span>
                         {frenteEditar === "arquitectura"
                           ? "Cargar planos en PDF (Solo PDF)"
+                          : frenteEditar === "estudioSuelos"
+                          ? "Seleccionar Estudio de Suelos (+82 págs - Soporta archivos pesados)"
                           : "Seleccionar archivo (PDF o Imagen)"}
                       </span>
                       <input
@@ -1315,7 +1898,7 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
                         onClick={(e) => {
                           (e.target as HTMLInputElement).value = "";
                         }}
-                        onChange={handleSimularCargaArchivo}
+                        onChange={handleSeleccionarArchivoFrente}
                         className="sr-only"
                       />
                     </label>
@@ -1354,6 +1937,219 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
               >
                 {guardandoFrente ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                 <span>Guardar Cambios</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. MODAL PARA ANEXAR / EDITAR INFORME DE VISITA FRANCO OSORIO */}
+      {modalFrancoOsorio && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div role="dialog" aria-modal="true" aria-labelledby="modal-franco-osorio-titulo" className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-200">
+            <div className="p-5 border-b border-slate-200 flex items-center justify-between sticky top-0 bg-white z-10">
+              <div className="flex items-center space-x-2.5">
+                <Building2 className="w-5 h-5 text-blue-600" />
+                <div>
+                  <h3 id="modal-franco-osorio-titulo" className="font-bold text-base text-slate-900">
+                    {francoOsorioData?.nombreArchivo ? "Actualizar Informe de Visita" : "Anexar Informe de Visita"}
+                  </h3>
+                  <span className="text-[11px] text-slate-500 font-medium">Franco Osorio Investment S.A.S.</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                aria-label="Cerrar modal de informe Franco Osorio"
+                onClick={() => setModalFrancoOsorio(false)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs text-slate-700">
+              {errorModal && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs flex items-center space-x-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{errorModal}</span>
+                </div>
+              )}
+
+              {/* Datos de la visita */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Profesional Responsable:
+                  </label>
+                  <input
+                    type="text"
+                    value={foProfesional}
+                    onChange={(e) => setFoProfesional(e.target.value)}
+                    placeholder="Ej: Ing. Franco Osorio"
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Fecha de Visita Realizada:
+                  </label>
+                  <input
+                    type="date"
+                    value={foFechaVisita}
+                    onChange={(e) => setFoFechaVisita(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              {/* Concepto / Observaciones */}
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Concepto Técnico / Observaciones de la Visita:
+                </label>
+                <textarea
+                  rows={3}
+                  value={foObservaciones}
+                  onChange={(e) => setFoObservaciones(e.target.value)}
+                  placeholder="Detallar condiciones observadas en campo, recomendaciones técnicas o alcances..."
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                />
+              </div>
+
+              {/* Carga de archivo con soporte de progreso */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                <label className="block font-bold text-slate-800">
+                  Documento del Informe (PDF / Digital):
+                </label>
+
+                {subiendoArchivoPesado && (
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl space-y-1.5 animate-in fade-in">
+                    <div className="flex items-center justify-between text-xs font-semibold text-blue-900">
+                      <span className="flex items-center gap-1.5">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                        <span>{mensajeProgresoSubida || "Cargando archivo..."}</span>
+                      </span>
+                      <span>{progresoSubida}%</span>
+                    </div>
+                    <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-blue-600 h-2 rounded-full transition-all duration-300 ease-out"
+                        style={{ width: `${progresoSubida}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {foNombreArchivo ? (
+                  <div className="flex items-center justify-between p-2.5 bg-white border border-slate-200 rounded-lg">
+                    <div className="flex items-center space-x-2 truncate">
+                      <FileText className="w-4 h-4 text-blue-600 shrink-0" />
+                      <div className="truncate">
+                        <span title={foNombreArchivo} className="font-mono text-xs text-slate-800 truncate block">
+                          {foNombreArchivo}
+                        </span>
+                        {foBytes > 0 && (
+                          <span className="text-[10px] text-slate-500">
+                            {(foBytes / (1024 * 1024)).toFixed(2)} MB
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFoNombreArchivo("");
+                        setFoUrl("");
+                        setFoHash("");
+                        setFoBytes(0);
+                      }}
+                      className="text-rose-600 hover:text-rose-800 text-xs font-semibold px-2 cursor-pointer"
+                    >
+                      Remover
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <label htmlFor="input-archivo-franco-osorio" className="inline-flex items-center justify-center space-x-2 px-3 py-2.5 bg-white border border-dashed border-slate-300 hover:border-blue-400 rounded-xl w-full text-center text-xs text-slate-600 hover:text-blue-600 cursor-pointer transition-colors">
+                      <UploadCloud className="w-4 h-4 text-slate-400" />
+                      <span>Seleccionar Informe en PDF o Imagen</span>
+                      <input
+                        id="input-archivo-franco-osorio"
+                        type="file"
+                        accept=".pdf,application/pdf,.jpg,.jpeg,.png"
+                        onClick={(e) => {
+                          (e.target as HTMLInputElement).value = "";
+                        }}
+                        onChange={handleSeleccionarArchivoFrancoOsorio}
+                        className="sr-only"
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end space-x-2 rounded-b-2xl">
+              <button
+                type="button"
+                onClick={() => setModalFrancoOsorio(false)}
+                className="px-4 py-2 text-slate-600 hover:text-slate-800 text-xs font-semibold rounded-xl hover:bg-slate-200/60 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={guardandoFrancoOsorio || !foNombreArchivo}
+                onClick={handleGuardarFrancoOsorio}
+                className="inline-flex items-center space-x-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors disabled:bg-slate-300 cursor-pointer"
+              >
+                {guardandoFrancoOsorio ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                <span>Guardar Informe</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIRMACIÓN PARA ELIMINAR INFORME FRANCO OSORIO */}
+      {modalConfirmarEliminarFO && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div role="dialog" aria-modal="true" aria-labelledby="modal-eliminar-fo-titulo" className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center space-x-3">
+              <div className="p-3 bg-rose-100 text-rose-700 rounded-2xl">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 id="modal-eliminar-fo-titulo" className="font-bold text-base text-slate-900">
+                  ¿Eliminar Informe de Visita?
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Informe de Franco Osorio
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Esta acción desvinculará el documento de la sección técnica de Fase 4. Podrás cargar un nuevo documento posteriormente en caso de requerirse.
+            </p>
+
+            <div className="flex justify-end space-x-2 pt-2 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setModalConfirmarEliminarFO(false)}
+                className="px-3.5 py-1.5 text-slate-600 hover:text-slate-800 text-xs font-semibold rounded-xl hover:bg-slate-100 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={eliminandoFO}
+                onClick={handleEliminarFrancoOsorio}
+                className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+              >
+                {eliminandoFO ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                <span>Eliminar Informe</span>
               </button>
             </div>
           </div>

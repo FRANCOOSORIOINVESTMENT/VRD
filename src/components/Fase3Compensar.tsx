@@ -31,7 +31,9 @@ import {
   FileSpreadsheet,
   Inbox,
   Upload,
-  Download
+  Download,
+  Trash2,
+  RefreshCw
 } from "lucide-react";
 
 interface Fase3CompensarProps {
@@ -75,6 +77,16 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
   const puedeOperar = currentUser.rol === "ingenieria" || currentUser.rol === "administrador";
   const puedeRegistrarRespuesta = currentUser.rol === "ingenieria" || currentUser.rol === "supervisor" || currentUser.rol === "administrador";
   const puedeAvanzarFase = currentUser.rol === "supervisor" || currentUser.rol === "administrador";
+  // GESTIÓN FLEXIBLE CRUD DE ARCHIVOS (FASE 3): Habilitado para ingeniería, asistente/gestor, supervisor y administrador
+  const puedeEditarDocumentos = currentUser.rol === "ingenieria" || currentUser.rol === "asistente" || currentUser.rol === "supervisor" || currentUser.rol === "administrador";
+
+  // Estado y referencias para reemplazo y eliminación flexible de archivos en Fase 3
+  const [cargandoDocId, setCargandoDocId] = useState<string | null>(null);
+  const [eliminandoDocId, setEliminandoDocId] = useState<string | null>(null);
+  const [modalConfirmarEliminar, setModalConfirmarEliminar] = useState<RequisitoCaso | null>(null);
+  const [mensajeExitoDoc, setMensajeExitoDoc] = useState<string | null>(null);
+  const fileInputDirectoRef = React.useRef<HTMLInputElement | null>(null);
+  const [reqSeleccionadoReemplazo, setReqSeleccionadoReemplazo] = useState<RequisitoCaso | null>(null);
 
   // Formulario de Envío
   const [seleccionados, setSeleccionados] = useState<Record<string, boolean>>({});
@@ -115,17 +127,18 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
 
   // Escape key handler for open modals
   useEffect(() => {
-    if (!modalRespuesta && !modalRechazoAnalista) return;
+    if (!modalRespuesta && !modalRechazoAnalista && !modalConfirmarEliminar) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        if (modalRechazoAnalista) setModalRechazoAnalista(false);
+        if (modalConfirmarEliminar) setModalConfirmarEliminar(null);
+        else if (modalRechazoAnalista) setModalRechazoAnalista(false);
         else if (modalRespuesta) setModalRespuesta(false);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [modalRespuesta, modalRechazoAnalista]);
+  }, [modalRespuesta, modalRechazoAnalista, modalConfirmarEliminar]);
 
   // Inicializar selección de documentos (todos los 11 seleccionados por defecto)
   useEffect(() => {
@@ -224,7 +237,7 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
           cuerpoMensaje,
           fechaEnvio,
           documentosIncluidos: docsParaEnvio,
-          radicadoOReferencia,
+          radicadoOReferencia: radicadoOReferencia.trim() || "Sin radicado / En trámite",
           notasEnvio,
           evidenciaUrl,
           evidenciaNombre: evidenciaNombre || "Pantallazo_Envio_Compensar.png",
@@ -352,7 +365,7 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
           envioId: ultimoEnvio?.id,
           resultado: tipoResultado,
           fechaRespuesta,
-          radicadoOConcepto: radicadoConcepto,
+          radicadoOConcepto: radicadoConcepto.trim() || "Sin radicado / En trámite",
           observacionesDetalladas: observacionesRespuesta,
           archivoConceptoUrl,
           archivoConceptoNombre: archivoConceptoNombre || (tipoResultado === "aprobado" ? "Concepto_Viabilidad_Compensar.pdf" : "Observaciones_Compensar.pdf"),
@@ -404,6 +417,138 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
     } finally {
       setAvanzandoFase4(false);
     }
+  };
+
+  // REEMPLAZAR O RECARGAR UN DOCUMENTO EN FASE 3 (Sin reiniciar el expediente)
+  const handleTriggerReemplazo = (req: RequisitoCaso) => {
+    const esFoto = req.codigoRequisito === "F2-11" || req.nombre.toLowerCase().includes("fotogr");
+    if (esFoto && onSubirDocumento) {
+      onSubirDocumento(req);
+      return;
+    }
+    setReqSeleccionadoReemplazo(req);
+    if (fileInputDirectoRef.current) {
+      fileInputDirectoRef.current.value = "";
+      fileInputDirectoRef.current.click();
+    }
+  };
+
+  const handleArchivoSeleccionadoParaReemplazo = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const req = reqSeleccionadoReemplazo;
+    if (!file || !req) return;
+
+    if (file.size > 25 * 1024 * 1024) {
+      alert("El archivo supera el tamaño máximo permitido de 25 MB.");
+      return;
+    }
+
+    setCargandoDocId(req.id);
+    setMensajeExitoDoc(null);
+    try {
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const res = await authFetch(`/api/expedientes/${expediente.id}/requisitos/${req.id}/subir`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nombreArchivo: file.name,
+          mimeType: file.type || "application/pdf",
+          tamanoBytes: file.size,
+          archivoDataUrl: dataUrl,
+          sha256Hash: `sha256-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`,
+          codigoRequisito: req.codigoRequisito,
+          fase: req.fase || 2,
+          requisitoNombre: req.nombre
+        })
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "No fue posible reemplazar el documento.");
+      }
+
+      setSeleccionados((prev) => ({ ...prev, [req.codigoRequisito]: true }));
+      setMensajeExitoDoc(`Documento "${file.name}" cargado/actualizado exitosamente para [${req.codigoRequisito}]. Estado de validación actualizado a 'Actualizado'.`);
+      setTimeout(() => setMensajeExitoDoc(null), 5000);
+      await onActualizarExpediente();
+    } catch (err: any) {
+      alert(err.message || "Error al procesar el archivo seleccionado.");
+    } finally {
+      setCargandoDocId(null);
+      setReqSeleccionadoReemplazo(null);
+    }
+  };
+
+  // ELIMINAR UN ARCHIVO CARGADO ERRÓNEAMENTE EN FASE 3
+  const handleConfirmarEliminarArchivo = async () => {
+    if (!modalConfirmarEliminar) return;
+    const req = modalConfirmarEliminar;
+    setEliminandoDocId(req.id);
+    setMensajeExitoDoc(null);
+    try {
+      const res = await authFetch(`/api/expedientes/${expediente.id}/requisitos/${req.id}/archivo`, {
+        method: "DELETE"
+      });
+
+      if (!res.ok) {
+        const resPost = await authFetch(`/api/expedientes/${expediente.id}/requisitos/${req.id}/eliminar-archivo`, {
+          method: "POST"
+        });
+        if (!resPost.ok) {
+          const data = await resPost.json().catch(() => ({}));
+          throw new Error(data.error || "No fue posible eliminar el archivo del documento.");
+        }
+      }
+
+      setSeleccionados((prev) => ({ ...prev, [req.codigoRequisito]: false }));
+      setModalConfirmarEliminar(null);
+      setMensajeExitoDoc(`Archivo del requisito [${req.codigoRequisito}] eliminado. El estado pasó automáticamente a 'Pendiente' para permitir recarga sin reiniciar el expediente.`);
+      setTimeout(() => setMensajeExitoDoc(null), 5000);
+      await onActualizarExpediente();
+    } catch (err: any) {
+      alert(err.message || "Error al eliminar el archivo.");
+    } finally {
+      setEliminandoDocId(null);
+    }
+  };
+
+  // Badge dinámico según estado y presencia de archivo
+  const obtenerBadgeEstado = (req: RequisitoCaso) => {
+    const version = req.documentoAsociado?.versionActual;
+    if (!version || req.estado === "pendiente_carga" || req.estado === "pendiente") {
+      return {
+        texto: "⏳ Pendiente",
+        clase: "bg-amber-100 text-amber-800 border-amber-300"
+      };
+    }
+    if (req.estado === "actualizado") {
+      return {
+        texto: "🔄 Actualizado",
+        clase: "bg-blue-100 text-blue-800 border-blue-300"
+      };
+    }
+    if (req.estado === "con_observaciones") {
+      return {
+        texto: "⚠ Con Observaciones",
+        clase: "bg-orange-100 text-orange-800 border-orange-300"
+      };
+    }
+    if (req.estado === "recibido_revision") {
+      return {
+        texto: "📄 En Revisión",
+        clase: "bg-indigo-100 text-indigo-800 border-indigo-300"
+      };
+    }
+    return {
+      texto: "✓ Aprobado",
+      clase: "bg-emerald-100 text-emerald-800 border-emerald-300"
+    };
   };
 
   return (
@@ -724,7 +869,7 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
               ¡Validación Inicial Aprobada por Compensar!
             </h4>
             <p className="text-xs text-emerald-800 mt-0.5">
-              Radicado / Concepto: <strong>{validacion?.radicadoAprobacionFinal || "S/N"}</strong> el {validacion?.fechaAprobacionFinal ? new Date(validacion.fechaAprobacionFinal).toLocaleDateString() : ""}
+              Radicado / Concepto: <strong>{validacion?.radicadoAprobacionFinal || "Sin radicado / En trámite"}</strong> el {validacion?.fechaAprobacionFinal ? new Date(validacion.fechaAprobacionFinal).toLocaleDateString() : ""}
             </p>
             {validacion?.observacionesFinales && (
               <p className="text-xs text-emerald-700 italic mt-1 bg-white/70 p-2 rounded border border-emerald-200">
@@ -735,54 +880,88 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
         </div>
       )}
 
-      {/* 2. GRILLA DE LOS 11 DOCUMENTOS DE FASE 2 EN MODO VISOR */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 mb-4 gap-2">
-          <div>
-            <h4 className="font-bold text-sm text-slate-900 flex items-center space-x-2">
-              <FileCheck className="w-4 h-4 text-emerald-600" />
-              <span>11 Documentos Aprobados de Fase 2 (Consolidados)</span>
-            </h4>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Haga clic en cualquier documento para verificar su integridad y visualización previa a la radicación.
-            </p>
+      {/* 2. GRILLA DE LOS 11 DOCUMENTOS DE FASE 2 (CON GESTIÓN FLEXIBLE CRUD: EDICIÓN, RECARGA Y ELIMINACIÓN) */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+        {/* Banner explicativo de Gestión Flexible de Archivos */}
+        <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+          <div className="flex items-start space-x-2 text-indigo-900">
+            <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold">Gestión Flexible de Archivos (Fase 3):</span>
+              <p className="text-[11px] text-indigo-800 leading-snug mt-0.5">
+                Puede previsualizar, descargar, reemplazar o eliminar cualquier archivo cargado erróneamente sin reiniciar el expediente.
+                Al eliminar un archivo pasará automáticamente a estado <strong>&quot;Pendiente&quot;</strong>, y al cargarlo o sustituirlo pasará a <strong>&quot;Actualizado&quot;</strong>.
+              </p>
+            </div>
           </div>
-          <div className="flex items-center space-x-2">
-            <span className="text-xs font-bold text-slate-700 bg-slate-100 px-2.5 py-1 rounded-lg">
-              {docsParaEnvio.length} de {requisitosFase2.length} seleccionados ({pesoTotalMB} MB)
+          <div className="flex items-center space-x-2 shrink-0">
+            <span className="text-[11px] font-bold text-slate-700 bg-white px-2.5 py-1 rounded-lg border border-indigo-100 shadow-2xs">
+              {docsParaEnvio.length} de {requisitosFase2.length} con archivo ({pesoTotalMB} MB)
             </span>
           </div>
         </div>
 
+        {/* Notificación de éxito en operaciones CRUD de documentos */}
+        {mensajeExitoDoc && (
+          <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-900 text-xs flex items-center justify-between animate-in fade-in">
+            <div className="flex items-center space-x-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span className="font-medium">{mensajeExitoDoc}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMensajeExitoDoc(null)}
+              className="text-emerald-700 hover:text-emerald-900 text-sm font-bold px-2 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        {/* Input file oculto para reemplazo directo en un solo clic */}
+        <input
+          ref={fileInputDirectoRef}
+          type="file"
+          accept=".pdf,image/*"
+          className="hidden"
+          onChange={handleArchivoSeleccionadoParaReemplazo}
+        />
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {requisitosFase2.map((req, idx) => {
+          {requisitosFase2.map((req) => {
             const doc = req.documentoAsociado;
             const version = doc?.versionActual;
+            const tieneArchivo = Boolean(version);
             const estaSeleccionado = !!seleccionados[req.codigoRequisito];
             const esFoto = req.codigoRequisito === "F2-11" || req.nombre.toLowerCase().includes("fotogr");
             const tieneFotos = version?.fotos && version.fotos.length > 0;
+            const badge = obtenerBadgeEstado(req);
+            const estaProcesando = cargandoDocId === req.id || eliminandoDocId === req.id;
 
             return (
               <div
                 key={req.id || req.codigoRequisito}
                 className={`p-3.5 rounded-xl border transition-all ${
-                  estaSeleccionado
-                    ? "bg-slate-50/70 border-slate-300 hover:border-blue-400"
-                    : "bg-white border-slate-200 opacity-60"
+                  tieneArchivo
+                    ? estaSeleccionado
+                      ? "bg-slate-50/70 border-slate-300 hover:border-blue-400"
+                      : "bg-white border-slate-200"
+                    : "bg-amber-50/40 border-amber-200/80"
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-start space-x-2.5">
-                    {/* Checkbox de inclusión en paquete */}
+                    {/* Checkbox de inclusión en paquete (solo si tiene archivo) */}
                     {puedeOperar && (estadoActual === "sin_enviar" || estadoActual === "con_observaciones") && (
                       <input
                         type="checkbox"
-                        checked={estaSeleccionado}
+                        disabled={!tieneArchivo}
+                        checked={tieneArchivo && estaSeleccionado}
                         onChange={(e) =>
                           setSeleccionados({ ...seleccionados, [req.codigoRequisito]: e.target.checked })
                         }
-                        className="mt-1 w-4 h-4 rounded text-blue-600 border-slate-300 focus:ring-blue-500 cursor-pointer"
-                        title="Incluir en el paquete de envío a Compensar"
+                        className="mt-1 w-4 h-4 rounded text-blue-600 border-slate-300 focus:ring-blue-500 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        title={tieneArchivo ? "Incluir en el paquete de envío a Compensar" : "Debe cargar un documento para incluirlo en el paquete"}
                       />
                     )}
                     <div>
@@ -795,76 +974,130 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                         </h5>
                       </div>
                       <p className="text-[11px] text-slate-500 mt-1 line-clamp-1">
-                        {version ? version.nombreArchivoOriginal : "Documento aprobado en Fase 2"}
+                        {tieneArchivo ? version!.nombreArchivoOriginal : "Sin archivo cargado actualmente (Requisito Pendiente)"}
                       </p>
                     </div>
                   </div>
 
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
-                    ✓ Aprobado
+                  {/* Badge dinámico de estado */}
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border shrink-0 ${badge.clase}`}>
+                    {badge.texto}
                   </span>
                 </div>
 
-                {/* Detalles técnicos y botón de visor */}
-                <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px] text-slate-500">
-                  <div className="flex items-center space-x-3">
-                    <span>Versión: <strong>v{version?.versionNumero || 1}</strong></span>
-                    <span>
-                      {version ? `${(version.tamanoBytes / 1024).toFixed(0)} KB` : "Válido"}
-                    </span>
-                    {tieneFotos && (
-                      <span className="text-indigo-600 font-bold">
-                        📷 {version.fotos!.length} fotos
+                {/* Detalles técnicos y acciones flexibles CRUD */}
+                <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-slate-500 gap-2">
+                  <div className="flex items-center space-x-2.5">
+                    {tieneArchivo ? (
+                      <>
+                        <span>Versión: <strong>v{version?.versionNumero || 1}</strong></span>
+                        <span>{(version!.tamanoBytes / 1024).toFixed(0)} KB</span>
+                        {tieneFotos && (
+                          <span className="text-indigo-600 font-bold">
+                            📷 {version!.fotos!.length} fotos
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-amber-700 font-medium">
+                        Pendiente de adjuntar archivo
                       </span>
                     )}
                   </div>
 
-                  <div className="flex items-center space-x-2">
-                    {version && (
-                      <div className="flex items-center space-x-1.5">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onAbrirVisor({
-                              titulo: `${req.codigoRequisito}: ${req.nombre}`,
-                              nombreArchivo: version.nombreArchivoOriginal,
-                              mimeType: version.mimeType,
-                              sha256Hash: version.sha256Hash,
-                              tamanoBytes: version.tamanoBytes,
-                              subidoPor: version.subidoPorNombre,
-                              subidoEn: version.subidoEn,
-                              archivoDataUrl: version.archivoDataUrl ? (version.archivoDataUrl.includes("?") ? `${version.archivoDataUrl}&t=${Date.now()}` : `${version.archivoDataUrl}?t=${Date.now()}`) : version.archivoDataUrl,
-                              fotos: version.fotos,
-                              fotoInicialIndex: 0
-                            })
-                          }
-                          className="inline-flex items-center space-x-1 font-semibold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          <span>Ver Documento</span>
-                        </button>
-                        <a
-                          href={version.archivoDataUrl ? (version.archivoDataUrl.includes("?") ? `${version.archivoDataUrl}&t=${Date.now()}` : `${version.archivoDataUrl}?t=${Date.now()}`) : "#"}
-                          download={version.nombreArchivoOriginal}
-                          className="inline-flex items-center space-x-1 font-semibold text-emerald-600 hover:text-emerald-800 hover:underline cursor-pointer ml-1"
-                          title="Descargar documento"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>Descargar</span>
-                        </a>
-                      </div>
-                    )}
-
-                    {/* Libertad total para el Gestor Documental de actualizar documentos en subsanación (Cambio 6) */}
-                    {expediente.subsanacionFase3Activa && (currentUser.rol === "asistente" || currentUser.rol === "administrador") && onSubirDocumento && (
+                  <div className="flex flex-wrap items-center gap-1.5 justify-end">
+                    {/* Botón Ver Documento en Visor */}
+                    {tieneArchivo && (
                       <button
                         type="button"
-                        onClick={() => onSubirDocumento(req)}
-                        className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded text-[11px] font-semibold flex items-center space-x-1 border border-emerald-300 transition-colors cursor-pointer"
-                        title="Actualizar o reemplazar este documento para subsanar observaciones de Compensar"
+                        onClick={() =>
+                          onAbrirVisor({
+                            titulo: `${req.codigoRequisito}: ${req.nombre}`,
+                            nombreArchivo: version!.nombreArchivoOriginal,
+                            mimeType: version!.mimeType,
+                            sha256Hash: version!.sha256Hash,
+                            tamanoBytes: version!.tamanoBytes,
+                            subidoPor: version!.subidoPorNombre,
+                            subidoEn: version!.subidoEn,
+                            archivoDataUrl: version!.archivoDataUrl ? (version!.archivoDataUrl.includes("?") ? `${version!.archivoDataUrl}&t=${Date.now()}` : `${version!.archivoDataUrl}?t=${Date.now()}`) : version!.archivoDataUrl,
+                            fotos: version!.fotos,
+                            fotoInicialIndex: 0
+                          })
+                        }
+                        className="inline-flex items-center space-x-1 px-2 py-0.5 font-semibold text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors cursor-pointer"
+                        title="Previsualizar documento"
                       >
-                        <Upload className="w-3 h-3 text-emerald-600" />
-                        <span>Actualizar</span>
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Ver</span>
+                      </button>
+                    )}
+
+                    {/* Botón Descargar Documento */}
+                    {tieneArchivo && (
+                      <a
+                        href={version!.archivoDataUrl ? (version!.archivoDataUrl.includes("?") ? `${version!.archivoDataUrl}&t=${Date.now()}` : `${version!.archivoDataUrl}?t=${Date.now()}`) : "#"}
+                        download={version!.nombreArchivoOriginal}
+                        className="inline-flex items-center space-x-1 px-2 py-0.5 font-semibold text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded transition-colors cursor-pointer"
+                        title="Descargar archivo a su equipo"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Descargar</span>
+                      </a>
+                    )}
+
+                    {/* REEMPLAZAR O RECARGAR DOCUMENTO (CRUD Flexible en Fase 3) */}
+                    {puedeEditarDocumentos && (
+                      <button
+                        type="button"
+                        disabled={estaProcesando}
+                        onClick={() => handleTriggerReemplazo(req)}
+                        className={`inline-flex items-center space-x-1 px-2 py-0.5 font-semibold rounded transition-colors cursor-pointer ${
+                          tieneArchivo
+                            ? "text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 border border-indigo-200"
+                            : "text-white bg-blue-600 hover:bg-blue-700 font-bold shadow-xs"
+                        }`}
+                        title={tieneArchivo ? "Reemplazar o recargar este documento sin reiniciar el expediente" : "Cargar documento soporte para este requisito"}
+                      >
+                        {cargandoDocId === req.id ? (
+                          <Clock className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                        ) : tieneArchivo ? (
+                          <RefreshCw className="w-3.5 h-3.5 text-indigo-600" />
+                        ) : (
+                          <Upload className="w-3.5 h-3.5 text-white" />
+                        )}
+                        <span>{cargandoDocId === req.id ? "Procesando..." : tieneArchivo ? "Reemplazar" : "Cargar Archivo"}</span>
+                      </button>
+                    )}
+
+                    {/* Modal Avanzado de Carga (fallback con webcam / multi-foto) */}
+                    {puedeEditarDocumentos && onSubirDocumento && (
+                      <button
+                        type="button"
+                        disabled={estaProcesando}
+                        onClick={() => onSubirDocumento(req)}
+                        className="inline-flex items-center space-x-1 px-1.5 py-0.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded text-[10px] border border-slate-200 transition-colors cursor-pointer"
+                        title="Abrir asistente de carga avanzada"
+                      >
+                        <UploadCloud className="w-3 h-3 text-slate-500" />
+                        <span>Asistente</span>
+                      </button>
+                    )}
+
+                    {/* ELIMINAR ARCHIVO CARGADO ERRÓNEAMENTE (CRUD Flexible en Fase 3) */}
+                    {puedeEditarDocumentos && tieneArchivo && (
+                      <button
+                        type="button"
+                        disabled={estaProcesando}
+                        onClick={() => setModalConfirmarEliminar(req)}
+                        className="inline-flex items-center space-x-1 px-2 py-0.5 font-semibold text-rose-600 hover:text-rose-800 hover:bg-rose-50 border border-rose-200 rounded transition-colors cursor-pointer"
+                        title="Eliminar este archivo cargado erróneamente (el requisito pasará a estado Pendiente)"
+                      >
+                        {eliminandoDocId === req.id ? (
+                          <Clock className="w-3.5 h-3.5 animate-spin text-rose-600" />
+                        ) : (
+                          <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                        )}
+                        <span>Eliminar</span>
                       </button>
                     )}
                   </div>
@@ -968,6 +1201,27 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                   </div>
                 )}
               </div>
+            </div>
+
+            {/* Selector opcional de radicado o referencia (No obligatorio en Fase 3) */}
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+              <label htmlFor="fase3-radicado-envio" className="block font-semibold text-slate-700 mb-1">
+                Número de Radicado o Referencia <span className="text-slate-400 font-normal text-[11px]">(Opcional — No exigido en esta etapa)</span>:
+              </label>
+              <div className="relative">
+                <Hash className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
+                <input
+                  id="fase3-radicado-envio"
+                  type="text"
+                  value={radicadoOReferencia}
+                  onChange={(e) => setRadicadoOReferencia(e.target.value)}
+                  placeholder="Sin radicado / En trámite (Opcional)"
+                  className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-slate-800 outline-none focus:border-blue-500 font-mono text-xs"
+                />
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">
+                En esta fase la entidad o usuario no envía ningún número de radicado. Campo opcional que no bloquea ni detiene el flujo de validación.
+              </p>
             </div>
 
             {errorEnvio && (
@@ -1179,17 +1433,19 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="fase3-radicado-concepto" className="block font-semibold text-slate-700 mb-1">
-                    Radicado o Concepto Compensar:
+                    Radicado o Concepto Compensar <span className="text-slate-400 font-normal text-[11px]">(Opcional)</span>:
                   </label>
                   <input
                     id="fase3-radicado-concepto"
                     type="text"
-                    required
                     value={radicadoConcepto}
                     onChange={(e) => setRadicadoConcepto(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-800 outline-none focus:border-indigo-500 font-mono"
-                    placeholder="Ej: RAD-COMP-2026-991"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-800 outline-none focus:border-indigo-500 font-mono text-xs"
+                    placeholder="Sin radicado / En trámite (Opcional)"
                   />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    No es obligatorio en esta etapa. Si no se ingresa, se registrará como &quot;Sin radicado / En trámite&quot;.
+                  </p>
                 </div>
                 <div>
                   <label htmlFor="fase3-fecha-respuesta" className="block font-semibold text-slate-700 mb-1">
@@ -1356,6 +1612,66 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
               >
                 {procesandoDecisionAnalista ? <Clock className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
                 <span>Devolver al Gestor Documental</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CONFIRMACIÓN PARA ELIMINAR ARCHIVO CARGADO ERRÓNEAMENTE (CRUD FASE 3) */}
+      {modalConfirmarEliminar && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div role="dialog" aria-modal="true" aria-labelledby="fase3-modal-eliminar-titulo" className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center space-x-3 text-rose-600">
+              <div className="p-3 bg-rose-100 rounded-xl">
+                <Trash2 className="w-6 h-6 text-rose-600" />
+              </div>
+              <div>
+                <h3 id="fase3-modal-eliminar-titulo" className="font-bold text-slate-900 text-base">
+                  ¿Eliminar archivo cargado?
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Requisito: <strong className="text-slate-800">{modalConfirmarEliminar.codigoRequisito}</strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-1.5">
+              <div className="font-semibold text-slate-800">
+                {modalConfirmarEliminar.nombre}
+              </div>
+              <div className="text-[11px] text-slate-500 font-mono truncate">
+                Archivo: {modalConfirmarEliminar.documentoAsociado?.versionActual?.nombreArchivoOriginal || "Archivo adjunto"}
+              </div>
+            </div>
+
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1 leading-relaxed">
+              <p className="font-bold text-amber-950 flex items-center space-x-1.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Gestión flexible de archivos</span>
+              </p>
+              <p className="text-[11px]">
+                Esta acción desvinculará este archivo cargado erróneamente. El requisito pasará automáticamente a estado <strong>&quot;Pendiente&quot;</strong>, permitiéndole subir el documento correcto de inmediato sin necesidad de reiniciar el expediente.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setModalConfirmarEliminar(null)}
+                disabled={Boolean(eliminandoDocId)}
+                className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl font-semibold text-xs transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmarEliminarArchivo}
+                disabled={Boolean(eliminandoDocId)}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {eliminandoDocId ? <Clock className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                <span>{eliminandoDocId ? "Eliminando..." : "Sí, Eliminar Archivo"}</span>
               </button>
             </div>
           </div>

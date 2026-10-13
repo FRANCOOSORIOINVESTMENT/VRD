@@ -49,6 +49,7 @@ import {
   RegistroHistorialLicencia,
   RondaSubsanacionLicencia,
   TramiteLicenciaConstruccion,
+  DocumentoRadicacionPlaneacion,
   EstadoPostulacion,
   SoporteDocumentoPostulacion,
   RondaSubsanacionPostulacion,
@@ -110,8 +111,8 @@ export async function createApp(): Promise<express.Express> {
   });
 
   app.set("etag", false);
-  app.use(express.json({ limit: "150mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "150mb" }));
+  app.use(express.json({ limit: "500mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "500mb" }));
   app.use(cookieParser());
 
   // Directorio local indestructible para persistencia de archivos subidos
@@ -315,12 +316,12 @@ export async function createApp(): Promise<express.Express> {
       esAdicional: false
     };
 
-    const reqPredial: RequisitoCaso = {
+    const reqEscritura: RequisitoCaso = {
       id: `req-f1-02-${exp.id}`,
       expedienteId: exp.id,
       codigoRequisito: "F1-02",
-      nombre: "Impuesto Predial Unificado",
-      descripcion: "Vigencia del año en curso. Aceptado pagado o sin pagar.",
+      nombre: "Escritura Pública",
+      descripcion: "Copia de escritura pública, resolución o posesión protocolizada (archivo independiente de tradición).",
       fase: 1,
       predioId: exp.predioVivienda?.id || `pre-${exp.id}`,
       estado: "pendiente_carga",
@@ -342,7 +343,7 @@ export async function createApp(): Promise<express.Express> {
       esAdicional: false
     };
 
-    mockDb.requisitosCaso.push(reqTradicion, reqPredial, reqCedulaPostulante);
+    mockDb.requisitosCaso.push(reqTradicion, reqEscritura, reqCedulaPostulante);
   }
 
   // Mapeador robusto de filas de Supabase a modelo canónico de Expediente
@@ -655,6 +656,17 @@ export async function createApp(): Promise<express.Express> {
         },
         actualizadoEn: new Date().toISOString()
       };
+    } else {
+      // Garantizar inmutabilidad e independencia de cada frente existente
+      if (!exp.gestionFase4.interventoria) {
+        exp.gestionFase4.interventoria = { estado: "pendiente", historial: [] };
+      }
+      if (!exp.gestionFase4.arquitectura) {
+        exp.gestionFase4.arquitectura = { estado: "pendiente", porcentajeAvance: 0, historial: [] };
+      }
+      if (!exp.gestionFase4.estudioSuelos) {
+        exp.gestionFase4.estudioSuelos = { estado: "pendiente", historial: [] };
+      }
     }
   }
 
@@ -735,6 +747,7 @@ export async function createApp(): Promise<express.Express> {
         estadoActual: "sin_radicar",
         entidadMunicipal: `Secretaría de Planeación y Obras Públicas - Alcaldía de ${nombreMunicipio}`,
         rondasSubsanacion: [],
+        documentosPlaneacion: [],
         historial: [
           {
             id: `hist-lic-init-${Date.now()}`,
@@ -750,6 +763,59 @@ export async function createApp(): Promise<express.Express> {
         ],
         actualizadoEn: new Date().toISOString()
       };
+    }
+
+    // Asegurar lista de documentos de radicación en planeación inicializada
+    if (!exp.tramiteLicencia.documentosPlaneacion) {
+      exp.tramiteLicencia.documentosPlaneacion = [];
+    }
+
+    // Plantilla inicial de los documentos requeridos si aún está vacía
+    if (exp.tramiteLicencia.documentosPlaneacion.length === 0) {
+      exp.tramiteLicencia.documentosPlaneacion = [
+        {
+          id: `doc-plan-fun-${exp.id}`,
+          tipo: "fun",
+          nombre: "Formulario Único Nacional (FUN)",
+          descripcion: "Formulario Único Nacional para la solicitud de licencia de construcción debidamente diligenciado y firmado con sello de radicación.",
+          esObligatorio: true
+        },
+        {
+          id: `doc-plan-mem-est-${exp.id}`,
+          tipo: "memorial_estructural",
+          nombre: "Memorial de Responsabilidad — Diseñador Estructural",
+          descripcion: "Declaración juramentada y memorial de cumplimiento NSR-10 suscrito por el ingeniero civil/estructural con matrícula profesional.",
+          esObligatorio: true
+        },
+        {
+          id: `doc-plan-mem-arq-${exp.id}`,
+          tipo: "memorial_arquitectonico",
+          nombre: "Memorial de Responsabilidad — Diseñador Arquitectónico",
+          descripcion: "Memorial y certificación del arquitecto proyectista con matrícula profesional vigente y fotocopia del documento.",
+          esObligatorio: true
+        },
+        {
+          id: `doc-plan-mem-geo-${exp.id}`,
+          tipo: "memorial_geotecnia",
+          nombre: "Memorial de Responsabilidad — Geotecnista / Suelos",
+          descripcion: "Memorial de responsabilidad técnica suscrito por el ingeniero geotecnista responsable del estudio de suelos.",
+          esObligatorio: true
+        },
+        {
+          id: `doc-plan-mem-int-${exp.id}`,
+          tipo: "memorial_interventor",
+          nombre: "Memorial de Responsabilidad — Interventoría / Constructor",
+          descripcion: "Memorial y compromiso de dirección técnica de obra o interventoría según requerimiento de la entidad municipal.",
+          esObligatorio: false
+        },
+        {
+          id: `doc-plan-memorias-${exp.id}`,
+          tipo: "memorias_calculo",
+          nombre: "Memorias de Cálculo y Cantidades de Obra",
+          descripcion: "Memorias técnicas de cálculo estructural, análisis de cargas y cantidades de obra (Formatos PDF o Excel .xlsx).",
+          esObligatorio: false
+        }
+      ];
     }
   }
 
@@ -828,27 +894,49 @@ export async function createApp(): Promise<express.Express> {
 
   // Helper para inicializar Fase 7: En Construcción y Cobro Subsidio (Hitos de Obra, Cierre y Desembolso)
   function inicializarFase7(exp: Expediente) {
-    // 1. Asegurar que los 4 requisitos de cierre F7-01 a F7-04 existan en requisitosCaso
+    // 1. Asegurar que los 6 requisitos oficiales de Fase 7 (3 Compensar + 3 Cierre técnico) existan en requisitosCaso
     const reqsF7Def = [
       {
         codigo: "F7-01",
-        nombre: "Acta de Recibo a Satisfacción de Vivienda",
-        desc: "Firma formal de recepción de la vivienda terminada al 100% por el beneficiario y la supervisión técnica."
+        nombre: "Acta de Inicio de Contrato (Compensar)",
+        desc: "Formato oficial de Compensar para el acta de inicio de contrato del subsidio de vivienda rural.",
+        seccion: "formatos_compensar" as const,
+        tiposPermitidos: ".pdf,application/pdf"
       },
       {
         codigo: "F7-02",
-        nombre: "Certificación de Habitabilidad y Servicios",
-        desc: "Constancia técnica de servicios públicos domiciliarios activos y plenas condiciones higiénico-sanitarias."
+        nombre: "Acta de Inicio de Obra (Compensar)",
+        desc: "Formato oficial de Compensar que certifica el inicio formal de las obras civiles en el predio.",
+        seccion: "formatos_compensar" as const,
+        tiposPermitidos: ".pdf,application/pdf"
       },
       {
         codigo: "F7-03",
-        nombre: "Registro Fotográfico de Entrega de Llaves",
-        desc: "Acto solemne de entrega de llaves al hogar beneficiario con evidencia fotográfica en alta resolución."
+        nombre: "Acta de Entrega (Compensar)",
+        desc: "Formato oficial de Compensar para el acta de entrega y cierre técnico entre las partes.",
+        seccion: "formatos_compensar" as const,
+        tiposPermitidos: ".pdf,application/pdf"
       },
       {
         codigo: "F7-04",
-        nombre: "Acta de Liquidación y Archivo Documental",
-        desc: "Liquidación contractual y financiera de la obra, paz y salvo final y consolidación documental definitiva."
+        nombre: "Certificado de Habitabilidad y Servicios",
+        desc: "Constancia técnica de servicios públicos domiciliarios activos y plenas condiciones higiénico-sanitarias.",
+        seccion: "formatos_cierre_existentes" as const,
+        tiposPermitidos: ".pdf,image/*,application/pdf,image/jpeg,image/png"
+      },
+      {
+        codigo: "F7-05",
+        nombre: "Registro Fotográfico de Entrega",
+        desc: "Evidencia fotográfica en alta resolución y/o reporte consolidado de la vivienda terminada y entrega de llaves.",
+        seccion: "formatos_cierre_existentes" as const,
+        tiposPermitidos: ".pdf,image/*,application/pdf,image/jpeg,image/png"
+      },
+      {
+        codigo: "F7-06",
+        nombre: "Acta de Recibo a Satisfacción de Vivienda",
+        desc: "Firma formal de recepción de la vivienda terminada al 100% por el beneficiario y la supervisión técnica.",
+        seccion: "formatos_cierre_existentes" as const,
+        tiposPermitidos: ".pdf,image/*,application/pdf,image/jpeg,image/png"
       }
     ];
 
@@ -996,9 +1084,12 @@ export async function createApp(): Promise<express.Express> {
         const estaCargado = estaAceptado || reqObj?.estado === "recibido_revision";
 
         return {
+          id: `f7-doc-${def.codigo.toLowerCase()}-${exp.id}`,
           codigo: def.codigo,
           nombre: def.nombre,
           descripcion: def.desc,
+          seccion: def.seccion,
+          tiposPermitidos: def.tiposPermitidos,
           estado: estaAceptado ? "aceptado" : estaCargado ? "cargado" : "pendiente",
           nombreArchivo: estaCargado ? `${def.codigo}_Soporte_Oficial.pdf` : undefined,
           tamanoBytes: estaCargado ? 245000 : undefined,
@@ -1020,10 +1111,11 @@ export async function createApp(): Promise<express.Express> {
         fechaFinalizacionObra: esExpedienteMuestra ? "2026-08-25" : undefined,
         documentosCierre: docsCierre,
         documentosCierreCompletos: todosDocsCompletos,
+        formatosDocumentales: {},
         desembolso: {
           estadoActual: todosDocsCompletos ? "listo_para_solicitar" : "pendiente_documentos",
           entidad: "Compensar (Caja de Compensación Familiar)",
-          documentosIncluidos: ["F7-01", "F7-02", "F7-03", "F7-04"],
+          documentosIncluidos: ["F7-01", "F7-02", "F7-03", "F7-04", "F7-05", "F7-06"],
           rondasSubsanacion: []
         },
         historial: [
@@ -1042,6 +1134,33 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString(),
         actualizadoEn: new Date().toISOString()
       };
+    } else {
+      // Reconciliación si gestionFase7 ya existía: asegurar presencia de los 6 documentos
+      reqsF7Def.forEach((def) => {
+        const existe = exp.gestionFase7!.documentosCierre.find((d) => d.codigo === def.codigo);
+        if (!existe) {
+          exp.gestionFase7!.documentosCierre.push({
+            id: `f7-doc-${def.codigo.toLowerCase()}-${exp.id}`,
+            codigo: def.codigo,
+            nombre: def.nombre,
+            descripcion: def.desc,
+            seccion: def.seccion,
+            tiposPermitidos: def.tiposPermitidos,
+            estado: "pendiente"
+          });
+        } else {
+          existe.seccion = def.seccion;
+          existe.tiposPermitidos = def.tiposPermitidos;
+          if (!existe.id) existe.id = `f7-doc-${def.codigo.toLowerCase()}-${exp.id}`;
+        }
+      });
+      exp.gestionFase7.documentosCierre.sort((a, b) => a.codigo.localeCompare(b.codigo));
+      if (!exp.gestionFase7.formatosDocumentales) {
+        exp.gestionFase7.formatosDocumentales = {};
+      }
+      if (!exp.gestionFase7.desembolso.documentosIncluidos || exp.gestionFase7.desembolso.documentosIncluidos.length < 6) {
+        exp.gestionFase7.desembolso.documentosIncluidos = ["F7-01", "F7-02", "F7-03", "F7-04", "F7-05", "F7-06"];
+      }
     }
   }
 
@@ -1330,7 +1449,25 @@ export async function createApp(): Promise<express.Express> {
                 if (row.estado_general) expExistente.estadoGeneral = row.estado_general;
                 if (row.actualizado_en) expExistente.actualizadoEn = row.actualizado_en;
                 if (row.validacion_compensar) expExistente.validacionCompensar = row.validacion_compensar;
-                if (row.gestion_fase4) expExistente.gestionFase4 = row.gestion_fase4;
+                if (row.gestion_fase4) {
+                  inicializarFase4(expExistente);
+                  expExistente.gestionFase4 = {
+                    interventoria: {
+                      ...(row.gestion_fase4.interventoria || {}),
+                      ...(expExistente.gestionFase4?.interventoria || {})
+                    },
+                    arquitectura: {
+                      ...(row.gestion_fase4.arquitectura || {}),
+                      ...(expExistente.gestionFase4?.arquitectura || {})
+                    },
+                    estudioSuelos: {
+                      ...(row.gestion_fase4.estudioSuelos || {}),
+                      ...(expExistente.gestionFase4?.estudioSuelos || {})
+                    },
+                    informeVisitaFrancoOsorio: expExistente.gestionFase4?.informeVisitaFrancoOsorio || row.gestion_fase4.informeVisitaFrancoOsorio,
+                    actualizadoEn: expExistente.gestionFase4?.actualizadoEn || row.gestion_fase4.actualizadoEn || new Date().toISOString()
+                  };
+                }
                 if (row.tramite_licencia) expExistente.tramiteLicencia = row.tramite_licencia;
                 if (row.postulacion_subsidio) expExistente.postulacionSubsidio = row.postulacion_subsidio;
                 if (row.gestion_fase7) expExistente.gestionFase7 = row.gestion_fase7;
@@ -1961,7 +2098,25 @@ export async function createApp(): Promise<express.Express> {
               if (row.estado_general) expExistente.estadoGeneral = row.estado_general;
               if (row.actualizado_en) expExistente.actualizadoEn = row.actualizado_en;
               if (row.validacion_compensar) expExistente.validacionCompensar = row.validacion_compensar;
-              if (row.gestion_fase4) expExistente.gestionFase4 = row.gestion_fase4;
+              if (row.gestion_fase4) {
+                inicializarFase4(expExistente);
+                expExistente.gestionFase4 = {
+                  interventoria: {
+                    ...(row.gestion_fase4.interventoria || {}),
+                    ...(expExistente.gestionFase4?.interventoria || {})
+                  },
+                  arquitectura: {
+                    ...(row.gestion_fase4.arquitectura || {}),
+                    ...(expExistente.gestionFase4?.arquitectura || {})
+                  },
+                  estudioSuelos: {
+                    ...(row.gestion_fase4.estudioSuelos || {}),
+                    ...(expExistente.gestionFase4?.estudioSuelos || {})
+                  },
+                  informeVisitaFrancoOsorio: expExistente.gestionFase4?.informeVisitaFrancoOsorio || row.gestion_fase4.informeVisitaFrancoOsorio,
+                  actualizadoEn: expExistente.gestionFase4?.actualizadoEn || row.gestion_fase4.actualizadoEn || new Date().toISOString()
+                };
+              }
               if (row.tramite_licencia) expExistente.tramiteLicencia = row.tramite_licencia;
               if (row.postulacion_subsidio) expExistente.postulacionSubsidio = row.postulacion_subsidio;
               if (row.gestion_fase7) expExistente.gestionFase7 = row.gestion_fase7;
@@ -3057,20 +3212,25 @@ export async function createApp(): Promise<express.Express> {
         reqCaso.expedienteId = exp.id;
 
         // Restricción de bloqueo por revisión: Cuando el expediente está en revisión del Supervisor Jurídico,
-        // permitir si es una subsanación o corrección de documento
+        // permitir si es una subsanación, corrección de documento o en Fase 3
         if (exp.bloqueadoPorRevision && req.user!.rol !== "administrador" && req.user!.rol !== "supervisor") {
-          const esSubsanacion =
-            exp.estadoFase2 === "devuelto" ||
-            reqCaso.estado === "con_observaciones" ||
-            reqCaso.estado === "pendiente_carga";
-
-          if (!esSubsanacion) {
-            res.status(403).json({
-              error: `Acceso restringido por permisos de rol: El expediente se encuentra en revisión de Análisis Documental y su rol (${req.user!.rol}) tiene pausada temporalmente la carga de nuevos documentos.`
-            });
-            return;
-          } else {
+          if (exp.faseActual >= 3) {
             exp.bloqueadoPorRevision = false;
+          } else {
+            const esSubsanacion =
+              exp.estadoFase2 === "devuelto" ||
+              reqCaso.estado === "con_observaciones" ||
+              reqCaso.estado === "pendiente_carga" ||
+              reqCaso.estado === "actualizado";
+
+            if (!esSubsanacion) {
+              res.status(403).json({
+                error: `Acceso restringido por permisos de rol: El expediente se encuentra en revisión de Análisis Documental y su rol (${req.user!.rol}) tiene pausada temporalmente la carga de nuevos documentos.`
+              });
+              return;
+            } else {
+              exp.bloqueadoPorRevision = false;
+            }
           }
         }
 
@@ -3082,10 +3242,11 @@ export async function createApp(): Promise<express.Express> {
             req.user!.rol !== "asistente" &&
             req.user!.rol !== "administrador" &&
             req.user!.rol !== "supervisor" &&
+            req.user!.rol !== "ingenieria" &&
             !esComercialAsignado
           ) {
             res.status(403).json({
-              error: `Acceso restringido por permisos de rol: Los documentos de Fase 2 solo pueden ser cargados o reemplazados por el Gestor Documental o Administrador. Su rol actual es '${req.user!.rol}'.`
+              error: `Acceso restringido por permisos de rol: Los documentos solo pueden ser gestionados o reemplazados por el Gestor Documental, Ingeniería, Supervisor o Administrador. Su rol actual es '${req.user!.rol}'.`
             });
             return;
           }
@@ -3137,16 +3298,40 @@ export async function createApp(): Promise<express.Express> {
         const fotosBytes = fotosArr ? fotosArr.reduce((acc: number, f: any) => acc + (f.tamanoBytes || 0), 0) : 0;
 
         const nuevaVersionNum = (doc.versiones.length || 0) + 1;
-        const storagePath = `expedientes/${exp.id}/${reqCaso.codigoRequisito}_v${nuevaVersionNum}.${fotosArr ? "jpg" : "pdf"}`;
+        const extFromFileName = nombreArchivo?.match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toLowerCase();
+        const extFinal =
+          extFromFileName ||
+          (fotosArr
+            ? "jpg"
+            : mimeType?.includes("excel")
+            ? "xls"
+            : mimeType?.includes("spreadsheetml")
+            ? "xlsx"
+            : mimeType?.includes("csv")
+            ? "csv"
+            : "pdf");
+        const storagePath = `expedientes/${exp.id}/${reqCaso.codigoRequisito}_v${nuevaVersionNum}.${extFinal}`;
 
         // 3. Persistir archivo de inmediato en almacenamiento resiliente (disco local + Supabase Storage)
         const tsBuster = `t=${Date.now()}`;
         let publicUrlFinal = `/uploads/${storagePath}?${tsBuster}`;
         if (archivoDataUrl && typeof archivoDataUrl === "string") {
+          const mimeFinal =
+            mimeType ||
+            (extFinal === "xlsx"
+              ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              : extFinal === "xls"
+              ? "application/vnd.ms-excel"
+              : extFinal === "csv"
+              ? "text/csv"
+              : fotosArr
+              ? "image/jpeg"
+              : "application/pdf");
+
           const uploadRes = await persistirArchivoEnStorage(
             storagePath,
             archivoDataUrl,
-            mimeType || (fotosArr ? "image/jpeg" : "application/pdf")
+            mimeFinal
           );
           if (uploadRes.ok && uploadRes.publicUrl) {
             publicUrlFinal = uploadRes.publicUrl.includes("t=")
@@ -3191,10 +3376,25 @@ export async function createApp(): Promise<express.Express> {
         doc.versiones.push(nuevaVersion);
         doc.versionActual = nuevaVersion;
 
-        // Actualizar estado del requisito a 'recibido_revision'
-        reqCaso.estado = "recibido_revision";
+        // Actualizar estado del requisito automáticamente a 'actualizado' si ya contaba con documento previo o en Fase 3
+        const teniaVersionPrevia = (doc.versiones?.length || 0) > 1 || Boolean(reqCaso.documentoAsociado?.versionActual);
+        if (teniaVersionPrevia || exp.faseActual >= 3) {
+          reqCaso.estado = "actualizado";
+        } else {
+          reqCaso.estado = "recibido_revision";
+        }
 
-        // Si estaba devuelto con observaciones, reactivar en preparación
+        // Si estaba en subsanación de Fase 3, registrar el documento modificado
+        if (exp.subsanacionFase3Activa) {
+          if (!exp.subsanacionFase3DocumentosModificados) {
+            exp.subsanacionFase3DocumentosModificados = [];
+          }
+          if (!exp.subsanacionFase3DocumentosModificados.includes(reqCaso.codigoRequisito)) {
+            exp.subsanacionFase3DocumentosModificados.push(reqCaso.codigoRequisito);
+          }
+        }
+
+        // Si estaba devuelto con observaciones en Fase 2, reactivar en preparación
         if (exp.estadoFase2 === "devuelto") {
           exp.estadoFase2 = "en_preparacion";
         }
@@ -3848,6 +4048,145 @@ export async function createApp(): Promise<express.Express> {
         requisito: nuevoReq
       });
     }
+  );
+
+  // 8.1B ELIMINAR ARCHIVO CARGADO DE UN REQUISITO (Gestión Flexible CRUD Fase 3 y general)
+  // Permite al usuario eliminar un archivo cargado erróneamente sin borrar la estructura del requisito ni reiniciar el expediente.
+  const handlerEliminarArchivoRequisito = async (req: AuthRequest, res: Response) => {
+    try {
+      let exp = mockDb.expedientes.find(
+        (e) => e.id === req.params.id || e.codigoVisible === req.params.id || e.codigoVisible?.toUpperCase() === req.params.id?.toUpperCase()
+      );
+      if (!exp && supabaseAdmin) {
+        try {
+          const { data: row } = await supabaseAdmin
+            .from("expedientes")
+            .select(`
+              *,
+              postulante:personas!expedientes_postulante_id_fkey(*),
+              predio:predios!expedientes_predio_vivienda_id_fkey(*),
+              hogar:hogares!expedientes_hogar_id_fkey(
+                id,
+                observaciones,
+                integrantes:integrantes_hogar(
+                  id,
+                  parentesco,
+                  es_postulante_principal,
+                  persona:personas(*)
+                )
+              ),
+              comercial:perfiles_usuario!expedientes_comercial_origen_id_fkey(id, nombre_completo, username, rol),
+              responsable:perfiles_usuario!expedientes_responsable_general_id_fkey(id, nombre_completo, username, rol)
+            `)
+            .or(`id.eq.${req.params.id},codigo_visible.eq.${req.params.id}`)
+            .maybeSingle();
+
+          if (row) {
+            exp = mapearFilaSupabaseAExpediente(row);
+            inicializarRequisitosFase1(exp);
+            if (exp.faseActual >= 2) inicializarRequisitosFase2(exp);
+            if (exp.faseActual >= 4) inicializarFase4(exp);
+            mockDb.expedientes.unshift(exp);
+          }
+        } catch (err: any) {
+          console.error("[DEL FILE HIDRATACIÓN ERROR]:", err?.message);
+        }
+      }
+      if (!exp) {
+        res.status(404).json({ error: "Expediente no encontrado." });
+        return;
+      }
+
+      const reqIdParam = String(req.params.reqId || "").trim();
+      const matchCodigo = reqIdParam.match(/F\d+-\d+/i);
+      const codigoNormalizado = matchCodigo ? matchCodigo[0].toUpperCase() : null;
+
+      let reqCaso = mockDb.requisitosCaso.find(
+        (r) =>
+          r.id === reqIdParam ||
+          (codigoNormalizado && r.codigoRequisito?.toUpperCase() === codigoNormalizado) ||
+          ((r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && (
+            r.codigoRequisito === reqIdParam ||
+            r.id === reqIdParam
+          ))
+      );
+
+      if (!reqCaso) {
+        res.status(404).json({ error: "Requisito documental no encontrado." });
+        return;
+      }
+
+      const nombreDocAnterior = reqCaso.documentoAsociado?.versionActual?.nombreArchivoOriginal || "Archivo previo";
+
+      // Limpiar versiones y desasociar documento
+      if (reqCaso.documentoAsociado) {
+        const docId = reqCaso.documentoAsociado.id;
+        const docEnDb = mockDb.documentos.find((d) => d.id === docId);
+        if (docEnDb) {
+          docEnDb.versiones = [];
+          docEnDb.versionActual = undefined as any;
+        }
+        reqCaso.documentoAsociado.versiones = [];
+        reqCaso.documentoAsociado.versionActual = undefined as any;
+        reqCaso.documentoAsociado = undefined;
+      }
+
+      // Regla de Negocio: Al eliminar un archivo cargado erróneamente, pasa automáticamente a 'pendiente_carga'
+      reqCaso.estado = "pendiente_carga";
+
+      // Si estaba en subsanación de Fase 3 y se eliminó, actualizar registro
+      if (exp.subsanacionFase3DocumentosModificados) {
+        exp.subsanacionFase3DocumentosModificados = exp.subsanacionFase3DocumentosModificados.filter(
+          (c) => c !== reqCaso!.codigoRequisito
+        );
+      }
+
+      // Registro en bitácora para trazabilidad de auditoría
+      mockDb.notas.push({
+        id: `not-del-file-${Date.now()}`,
+        expedienteId: exp.id,
+        autorId: req.user!.id,
+        autorNombre: req.user!.nombreCompleto,
+        tipo: "gestion_tecnica",
+        contenido: `Archivo "${nombreDocAnterior}" del requisito [${reqCaso.codigoRequisito}] "${reqCaso.nombre}" eliminado por ${req.user!.nombreCompleto} (${req.user!.rol}). Estado del ítem actualizado a 'Pendiente'.`,
+        creadoEn: new Date().toISOString()
+      });
+
+      // Si Supabase está conectado, limpiar en base de datos también
+      if (supabaseAdmin) {
+        try {
+          await supabaseAdmin
+            .from("requisitos_caso")
+            .update({
+              estado: "pendiente_carga",
+              documento_id: null
+            })
+            .eq("id", reqCaso.id);
+        } catch (dbErr: any) {
+          console.warn("[SUPABASE]: Error al limpiar archivo de requisito:", dbErr?.message);
+        }
+      }
+
+      res.json({
+        success: true,
+        mensaje: `Archivo eliminado exitosamente. El requisito [${reqCaso.codigoRequisito}] ahora está en estado 'Pendiente'.`,
+        requisito: reqCaso
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Error al eliminar el archivo del requisito." });
+    }
+  };
+
+  app.delete(
+    "/api/expedientes/:id/requisitos/:reqId/archivo",
+    requireAuth(["asistente", "ingenieria", "supervisor", "administrador"]),
+    handlerEliminarArchivoRequisito
+  );
+
+  app.post(
+    "/api/expedientes/:id/requisitos/:reqId/eliminar-archivo",
+    requireAuth(["asistente", "ingenieria", "supervisor", "administrador"]),
+    handlerEliminarArchivoRequisito
   );
 
   // 8.2 ELIMINAR REQUISITO DOCUMENTAL (Asistente, Administrador)
@@ -5006,6 +5345,8 @@ export async function createApp(): Promise<express.Express> {
       }
 
       const numeroEnvio = (exp.validacionCompensar.envios?.length || 0) + 1;
+      const radicadoEnvioNormalizado = (radicadoOReferencia && String(radicadoOReferencia).trim()) || "Sin radicado / En trámite";
+
       const nuevoEnvio: EnvioCompensar = {
         id: `env-comp-${Date.now()}-${numeroEnvio}`,
         expedienteId: exp.id,
@@ -5017,7 +5358,7 @@ export async function createApp(): Promise<express.Express> {
         asunto: asunto || `Envío Expediente ${exp.codigoVisible || exp.id} - Validación Inicial Compensar`,
         cuerpoMensaje: cuerpoMensaje || "Remisión formal de expediente para validación inicial de habitabilidad y viabilidad de subsidio rural.",
         documentosIncluidos: docsParaEnvio,
-        radicadoOReferencia: radicadoOReferencia || `ENV-${Date.now().toString().slice(-6)}`,
+        radicadoOReferencia: radicadoEnvioNormalizado,
         notasEnvio: notasEnvio || "",
         evidenciaUrl: soporteUrl,
         evidenciaNombre: evidenciaNombre || "Pantallazo_Envio_Compensar.png",
@@ -5088,6 +5429,8 @@ export async function createApp(): Promise<express.Express> {
         return;
       }
 
+      const radicadoNormalizado = (radicadoOConcepto && String(radicadoOConcepto).trim()) || "Sin radicado / En trámite";
+
       const nuevaRespuesta: RespuestaCompensar = {
         id: `resp-comp-${Date.now()}`,
         envioId: envio.id,
@@ -5095,7 +5438,7 @@ export async function createApp(): Promise<express.Express> {
         usuarioRegistroId: req.user!.id,
         usuarioRegistroNombre: req.user!.nombreCompleto,
         resultado,
-        radicadoOConcepto,
+        radicadoOConcepto: radicadoNormalizado,
         observacionesDetalladas: observacionesDetalladas || "",
         archivoConceptoUrl,
         archivoConceptoNombre,
@@ -5107,7 +5450,7 @@ export async function createApp(): Promise<express.Express> {
       if (resultado === "aprobado") {
         exp.validacionCompensar.estadoActual = "aprobado";
         exp.validacionCompensar.fechaAprobacionFinal = nuevaRespuesta.fechaRespuesta;
-        exp.validacionCompensar.radicadoAprobacionFinal = radicadoOConcepto;
+        exp.validacionCompensar.radicadoAprobacionFinal = radicadoNormalizado;
         exp.validacionCompensar.archivoConceptoFinalUrl = archivoConceptoUrl;
         exp.validacionCompensar.observacionesFinales = observacionesDetalladas;
 
@@ -5486,154 +5829,156 @@ export async function createApp(): Promise<express.Express> {
   );
 
   // 15.4 GESTIÓN FASE 4: ACTUALIZAR FRENTE DE TRABAJO EN PARALELO (Ingeniería / Admin)
-  app.put(
-    "/api/expedientes/:id/fase4/frente/:frente",
-    requireAuth(["ingenieria", "administrador", "supervisor"]),
-    (req: AuthRequest, res: Response) => {
-      const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
-      if (!exp) {
-        res.status(404).json({ error: "Expediente no encontrado." });
+  const handlerActualizarFrenteFase4 = async (req: AuthRequest, res: Response) => {
+    const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
+    if (!exp) {
+      res.status(404).json({ error: "Expediente no encontrado." });
+      return;
+    }
+
+    const frenteKey = req.params.frente as "interventoria" | "arquitectura" | "estudioSuelos";
+    if (!["interventoria", "arquitectura", "estudioSuelos"].includes(frenteKey)) {
+      res.status(400).json({ error: "Frente de trabajo no válido. Debe ser: interventoria, arquitectura o estudioSuelos." });
+      return;
+    }
+
+    inicializarFase4(exp);
+    const frenteObj = exp.gestionFase4![frenteKey] as any;
+    const estadoAnterior = frenteObj.estado;
+
+    const {
+      estado,
+      fechaSolicitud,
+      fechaEstimada,
+      fechaVisitaRealizada,
+      resultadoConcepto,
+      porcentajeAvance,
+      fechaEntregaEstimada,
+      fechaEntregaReal,
+      fechaRealizacion,
+      observaciones,
+      soporte,
+      accion,
+      observacionHistorial
+    } = req.body;
+
+    const nuevoEstado = estado !== undefined ? estado : frenteObj.estado;
+
+    // VALIDACIONES BLOQUEANTES CUANDO SE QUIERE COMPLETAR EL FRENTE (CAMBIO 1, 4, 5, 6)
+    if (nuevoEstado === "completado") {
+      const tieneSoporte = !!(soporte?.nombreArchivo || frenteObj.soporte?.nombreArchivo);
+      if (!tieneSoporte) {
+        res.status(400).json({ error: "Debe cargar el informe de soporte antes de completar este frente." });
         return;
       }
 
-      const frenteKey = req.params.frente as "interventoria" | "arquitectura" | "estudioSuelos";
-      if (!["interventoria", "arquitectura", "estudioSuelos"].includes(frenteKey)) {
-        res.status(400).json({ error: "Frente de trabajo no válido. Debe ser: interventoria, arquitectura o estudioSuelos." });
-        return;
-      }
-
-      inicializarFase4(exp);
-      const frenteObj = exp.gestionFase4![frenteKey] as any;
-      const estadoAnterior = frenteObj.estado;
-
-      const {
-        estado,
-        fechaSolicitud,
-        fechaEstimada,
-        fechaVisitaRealizada,
-        resultadoConcepto,
-        porcentajeAvance,
-        fechaEntregaEstimada,
-        fechaEntregaReal,
-        fechaRealizacion,
-        observaciones,
-        soporte,
-        accion,
-        observacionHistorial
-      } = req.body;
-
-      const nuevoEstado = estado !== undefined ? estado : frenteObj.estado;
-
-      // VALIDACIONES BLOQUEANTES CUANDO SE QUIERE COMPLETAR EL FRENTE (CAMBIO 1, 4, 5, 6)
-      if (nuevoEstado === "completado") {
-        const tieneSoporte = !!(soporte?.nombreArchivo || frenteObj.soporte?.nombreArchivo);
-        if (!tieneSoporte) {
-          res.status(400).json({ error: "Debe cargar el informe de soporte antes de completar este frente." });
+      if (frenteKey === "interventoria") {
+        const fSol = fechaSolicitud !== undefined ? fechaSolicitud : frenteObj.fechaSolicitud;
+        const fEst = fechaEstimada !== undefined ? fechaEstimada : frenteObj.fechaEstimada;
+        const fVis = fechaVisitaRealizada !== undefined ? fechaVisitaRealizada : frenteObj.fechaVisitaRealizada;
+        if (!fSol || !fEst || !fVis) {
+          res.status(400).json({ error: "Debe especificar las fechas de solicitud, fecha estimada y visita realizada para completar este frente." });
           return;
         }
-
-        if (frenteKey === "interventoria") {
-          const fSol = fechaSolicitud !== undefined ? fechaSolicitud : frenteObj.fechaSolicitud;
-          const fEst = fechaEstimada !== undefined ? fechaEstimada : frenteObj.fechaEstimada;
-          const fVis = fechaVisitaRealizada !== undefined ? fechaVisitaRealizada : frenteObj.fechaVisitaRealizada;
-          if (!fSol || !fEst || !fVis) {
-            res.status(400).json({ error: "Debe especificar las fechas de solicitud, fecha estimada y visita realizada para completar este frente." });
-            return;
-          }
-        } else if (frenteKey === "arquitectura") {
-          const fSol = fechaSolicitud !== undefined ? fechaSolicitud : frenteObj.fechaSolicitud;
-          const fEst = fechaEntregaEstimada !== undefined ? fechaEntregaEstimada : frenteObj.fechaEntregaEstimada;
-          const fReal = fechaEntregaReal !== undefined ? fechaEntregaReal : frenteObj.fechaEntregaReal;
-          if (!fSol || !fEst || !fReal) {
-            res.status(400).json({ error: "Debe especificar las fechas de solicitud, entrega estimada y entrega real para completar este frente." });
-            return;
-          }
-        } else if (frenteKey === "estudioSuelos") {
-          const fSol = fechaSolicitud !== undefined ? fechaSolicitud : frenteObj.fechaSolicitud;
-          const fSon = fechaRealizacion !== undefined ? fechaRealizacion : frenteObj.fechaRealizacion;
-          const fInf = (fechaEntregaReal !== undefined ? fechaEntregaReal : frenteObj.fechaEntregaReal) ||
-                       (fechaEntregaEstimada !== undefined ? fechaEntregaEstimada : frenteObj.fechaEntregaEstimada);
-          if (!fSol || !fSon || !fInf) {
-            res.status(400).json({ error: "Debe especificar las fechas de solicitud, sondeos en campo y entrega del informe para completar este frente." });
-            return;
-          }
+      } else if (frenteKey === "arquitectura") {
+        const fSol = fechaSolicitud !== undefined ? fechaSolicitud : frenteObj.fechaSolicitud;
+        const fEst = fechaEntregaEstimada !== undefined ? fechaEntregaEstimada : frenteObj.fechaEntregaEstimada;
+        const fReal = fechaEntregaReal !== undefined ? fechaEntregaReal : frenteObj.fechaEntregaReal;
+        if (!fSol || !fEst || !fReal) {
+          res.status(400).json({ error: "Debe especificar las fechas de solicitud, entrega estimada y entrega real para completar este frente." });
+          return;
+        }
+      } else if (frenteKey === "estudioSuelos") {
+        const fSol = fechaSolicitud !== undefined ? fechaSolicitud : frenteObj.fechaSolicitud;
+        const fSon = fechaRealizacion !== undefined ? fechaRealizacion : frenteObj.fechaRealizacion;
+        const fInf = (fechaEntregaReal !== undefined ? fechaEntregaReal : frenteObj.fechaEntregaReal) ||
+                     (fechaEntregaEstimada !== undefined ? fechaEntregaEstimada : frenteObj.fechaEntregaEstimada);
+        if (!fSol || !fSon || !fInf) {
+          res.status(400).json({ error: "Debe especificar las fechas de solicitud, sondeos en campo y entrega del informe para completar este frente." });
+          return;
         }
       }
-
-      if (estado !== undefined) frenteObj.estado = estado;
-      if (fechaSolicitud !== undefined) frenteObj.fechaSolicitud = fechaSolicitud;
-      if (fechaEstimada !== undefined) frenteObj.fechaEstimada = fechaEstimada;
-      if (fechaVisitaRealizada !== undefined) frenteObj.fechaVisitaRealizada = fechaVisitaRealizada;
-      if (resultadoConcepto !== undefined) frenteObj.resultadoConcepto = resultadoConcepto;
-      if (porcentajeAvance !== undefined) frenteObj.porcentajeAvance = Number(porcentajeAvance);
-      if (fechaEntregaEstimada !== undefined) frenteObj.fechaEntregaEstimada = fechaEntregaEstimada;
-      if (fechaEntregaReal !== undefined) frenteObj.fechaEntregaReal = fechaEntregaReal;
-      if (fechaRealizacion !== undefined) frenteObj.fechaRealizacion = fechaRealizacion;
-      if (observaciones !== undefined) frenteObj.observaciones = observaciones;
-      if (soporte !== undefined) {
-        // CAMBIO 9: Validar que el soporte para Planos de Arquitectura sea exclusivamente PDF
-        if (frenteKey === "arquitectura") {
-          const nombreValido = soporte.nombreArchivo ? soporte.nombreArchivo.toLowerCase().endsWith(".pdf") : true;
-          const mimeValido = soporte.mimeType ? (soporte.mimeType === "application/pdf" || soporte.mimeType.includes("pdf")) : true;
-          if (!nombreValido && !mimeValido) {
-            res.status(400).json({ error: "Formato no válido. Solo se permiten documentos en formato PDF." });
-            return;
-          }
-        }
-
-        frenteObj.soporte = {
-          ...soporte,
-          subidoPor: req.user!.nombreCompleto,
-          subidoEn: new Date().toISOString()
-        };
-      }
-
-      // Registro en bitácora/historial del frente
-      const accionTxt = accion || (estado && estado !== estadoAnterior ? `Cambio de estado: ${estado.toUpperCase()}` : "Actualización de gestión técnica");
-      const notaTxt = observacionHistorial || observaciones || (soporte ? `Soporte técnico adjuntado: ${soporte.nombreArchivo}` : "Gestión registrada en sistema.");
-
-      frenteObj.historial = frenteObj.historial || [];
-      frenteObj.historial.unshift({
-        id: `hist-${frenteKey}-${Date.now()}`,
-        fecha: new Date().toISOString(),
-        usuarioId: req.user!.id,
-        usuarioNombre: req.user!.nombreCompleto,
-        usuarioRol: req.user!.rol,
-        accion: accionTxt,
-        estadoAnterior,
-        nuevoEstado: frenteObj.estado,
-        observaciones: notaTxt
-      });
-
-      // CAMBIO 2: Espejo e inmutabilidad en la bitácora general de conversaciones y notas
-      const prefijoFrente = frenteKey === "interventoria"
-        ? "[Frente 1 - Interventoría]"
-        : frenteKey === "arquitectura"
-        ? "[Frente 2 - Arquitectura]"
-        : "[Frente 3 - Estudio de Suelos]";
-
-      mockDb.notas.push({
-        id: `not-f4-${frenteKey}-${Date.now()}`,
-        expedienteId: exp.id,
-        autorId: req.user!.id,
-        autorNombre: req.user!.nombreCompleto,
-        tipo: "observacion",
-        contenido: `${prefijoFrente} ${accionTxt}. ${notaTxt}`,
-        creadoEn: new Date().toISOString()
-      });
-
-      exp.gestionFase4!.actualizadoEn = new Date().toISOString();
-      exp.actualizadoEn = new Date().toISOString();
-
-      res.json({ success: true, gestionFase4: exp.gestionFase4, expediente: exp });
     }
-  );
+
+    if (estado !== undefined) frenteObj.estado = estado;
+    if (fechaSolicitud !== undefined) frenteObj.fechaSolicitud = fechaSolicitud;
+    if (fechaEstimada !== undefined) frenteObj.fechaEstimada = fechaEstimada;
+    if (fechaVisitaRealizada !== undefined) frenteObj.fechaVisitaRealizada = fechaVisitaRealizada;
+    if (resultadoConcepto !== undefined) frenteObj.resultadoConcepto = resultadoConcepto;
+    if (porcentajeAvance !== undefined) frenteObj.porcentajeAvance = Number(porcentajeAvance);
+    if (fechaEntregaEstimada !== undefined) frenteObj.fechaEntregaEstimada = fechaEntregaEstimada;
+    if (fechaEntregaReal !== undefined) frenteObj.fechaEntregaReal = fechaEntregaReal;
+    if (fechaRealizacion !== undefined) frenteObj.fechaRealizacion = fechaRealizacion;
+    if (observaciones !== undefined) frenteObj.observaciones = observaciones;
+    if (soporte !== undefined) {
+      // CAMBIO 9: Validar que el soporte para Planos de Arquitectura sea exclusivamente PDF
+      if (frenteKey === "arquitectura") {
+        const nombreValido = soporte.nombreArchivo ? soporte.nombreArchivo.toLowerCase().endsWith(".pdf") : true;
+        const mimeValido = soporte.mimeType ? (soporte.mimeType === "application/pdf" || soporte.mimeType.includes("pdf")) : true;
+        if (!nombreValido && !mimeValido) {
+          res.status(400).json({ error: "Formato no válido. Solo se permiten documentos en formato PDF." });
+          return;
+        }
+      }
+
+      frenteObj.soporte = {
+        ...soporte,
+        subidoPor: req.user!.nombreCompleto,
+        subidoEn: new Date().toISOString()
+      };
+    }
+
+    // Registro en bitácora/historial del frente
+    const accionTxt = accion || (estado && estado !== estadoAnterior ? `Cambio de estado: ${estado.toUpperCase()}` : "Actualización de gestión técnica");
+    const notaTxt = observacionHistorial || observaciones || (soporte ? `Soporte técnico adjuntado: ${soporte.nombreArchivo}` : "Gestión registrada en sistema.");
+
+    frenteObj.historial = frenteObj.historial || [];
+    frenteObj.historial.unshift({
+      id: `hist-${frenteKey}-${Date.now()}`,
+      fecha: new Date().toISOString(),
+      usuarioId: req.user!.id,
+      usuarioNombre: req.user!.nombreCompleto,
+      usuarioRol: req.user!.rol,
+      accion: accionTxt,
+      estadoAnterior,
+      nuevoEstado: frenteObj.estado,
+      observaciones: notaTxt
+    });
+
+    // CAMBIO 2: Espejo e inmutabilidad en la bitácora general de conversaciones y notas
+    const prefijoFrente = frenteKey === "interventoria"
+      ? "[Frente 1 - Interventoría]"
+      : frenteKey === "arquitectura"
+      ? "[Frente 2 - Arquitectura]"
+      : "[Frente 3 - Estudio de Suelos]";
+
+    mockDb.notas.push({
+      id: `not-f4-${frenteKey}-${Date.now()}`,
+      expedienteId: exp.id,
+      autorId: req.user!.id,
+      autorNombre: req.user!.nombreCompleto,
+      tipo: "observacion",
+      contenido: `${prefijoFrente} ${accionTxt}. ${notaTxt}`,
+      creadoEn: new Date().toISOString()
+    });
+
+    exp.gestionFase4!.actualizadoEn = new Date().toISOString();
+    exp.actualizadoEn = new Date().toISOString();
+
+    // Sincronización inmediata a Supabase para evitar pérdida de datos entre frentes
+    await sincronizarExpedienteEnSupabase(exp);
+
+    res.json({ success: true, gestionFase4: exp.gestionFase4, expediente: exp });
+  };
+
+  app.put("/api/expedientes/:id/fase4/frente/:frente", requireAuth(["ingenieria", "administrador", "supervisor"]), handlerActualizarFrenteFase4);
+  app.patch("/api/expedientes/:id/fase4/frente/:frente", requireAuth(["ingenieria", "administrador", "supervisor"]), handlerActualizarFrenteFase4);
 
   // 15.5 GESTIÓN FASE 4: AGREGAR NOTA AL HISTORIAL DEL FRENTE
   app.post(
     "/api/expedientes/:id/fase4/frente/:frente/historial",
     requireAuth(["ingenieria", "administrador", "supervisor"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -5687,7 +6032,136 @@ export async function createApp(): Promise<express.Express> {
       exp.gestionFase4!.actualizadoEn = new Date().toISOString();
       exp.actualizadoEn = new Date().toISOString();
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, historial: frenteObj.historial, expediente: exp });
+    }
+  );
+
+  // 15.5B NUEVO REQUERIMIENTO FASE 4: INFORME DE VISITA POR PARTE DE FRANCO OSORIO
+  app.post(
+    "/api/expedientes/:id/fase4/informe-franco-osorio",
+    requireAuth(["ingenieria", "administrador", "supervisor", "asistente"]),
+    async (req: AuthRequest, res: Response) => {
+      const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
+      if (!exp) {
+        res.status(404).json({ error: "Expediente no encontrado." });
+        return;
+      }
+
+      inicializarFase4(exp);
+      const {
+        nombreArchivo,
+        url,
+        archivoDataUrl,
+        mimeType,
+        tamanoBytes,
+        sha256,
+        fechaVisita,
+        profesionalResponsable,
+        observaciones,
+        estado
+      } = req.body;
+
+      if (!nombreArchivo) {
+        res.status(400).json({ error: "Debe suministrar el nombre del archivo del informe de visita." });
+        return;
+      }
+
+      const informeObj = {
+        id: `inf-fo-${Date.now()}`,
+        nombreArchivo,
+        url: url || "/uploads/informes/informe_visita_franco_osorio.pdf",
+        archivoDataUrl: archivoDataUrl || undefined,
+        mimeType: mimeType || "application/pdf",
+        tamanoBytes: Number(tamanoBytes) || 1024000,
+        sha256: sha256 || `sha256-${Date.now().toString(16)}`,
+        subidoPor: req.user!.nombreCompleto,
+        subidoEn: new Date().toISOString(),
+        fechaVisita: fechaVisita || new Date().toISOString().split("T")[0],
+        profesionalResponsable: profesionalResponsable || "Ing. Franco Osorio",
+        observaciones: observaciones || "Informe de visita técnica de inspección en campo por parte de Franco Osorio Investment S.A.S.",
+        estado: estado || "cargado"
+      };
+
+      exp.gestionFase4!.informeVisitaFrancoOsorio = informeObj;
+      exp.gestionFase4!.actualizadoEn = new Date().toISOString();
+      exp.actualizadoEn = new Date().toISOString();
+
+      // Trazabilidad inmutable en bitácora general de notas
+      mockDb.notas.push({
+        id: `not-fo-${Date.now()}`,
+        expedienteId: exp.id,
+        autorId: req.user!.id,
+        autorNombre: req.user!.nombreCompleto,
+        tipo: "hito",
+        contenido: `[Fase 4 - Franco Osorio] Informe de visita técnica cargado exitosamente. Documento: ${nombreArchivo}. Profesional responsable: ${informeObj.profesionalResponsable}. Fecha de visita: ${informeObj.fechaVisita}.`,
+        creadoEn: new Date().toISOString()
+      });
+
+      // Registro en historial de interventoría para trazabilidad cruzada
+      if (exp.gestionFase4?.interventoria) {
+        exp.gestionFase4.interventoria.historial = exp.gestionFase4.interventoria.historial || [];
+        exp.gestionFase4.interventoria.historial.unshift({
+          id: `hist-fo-${Date.now()}`,
+          fecha: new Date().toISOString(),
+          usuarioId: req.user!.id,
+          usuarioNombre: req.user!.nombreCompleto,
+          usuarioRol: req.user!.rol,
+          accion: "Carga de Informe de Visita Franco Osorio",
+          observaciones: `Informe adjuntado: ${nombreArchivo}. Profesional: ${informeObj.profesionalResponsable}.`
+        });
+      }
+
+      await sincronizarExpedienteEnSupabase(exp);
+
+      res.status(201).json({
+        success: true,
+        informe: informeObj,
+        gestionFase4: exp.gestionFase4,
+        expediente: exp,
+        mensaje: "Informe de visita por parte de Franco Osorio registrado con éxito."
+      });
+    }
+  );
+
+  // 15.5C GESTIÓN FASE 4: ELIMINAR / REEMPLAZAR INFORME DE VISITA FRANCO OSORIO
+  app.delete(
+    "/api/expedientes/:id/fase4/informe-franco-osorio",
+    requireAuth(["ingenieria", "administrador", "supervisor"]),
+    async (req: AuthRequest, res: Response) => {
+      const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
+      if (!exp) {
+        res.status(404).json({ error: "Expediente no encontrado." });
+        return;
+      }
+
+      inicializarFase4(exp);
+      const anterior = exp.gestionFase4?.informeVisitaFrancoOsorio;
+      if (exp.gestionFase4) {
+        delete exp.gestionFase4.informeVisitaFrancoOsorio;
+        exp.gestionFase4.actualizadoEn = new Date().toISOString();
+      }
+      exp.actualizadoEn = new Date().toISOString();
+
+      mockDb.notas.push({
+        id: `not-fo-del-${Date.now()}`,
+        expedienteId: exp.id,
+        autorId: req.user!.id,
+        autorNombre: req.user!.nombreCompleto,
+        tipo: "observacion",
+        contenido: `[Fase 4 - Franco Osorio] Informe de visita técnica eliminado (${anterior?.nombreArchivo || "documento"}).`,
+        creadoEn: new Date().toISOString()
+      });
+
+      await sincronizarExpedienteEnSupabase(exp);
+
+      res.json({
+        success: true,
+        gestionFase4: exp.gestionFase4,
+        expediente: exp,
+        mensaje: "Informe de visita de Franco Osorio eliminado correctamente."
+      });
     }
   );
 
@@ -6129,6 +6603,201 @@ export async function createApp(): Promise<express.Express> {
       });
 
       res.json({ success: true, tramiteLicencia: exp.tramiteLicencia, expediente: exp });
+    }
+  );
+
+  // 15.2.4.1 GESTIÓN DE DOCUMENTACIÓN TÉCNICA DE RADICACIÓN EN PLANEACIÓN (FUN, MEMORIALES, ETC.)
+  app.post(
+    "/api/expedientes/:id/licencia/documentos-planeacion",
+    requireAuth(["ingenieria", "supervisor", "administrador"]),
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
+        if (!exp) {
+          res.status(404).json({ error: "Expediente no encontrado." });
+          return;
+        }
+        inicializarFase5Licencia(exp);
+
+        const {
+          idDoc,
+          tipo,
+          nombre,
+          descripcion,
+          esObligatorio,
+          nombreArchivo,
+          mimeType,
+          tamanoBytes,
+          archivoDataUrl,
+          sha256Hash,
+          observaciones
+        } = req.body;
+
+        if (!nombreArchivo) {
+          res.status(400).json({ error: "Debe suministrar el archivo digital del documento técnico." });
+          return;
+        }
+
+        const soporte: SoporteDocumentoLicencia = {
+          id: `sop-plan-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          nombreArchivo,
+          mimeType: mimeType || "application/pdf",
+          tamanoBytes: tamanoBytes || 1024000,
+          archivoDataUrl,
+          sha256: sha256Hash || `sha256-${Date.now()}`,
+          sha256Hash: sha256Hash || `sha256-${Date.now()}`,
+          subidoPor: req.user!.nombreCompleto,
+          subidoEn: new Date().toISOString()
+        };
+
+        if (!exp.tramiteLicencia!.documentosPlaneacion) {
+          exp.tramiteLicencia!.documentosPlaneacion = [];
+        }
+
+        const docs = exp.tramiteLicencia!.documentosPlaneacion;
+        const indexExistente = docs.findIndex((d) => (idDoc && d.id === idDoc) || (tipo && d.tipo === tipo));
+
+        let docActualizado: DocumentoRadicacionPlaneacion;
+
+        if (indexExistente >= 0) {
+          docActualizado = {
+            ...docs[indexExistente],
+            nombre: nombre || docs[indexExistente].nombre,
+            descripcion: descripcion || docs[indexExistente].descripcion,
+            tipo: tipo || docs[indexExistente].tipo,
+            esObligatorio: esObligatorio !== undefined ? esObligatorio : docs[indexExistente].esObligatorio,
+            soporte,
+            fechaCarga: new Date().toISOString(),
+            cargadoPorId: req.user!.id,
+            cargadoPorNombre: req.user!.nombreCompleto,
+            cargadoPorRol: req.user!.rol,
+            observaciones: observaciones || docs[indexExistente].observaciones
+          };
+          docs[indexExistente] = docActualizado;
+        } else {
+          docActualizado = {
+            id: idDoc || `doc-plan-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            tipo: tipo || "otro",
+            nombre: nombre || "Documento Técnico de Radicación",
+            descripcion: descripcion || "Documentación técnica oficial de radicación ante Planeación / Curaduría.",
+            esObligatorio: esObligatorio !== undefined ? esObligatorio : false,
+            soporte,
+            fechaCarga: new Date().toISOString(),
+            cargadoPorId: req.user!.id,
+            cargadoPorNombre: req.user!.nombreCompleto,
+            cargadoPorRol: req.user!.rol,
+            observaciones
+          };
+          docs.push(docActualizado);
+        }
+
+        exp.tramiteLicencia!.actualizadoEn = new Date().toISOString();
+
+        // Trazabilidad en historial de trámite
+        const hist: RegistroHistorialLicencia = {
+          id: `hist-lic-docplan-${Date.now()}`,
+          fecha: new Date().toISOString(),
+          usuarioId: req.user!.id,
+          usuarioNombre: req.user!.nombreCompleto,
+          usuarioRol: req.user!.rol,
+          tipoEvento: "nota_gestion",
+          titulo: `Documento Técnico Cargado: ${docActualizado.nombre}`,
+          descripcion: `Cargado por ${req.user!.nombreCompleto} (${req.user!.rol}). Archivo: ${nombreArchivo}. ${observaciones || ""}`.trim(),
+          soporte,
+          estadoResultante: exp.tramiteLicencia!.estadoActual
+        };
+        exp.tramiteLicencia!.historial.unshift(hist);
+
+        // Notificación en bitácora
+        mockDb.notas.push({
+          id: `not-plan-doc-${Date.now()}`,
+          expedienteId: exp.id,
+          autorId: req.user!.id,
+          autorNombre: req.user!.nombreCompleto,
+          tipo: "hito",
+          contenido: `[Fase 5 - Documentación de Planeación] Se cargó el documento "${docActualizado.nombre}" (${nombreArchivo}) para la radicación formal ante Planeación / Curaduría.`,
+          creadoEn: new Date().toISOString()
+        });
+
+        await sincronizarExpedienteEnSupabase(exp);
+
+        res.json({
+          success: true,
+          mensaje: "Documento técnico de radicación registrado exitosamente.",
+          documento: docActualizado,
+          documentosPlaneacion: exp.tramiteLicencia!.documentosPlaneacion,
+          tramiteLicencia: exp.tramiteLicencia,
+          expediente: exp
+        });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message || "Error al registrar documento de planeación." });
+      }
+    }
+  );
+
+  // 15.2.4.2 ELIMINAR / DESVINCULAR DOCUMENTO DE RADICACIÓN EN PLANEACIÓN
+  app.delete(
+    "/api/expedientes/:id/licencia/documentos-planeacion/:docId",
+    requireAuth(["ingenieria", "supervisor", "administrador"]),
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
+        if (!exp) {
+          res.status(404).json({ error: "Expediente no encontrado." });
+          return;
+        }
+        inicializarFase5Licencia(exp);
+
+        const docId = req.params.docId;
+        const docs = exp.tramiteLicencia?.documentosPlaneacion || [];
+        const index = docs.findIndex((d) => d.id === docId);
+
+        if (index === -1) {
+          res.status(404).json({ error: "Documento técnico no encontrado." });
+          return;
+        }
+
+        const docRemovido = docs[index];
+        // En lugar de borrar la fila si es obligatoria, se limpia el soporte para permitir recarga
+        if (docRemovido.esObligatorio) {
+          docs[index] = {
+            ...docRemovido,
+            soporte: undefined,
+            fechaCarga: undefined,
+            observaciones: undefined
+          };
+        } else {
+          docs.splice(index, 1);
+        }
+
+        exp.tramiteLicencia!.actualizadoEn = new Date().toISOString();
+
+        // Registro en historial
+        const hist: RegistroHistorialLicencia = {
+          id: `hist-lic-deldoc-${Date.now()}`,
+          fecha: new Date().toISOString(),
+          usuarioId: req.user!.id,
+          usuarioNombre: req.user!.nombreCompleto,
+          usuarioRol: req.user!.rol,
+          tipoEvento: "nota_gestion",
+          titulo: `Documento Técnico Removido: ${docRemovido.nombre}`,
+          descripcion: `Documento removido/reseteado por ${req.user!.nombreCompleto} (${req.user!.rol}).`,
+          estadoResultante: exp.tramiteLicencia!.estadoActual
+        };
+        exp.tramiteLicencia!.historial.unshift(hist);
+
+        await sincronizarExpedienteEnSupabase(exp);
+
+        res.json({
+          success: true,
+          mensaje: "Documento técnico removido correctamente.",
+          documentosPlaneacion: exp.tramiteLicencia!.documentosPlaneacion,
+          tramiteLicencia: exp.tramiteLicencia,
+          expediente: exp
+        });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message || "Error al desvincular documento de planeación." });
+      }
     }
   );
 
@@ -6770,6 +7439,69 @@ export async function createApp(): Promise<express.Express> {
     }
   );
 
+  // 15.3.6.2 Aplicar Lote Clasificado de los 28 Documentos (o archivo ZIP procesado)
+  app.post(
+    "/api/expedientes/:id/postulacion/aplicar-lote-documentos-28",
+    requireAuth(["ingenieria", "supervisor", "administrador"]),
+    (req: AuthRequest, res: Response) => {
+      const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
+      if (!exp) {
+        res.status(404).json({ error: "Expediente no encontrado." });
+        return;
+      }
+      inicializarFase6Postulacion(exp);
+
+      const { items } = req.body;
+      if (!Array.isArray(items) || items.length === 0) {
+        res.status(400).json({ error: "Debe enviar un array con los documentos a actualizar." });
+        return;
+      }
+
+      if (!exp.postulacionSubsidio!.documentosCargaActiva) {
+        exp.postulacionSubsidio!.documentosCargaActiva = {};
+      }
+
+      let actualizados = 0;
+      items.forEach((item: any) => {
+        if (!item.codigo) return;
+        if (item.estado === "Encontrado" || item.archivoDataUrl || item.nombreArchivoOriginal) {
+          const soporte: SoporteDocumentoPostulacion = {
+            nombreArchivo: item.nombreArchivoOriginal || `${item.codigo}_${item.nombre}.pdf`,
+            url: item.soporteUrl || item.archivoDataUrl || `expedientes/${exp.id}/${item.codigo}.pdf`,
+            archivoDataUrl: item.archivoDataUrl || item.soporteUrl,
+            mimeType: item.mimeType || (item.formatoEsperado === "XLSX" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/pdf"),
+            tamanoBytes: item.tamanoBytes || 1024 * 180,
+            sha256Hash: item.sha256Hash || `sha256-${item.codigo.toLowerCase()}-${Date.now()}`,
+            subidoPor: req.user!.nombreCompleto,
+            subidoEn: new Date().toISOString()
+          };
+          exp.postulacionSubsidio!.documentosCargaActiva[item.codigo] = soporte;
+          actualizados++;
+        }
+      });
+
+      exp.postulacionSubsidio!.actualizadoEn = new Date().toISOString();
+
+      exp.postulacionSubsidio!.historial.unshift({
+        id: `hist-lote-28-${Date.now()}`,
+        fecha: new Date().toISOString(),
+        tipo: "nota",
+        titulo: `Lote de ${actualizados} documentos clasificados sincronizado (Fase 6)`,
+        descripcion: `Actualización de matriz de 28 documentos según norma Compensar realizada por ${req.user!.nombreCompleto} (${req.user!.rol}).`,
+        autorId: req.user!.id,
+        autorNombre: req.user!.nombreCompleto,
+        autorRol: req.user!.rol
+      });
+
+      res.json({
+        success: true,
+        actualizados,
+        postulacion: exp.postulacionSubsidio,
+        mensaje: `Se han sincronizado con éxito ${actualizados} documentos en el expediente.`
+      });
+    }
+  );
+
   // 15.3.7 Registrar Soporte Multi-Predio en Fase 6
   app.post(
     "/api/expedientes/:id/postulacion/soporte-multipredio",
@@ -7196,11 +7928,11 @@ export async function createApp(): Promise<express.Express> {
     }
   );
 
-  // 15.4.2 Cargar / Validar Documento de Cierre (F7-01 a F7-04) (Supervisor, Ingeniería, Administrador)
+  // 15.4.2 Cargar / Validar Documento de Cierre (F7-01 a F7-06) (Supervisor, Ingeniería, Administrador)
   app.post(
     "/api/expedientes/:id/fase7/cargar-documento",
     requireAuth(["supervisor", "ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -7208,7 +7940,7 @@ export async function createApp(): Promise<express.Express> {
       }
 
       inicializarFase7(exp);
-      const { codigoDoc, nombreArchivo, archivoDataUrl, mimeType, tamanoBytes, sha256Hash } = req.body;
+      const { codigoDoc, idDoc, url, nombreArchivo, archivoDataUrl, mimeType, tamanoBytes, sha256Hash, fotos } = req.body;
 
       const docObj = exp.gestionFase7!.documentosCierre.find((d) => d.codigo === codigoDoc);
       if (!docObj) {
@@ -7216,15 +7948,43 @@ export async function createApp(): Promise<express.Express> {
         return;
       }
 
+      docObj.id = idDoc || docObj.id || `f7-doc-${codigoDoc.toLowerCase()}-${exp.id}`;
       docObj.estado = "aceptado";
       docObj.nombreArchivo = nombreArchivo;
       docObj.archivoDataUrl = archivoDataUrl;
+      docObj.url = url || docObj.url;
       docObj.mimeType = mimeType || "application/pdf";
       docObj.tamanoBytes = tamanoBytes || 245000;
       docObj.sha256Hash = sha256Hash || `sha256-f7-${Date.now()}`;
       docObj.subidoPorId = req.user!.id;
       docObj.subidoPorNombre = req.user!.nombreCompleto;
       docObj.subidoEn = new Date().toISOString();
+      if (Array.isArray(fotos) && fotos.length > 0) {
+        docObj.fotos = fotos;
+      }
+
+      // Almacenamiento individual directo en formatosDocumentales para esquema persistente
+      if (!exp.gestionFase7!.formatosDocumentales) {
+        exp.gestionFase7!.formatosDocumentales = {};
+      }
+      const soporteItem: SoporteFase7 = {
+        id: docObj.id,
+        nombreArchivo,
+        url: docObj.url,
+        archivoDataUrl,
+        mimeType: docObj.mimeType,
+        tamanoBytes: docObj.tamanoBytes,
+        sha256Hash: docObj.sha256Hash,
+        subidoPor: req.user!.nombreCompleto,
+        subidoEn: new Date().toISOString()
+      };
+
+      if (codigoDoc === "F7-01") exp.gestionFase7!.formatosDocumentales.actaInicioContrato = soporteItem;
+      else if (codigoDoc === "F7-02") exp.gestionFase7!.formatosDocumentales.actaInicioObra = soporteItem;
+      else if (codigoDoc === "F7-03") exp.gestionFase7!.formatosDocumentales.actaEntrega = soporteItem;
+      else if (codigoDoc === "F7-04") exp.gestionFase7!.formatosDocumentales.certificadoHabitabilidad = soporteItem;
+      else if (codigoDoc === "F7-05") exp.gestionFase7!.formatosDocumentales.registroFotograficoEntrega = { ...soporteItem, fotos: docObj.fotos };
+      else if (codigoDoc === "F7-06") exp.gestionFase7!.formatosDocumentales.actaReciboSatisfaccion = soporteItem;
 
       // Sincronizar con requisitosCaso para reflejar estado
       const reqCaso = mockDb.requisitosCaso.find(
@@ -7234,10 +7994,12 @@ export async function createApp(): Promise<express.Express> {
         reqCaso.estado = "aceptado";
       }
 
-      // Verificar si los 4 documentos están completos
-      const todosCompletos = exp.gestionFase7!.documentosCierre.every(
-        (d) => d.estado === "aceptado" || d.estado === "cargado"
-      );
+      // Verificar si los 6 documentos están completos
+      const todosCompletos =
+        exp.gestionFase7!.documentosCierre.length >= 6 &&
+        exp.gestionFase7!.documentosCierre.every(
+          (d) => d.estado === "aceptado" || d.estado === "cargado"
+        );
       if (todosCompletos) {
         exp.gestionFase7!.documentosCierreCompletos = true;
         if (exp.gestionFase7!.desembolso.estadoActual === "pendiente_documentos") {
@@ -7259,7 +8021,9 @@ export async function createApp(): Promise<express.Express> {
         autorNombre: req.user!.nombreCompleto,
         autorRol: req.user!.rol,
         soporte: {
+          id: docObj.id,
           nombreArchivo,
+          url: docObj.url,
           archivoDataUrl,
           mimeType: docObj.mimeType,
           tamanoBytes: docObj.tamanoBytes,
@@ -7270,6 +8034,8 @@ export async function createApp(): Promise<express.Express> {
       };
       exp.gestionFase7!.historial.unshift(eventoDoc);
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, gestionFase7: exp.gestionFase7, expediente: exp });
     }
   );
@@ -7278,7 +8044,7 @@ export async function createApp(): Promise<express.Express> {
   app.delete(
     "/api/expedientes/:id/fase7/documento-cierre/:codigoDoc",
     requireAuth(["supervisor", "administrador", "ingenieria"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -7309,12 +8075,23 @@ export async function createApp(): Promise<express.Express> {
       docObj.estado = "pendiente";
       delete docObj.nombreArchivo;
       delete docObj.archivoDataUrl;
+      delete docObj.url;
       delete docObj.mimeType;
       delete docObj.tamanoBytes;
       delete docObj.sha256Hash;
       delete docObj.subidoPorId;
       delete docObj.subidoPorNombre;
       delete docObj.subidoEn;
+      delete docObj.fotos;
+
+      if (exp.gestionFase7!.formatosDocumentales) {
+        if (codigoDoc === "F7-01") delete exp.gestionFase7!.formatosDocumentales.actaInicioContrato;
+        else if (codigoDoc === "F7-02") delete exp.gestionFase7!.formatosDocumentales.actaInicioObra;
+        else if (codigoDoc === "F7-03") delete exp.gestionFase7!.formatosDocumentales.actaEntrega;
+        else if (codigoDoc === "F7-04") delete exp.gestionFase7!.formatosDocumentales.certificadoHabitabilidad;
+        else if (codigoDoc === "F7-05") delete exp.gestionFase7!.formatosDocumentales.registroFotograficoEntrega;
+        else if (codigoDoc === "F7-06") delete exp.gestionFase7!.formatosDocumentales.actaReciboSatisfaccion;
+      }
 
       exp.gestionFase7!.documentosCierreCompletos = false;
       if (exp.gestionFase7!.desembolso.estadoActual === "listo_para_solicitar") {
@@ -7332,15 +8109,17 @@ export async function createApp(): Promise<express.Express> {
       exp.actualizadoEn = new Date().toISOString();
 
       exp.gestionFase7!.historial.unshift({
-        id: `hist-del-f7-${Date.now()}`,
+        id: `hist-f7-doc-del-${Date.now()}`,
         fecha: new Date().toISOString(),
-        tipo: "nota",
-        titulo: `Documento de cierre desvinculado: ${codigoDoc}`,
-        descripcion: `El archivo ${anteriorNombre} fue removido por ${req.user!.nombreCompleto} (${req.user!.rol}).`,
+        tipo: "documento",
+        titulo: `Documento ${docObj.codigo} Desvinculado: ${docObj.nombre}`,
+        descripcion: `Soporte ${anteriorNombre} desvinculado por ${req.user!.nombreCompleto} (${req.user!.rol}). Documento regresa a estado pendiente.`,
         autorId: req.user!.id,
         autorNombre: req.user!.nombreCompleto,
         autorRol: req.user!.rol
       });
+
+      await sincronizarExpedienteEnSupabase(exp);
 
       res.json({ success: true, gestionFase7: exp.gestionFase7, expediente: exp });
     }
@@ -7350,7 +8129,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/fase7/solicitar-desembolso",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -7370,6 +8149,8 @@ export async function createApp(): Promise<express.Express> {
       des.observacionesSolicitud = observacionesSolicitud || "";
       if (Array.isArray(documentosIncluidos) && documentosIncluidos.length > 0) {
         des.documentosIncluidos = documentosIncluidos;
+      } else {
+        des.documentosIncluidos = ["F7-01", "F7-02", "F7-03", "F7-04", "F7-05", "F7-06"];
       }
       if (soporte) {
         des.soporteSolicitud = soporte;
@@ -7400,6 +8181,8 @@ export async function createApp(): Promise<express.Express> {
         contenido: `SOLICITUD DE DESEMBOLSO RADICADA: Trámite de cobro de subsidio radicado ante Compensar bajo radicado ${radicadoSolicitud} por ${req.user!.nombreCompleto}. Expediente en espera de confirmación de pago.`,
         creadoEn: new Date().toISOString()
       });
+
+      await sincronizarExpedienteEnSupabase(exp);
 
       res.json({ success: true, gestionFase7: exp.gestionFase7, expediente: exp });
     }

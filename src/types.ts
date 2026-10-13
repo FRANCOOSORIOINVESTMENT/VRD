@@ -7,7 +7,7 @@ export type TipoIdentificacion = 'CC' | 'CE' | 'TI' | 'RC' | 'PAS';
 
 export type EstadoExpediente = 'captacion' | 'en_tramite' | 'en_pausa_aporte' | 'salida_definitiva' | 'construccion_iniciada' | 'cerrado_entregado' | 'subsidio_desembolsado';
 
-export type EstadoRequisito = 'pendiente_carga' | 'recibido_revision' | 'con_observaciones' | 'aceptado';
+export type EstadoRequisito = 'pendiente_carga' | 'recibido_revision' | 'con_observaciones' | 'aceptado' | 'actualizado' | 'pendiente';
 
 export type ResultadoRevision = 'ACEPTADO' | 'OBSERVADO';
 
@@ -341,10 +341,27 @@ export interface FrenteEstudioSuelos {
   historial: RegistroHistorialFrenteFase4[];
 }
 
+export interface InformeVisiTaFrancoOsorio {
+  id?: string;
+  nombreArchivo: string;
+  url?: string;
+  archivoDataUrl?: string;
+  mimeType?: string;
+  tamanoBytes?: number;
+  sha256?: string;
+  subidoPor?: string;
+  subidoEn?: string;
+  fechaVisita?: string;
+  profesionalResponsable?: string;
+  observaciones?: string;
+  estado?: "pendiente" | "cargado" | "validado";
+}
+
 export interface GestionFase4 {
   interventoria: FrenteInterventoria;
   arquitectura: FrenteArquitectura;
   estudioSuelos: FrenteEstudioSuelos;
+  informeVisitaFrancoOsorio?: InformeVisiTaFrancoOsorio;
   actualizadoEn?: string;
 }
 
@@ -369,6 +386,30 @@ export interface SoporteDocumentoLicencia {
   sha256Hash?: string;
   subidoPor?: string;
   subidoEn?: string;
+}
+
+export type TipoDocumentoRadicacionPlaneacion =
+  | "fun" // Formulario Único Nacional
+  | "memorial_estructural" // Memorial de Responsabilidad - Diseñador Estructural
+  | "memorial_arquitectonico" // Memorial de Responsabilidad - Diseñador Arquitectónico
+  | "memorial_geotecnia" // Memorial de Responsabilidad - Geotecnista / Suelos
+  | "memorial_interventor" // Memorial de Responsabilidad - Interventor / Constructor
+  | "planos_radicacion" // Planos impresos/oficiales de radicación
+  | "memorias_calculo" // Memorias de cálculo y cantidades (.pdf, .xlsx)
+  | "otro"; // Otros documentos complementarios
+
+export interface DocumentoRadicacionPlaneacion {
+  id: string;
+  tipo: TipoDocumentoRadicacionPlaneacion;
+  nombre: string;
+  descripcion?: string;
+  esObligatorio: boolean;
+  soporte?: SoporteDocumentoLicencia;
+  fechaCarga?: string;
+  cargadoPorId?: string;
+  cargadoPorNombre?: string;
+  cargadoPorRol?: string;
+  observaciones?: string;
 }
 
 export interface RegistroHistorialLicencia {
@@ -415,6 +456,7 @@ export interface TramiteLicenciaConstruccion {
   numeroRadicadoInicial?: string;
   fechaRadicacionInicial?: string;
   soporteRadicacionInicial?: SoporteDocumentoLicencia;
+  documentosPlaneacion?: DocumentoRadicacionPlaneacion[];
   rondasSubsanacion: RondaSubsanacionLicencia[];
   numeroResolucionLicencia?: string;
   fechaExpedicionLicencia?: string;
@@ -904,10 +946,13 @@ export interface HitoConstruccion {
 }
 
 export interface DocumentoCierreCobro {
-  codigo: string; // "F7-01", "F7-02", "F7-03", "F7-04"
+  id?: string;
+  codigo: string; // "F7-01", "F7-02", "F7-03", "F7-04", "F7-05", "F7-06"
   nombre: string;
   descripcion: string;
+  seccion?: "formatos_compensar" | "formatos_cierre_existentes";
   estado: "pendiente" | "cargado" | "aceptado";
+  url?: string;
   nombreArchivo?: string;
   archivoDataUrl?: string;
   mimeType?: string;
@@ -916,7 +961,8 @@ export interface DocumentoCierreCobro {
   subidoPorId?: string;
   subidoPorNombre?: string;
   subidoEn?: string;
-  fotos?: FotoRegistro[]; // especial para F7-03 (Registro Fotográfico de Entrega de Llaves)
+  fotos?: FotoRegistro[]; // especial para registro fotográfico de entrega
+  tiposPermitidos?: string; // Formatos aceptados (".pdf", ".pdf,.jpg,.jpeg,.png")
 }
 
 export type EstadoDesembolsoCompensar =
@@ -927,6 +973,7 @@ export type EstadoDesembolsoCompensar =
   | "desembolsado_confirmado";
 
 export interface SoporteFase7 {
+  id?: string;
   nombreArchivo: string;
   archivoDataUrl?: string;
   url?: string;
@@ -935,6 +982,17 @@ export interface SoporteFase7 {
   sha256Hash?: string;
   subidoPor?: string;
   subidoEn?: string;
+}
+
+export interface FormatosIndividualesFase7 {
+  // Formatos oficiales de Compensar
+  actaInicioContrato?: SoporteFase7;
+  actaInicioObra?: SoporteFase7;
+  actaEntrega?: SoporteFase7;
+  // Formatos existentes conservados
+  certificadoHabitabilidad?: SoporteFase7;
+  registroFotograficoEntrega?: SoporteFase7 & { fotos?: FotoRegistro[] };
+  actaReciboSatisfaccion?: SoporteFase7;
 }
 
 export interface RondaSubsanacionDesembolso {
@@ -962,7 +1020,7 @@ export interface SeguimientoDesembolsoCompensar {
   radicadoSolicitud?: string;
   solicitadoPorId?: string;
   solicitadoPorNombre?: string;
-  documentosIncluidos: string[]; // ["F7-01", "F7-02", "F7-03", "F7-04", ...]
+  documentosIncluidos: string[]; // ["F7-01", "F7-02", "F7-03", "F7-04", "F7-05", "F7-06"]
   observacionesSolicitud?: string;
   soporteSolicitud?: SoporteFase7;
 
@@ -1013,9 +1071,12 @@ export interface GestionFase7 {
   obraFinalizada: boolean;
   fechaFinalizacionObra?: string;
 
-  // Bloque 2: Documentos para el Cobro del Subsidio
+  // Bloque 2: Documentos para el Cobro del Subsidio (6 documentos organizados)
   documentosCierre: DocumentoCierreCobro[];
   documentosCierreCompletos: boolean;
+
+  // Almacenamiento individual directo por documento para integración y base de datos
+  formatosDocumentales?: FormatosIndividualesFase7;
 
   // Bloque 3: Seguimiento del Desembolso ante Compensar
   desembolso: SeguimientoDesembolsoCompensar;

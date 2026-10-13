@@ -7,6 +7,8 @@ import {
   RondaSubsanacionLicencia,
   RegistroHistorialLicencia,
   SoporteDocumentoLicencia,
+  DocumentoRadicacionPlaneacion,
+  TipoDocumentoRadicacionPlaneacion,
   RequisitoCaso
 } from "../types";
 import {
@@ -31,7 +33,14 @@ import {
   X,
   Lock,
   ChevronRight,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Download,
+  Trash2,
+  Upload,
+  RefreshCw,
+  FolderArchive,
+  Layers,
+  FileCheck
 } from "lucide-react";
 
 interface Fase5SeguimientoLicenciaProps {
@@ -181,6 +190,17 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
   // Form Nota Historial
   const [formTituloNota, setFormTituloNota] = useState("");
   const [formDescNota, setFormDescNota] = useState("");
+
+  // Modales y estados para Documentación Técnica de Radicación en Planeación
+  const [modalCargarDocPlaneacion, setModalCargarDocPlaneacion] = useState<DocumentoRadicacionPlaneacion | null>(null);
+  const [modalNuevoDocPlaneacion, setModalNuevoDocPlaneacion] = useState(false);
+  const [modalEliminarDocPlaneacion, setModalEliminarDocPlaneacion] = useState<DocumentoRadicacionPlaneacion | null>(null);
+  const [archivoDocPlaneacion, setArchivoDocPlaneacion] = useState<File | null>(null);
+  const [obsDocPlaneacion, setObsDocPlaneacion] = useState("");
+  const [nuevoDocNombre, setNuevoDocNombre] = useState("");
+  const [nuevoDocTipo, setNuevoDocTipo] = useState<TipoDocumentoRadicacionPlaneacion>("otro");
+  const [nuevoDocDesc, setNuevoDocDesc] = useState("");
+  const [nuevoDocObligatorio, setNuevoDocObligatorio] = useState(false);
 
   // Helper para convertir archivo a data URL y hash simulado
   const procesarArchivo = async (
@@ -509,6 +529,114 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
     });
   };
 
+  // Handler para subir / reemplazar documento de planeación
+  const handleGuardarDocPlaneacion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!modalCargarDocPlaneacion || !archivoDocPlaneacion) {
+      setErrorAccion("Debe seleccionar un archivo válido (PDF o Excel).");
+      return;
+    }
+    setCargandoAccion(true);
+    setErrorAccion(null);
+    try {
+      const p = await procesarArchivo(archivoDocPlaneacion);
+      const res = await authFetch(`/api/expedientes/${expediente.id}/licencia/documentos-planeacion`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          idDoc: modalCargarDocPlaneacion.id,
+          tipo: modalCargarDocPlaneacion.tipo,
+          nombre: modalCargarDocPlaneacion.nombre,
+          descripcion: modalCargarDocPlaneacion.descripcion,
+          esObligatorio: modalCargarDocPlaneacion.esObligatorio,
+          nombreArchivo: archivoDocPlaneacion.name,
+          mimeType: archivoDocPlaneacion.type || (archivoDocPlaneacion.name.endsWith(".xlsx") ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/pdf"),
+          tamanoBytes: archivoDocPlaneacion.size,
+          archivoDataUrl: p.dataUrl,
+          sha256Hash: p.sha256,
+          observaciones: obsDocPlaneacion.trim() || undefined
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al subir documento técnico de planeación.");
+      setExitoAccion(`Documento "${modalCargarDocPlaneacion.nombre}" registrado exitosamente.`);
+      setModalCargarDocPlaneacion(null);
+      setArchivoDocPlaneacion(null);
+      setObsDocPlaneacion("");
+      await onActualizarExpediente();
+    } catch (err: any) {
+      setErrorAccion(err.message || "Error al registrar documento.");
+    } finally {
+      setCargandoAccion(false);
+    }
+  };
+
+  // Handler para crear y subir nuevo documento complementario
+  const handleCrearNuevoDocPlaneacion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!nuevoDocNombre.trim() || !archivoDocPlaneacion) {
+      setErrorAccion("El nombre del documento y el archivo son obligatorios.");
+      return;
+    }
+    setCargandoAccion(true);
+    setErrorAccion(null);
+    try {
+      const p = await procesarArchivo(archivoDocPlaneacion);
+      const res = await authFetch(`/api/expedientes/${expediente.id}/licencia/documentos-planeacion`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tipo: nuevoDocTipo,
+          nombre: nuevoDocNombre.trim(),
+          descripcion: nuevoDocDesc.trim() || "Documento complementario de radicación técnica.",
+          esObligatorio: nuevoDocObligatorio,
+          nombreArchivo: archivoDocPlaneacion.name,
+          mimeType: archivoDocPlaneacion.type || "application/pdf",
+          tamanoBytes: archivoDocPlaneacion.size,
+          archivoDataUrl: p.dataUrl,
+          sha256Hash: p.sha256,
+          observaciones: obsDocPlaneacion.trim() || undefined
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al registrar documento complementario.");
+      setExitoAccion("Documento complementario creado y radicado exitosamente.");
+      setModalNuevoDocPlaneacion(false);
+      setNuevoDocNombre("");
+      setNuevoDocDesc("");
+      setNuevoDocTipo("otro");
+      setNuevoDocObligatorio(false);
+      setArchivoDocPlaneacion(null);
+      setObsDocPlaneacion("");
+      await onActualizarExpediente();
+    } catch (err: any) {
+      setErrorAccion(err.message || "Error al crear documento.");
+    } finally {
+      setCargandoAccion(false);
+    }
+  };
+
+  // Handler para eliminar / desvincular documento de planeación
+  const handleEliminarDocPlaneacion = async () => {
+    if (!modalEliminarDocPlaneacion) return;
+    setCargandoAccion(true);
+    setErrorAccion(null);
+    try {
+      const res = await authFetch(`/api/expedientes/${expediente.id}/licencia/documentos-planeacion/${modalEliminarDocPlaneacion.id}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al desvincular documento.");
+      setExitoAccion(`Documento "${modalEliminarDocPlaneacion.nombre}" desvinculado correctamente.`);
+      setModalEliminarDocPlaneacion(null);
+      await onActualizarExpediente();
+    } catch (err: any) {
+      setErrorAccion(err.message || "Error al desvincular documento.");
+    } finally {
+      setCargandoAccion(false);
+    }
+  };
+
   // Configuración visual del estado único de trámite
   const getBadgeEstado = () => {
     switch (estado) {
@@ -792,6 +920,12 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
                 <p className="text-xs text-slate-500 mt-1 max-w-2xl leading-relaxed">
                   Análisis de Precios Unitarios regionalizado Cundinamarca y presupuesto oficial de obra desglosado para el subsidio de vivienda rural.
                 </p>
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <FileSpreadsheet className="w-3 h-3 text-emerald-600" />
+                    <span>Formatos admitidos: Excel (.xlsx, .xls) y PDF (.pdf)</span>
+                  </span>
+                </div>
 
                 {requisitoPresupuesto?.documentoAsociado?.versionActual && (
                   <div className="text-[11px] text-slate-600 mt-2 flex flex-wrap items-center gap-2 font-mono">
@@ -1228,6 +1362,255 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
           )}
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* SECCIÓN OFICIAL: DOCUMENTACIÓN TÉCNICA DE RADICACIÓN EN PLANEACIÓN        */}
+      {/* ========================================================================= */}
+      {(() => {
+        const docsPlaneacionList: DocumentoRadicacionPlaneacion[] =
+          tramite.documentosPlaneacion && tramite.documentosPlaneacion.length > 0
+            ? tramite.documentosPlaneacion
+            : [
+                {
+                  id: `doc-plan-fun-${expediente.id}`,
+                  tipo: "fun",
+                  nombre: "Formulario Único Nacional (FUN)",
+                  descripcion: "Formulario Único Nacional para la solicitud de licencia de construcción debidamente diligenciado y firmado con sello de radicación.",
+                  esObligatorio: true
+                },
+                {
+                  id: `doc-plan-mem-est-${expediente.id}`,
+                  tipo: "memorial_estructural",
+                  nombre: "Memorial de Responsabilidad — Diseñador Estructural",
+                  descripcion: "Declaración juramentada y memorial de cumplimiento NSR-10 suscrito por el ingeniero civil/estructural con matrícula.",
+                  esObligatorio: true
+                },
+                {
+                  id: `doc-plan-mem-arq-${expediente.id}`,
+                  tipo: "memorial_arquitectonico",
+                  nombre: "Memorial de Responsabilidad — Diseñador Arquitectónico",
+                  descripcion: "Memorial y certificación del arquitecto proyectista con matrícula profesional vigente y fotocopia del documento.",
+                  esObligatorio: true
+                },
+                {
+                  id: `doc-plan-mem-geo-${expediente.id}`,
+                  tipo: "memorial_geotecnia",
+                  nombre: "Memorial de Responsabilidad — Geotecnista / Suelos",
+                  descripcion: "Memorial de responsabilidad técnica suscrito por el ingeniero geotecnista responsable del estudio de suelos.",
+                  esObligatorio: true
+                },
+                {
+                  id: `doc-plan-mem-int-${expediente.id}`,
+                  tipo: "memorial_interventor",
+                  nombre: "Memorial de Responsabilidad — Interventoría / Constructor",
+                  descripcion: "Memorial y compromiso de dirección técnica de obra o interventoría según requerimiento de la entidad municipal.",
+                  esObligatorio: false
+                },
+                {
+                  id: `doc-plan-memorias-${expediente.id}`,
+                  tipo: "memorias_calculo",
+                  nombre: "Memorias de Cálculo y Cantidades de Obra",
+                  descripcion: "Memorias técnicas de cálculo estructural, análisis de cargas y cantidades de obra (Formatos admitidos: Excel .xlsx, .xls o PDF .pdf).",
+                  esObligatorio: false
+                }
+              ];
+
+        const totalCargados = docsPlaneacionList.filter((d) => !!d.soporte).length;
+        const totalObligatorios = docsPlaneacionList.filter((d) => d.esObligatorio).length;
+        const obligatoriosCargados = docsPlaneacionList.filter((d) => d.esObligatorio && !!d.soporte).length;
+
+        return (
+          <div id="seccion-documentacion-planeacion" className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-slate-100 gap-3">
+              <div>
+                <div className="flex items-center space-x-2.5">
+                  <div className="p-2 bg-indigo-50 text-indigo-700 rounded-xl">
+                    <Building2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                      <span>Documentación Técnica de Radicación en Planeación / Curaduría</span>
+                      <span className="text-2xs font-semibold px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200">
+                        Oficial
+                      </span>
+                    </h4>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Formulario Único Nacional (FUN), Memoriales de Responsabilidad Profesional y anexos técnicos oficiales para radicación territorial.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="text-xs font-semibold px-3 py-1 bg-slate-50 border border-slate-200 rounded-xl text-slate-700">
+                  <span className="text-slate-400 font-normal">Avance Radicación: </span>
+                  <span className="font-bold text-indigo-900">{totalCargados} de {docsPlaneacionList.length}</span>
+                  <span className="text-[10px] text-slate-500 ml-1.5 font-medium">({obligatoriosCargados}/{totalObligatorios} obligatorios)</span>
+                </div>
+
+                {puedeOperar && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNuevoDocNombre("");
+                      setNuevoDocDesc("");
+                      setNuevoDocTipo("otro");
+                      setNuevoDocObligatorio(false);
+                      setArchivoDocPlaneacion(null);
+                      setObsDocPlaneacion("");
+                      setModalNuevoDocPlaneacion(true);
+                    }}
+                    className="text-xs font-semibold px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-xl flex items-center space-x-1.5 transition-colors cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Agregar Documento Complementario</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {docsPlaneacionList.map((doc) => {
+                const tieneSoporte = !!doc.soporte;
+                const esExcelOpcional = doc.tipo === "memorias_calculo";
+
+                return (
+                  <div
+                    key={doc.id}
+                    className={`p-4 rounded-xl border flex flex-col justify-between transition-all ${
+                      tieneSoporte
+                        ? "bg-emerald-50/30 border-emerald-200"
+                        : doc.esObligatorio
+                        ? "bg-white border-slate-200 hover:border-indigo-300"
+                        : "bg-slate-50/50 border-slate-200 hover:border-slate-300"
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-2 mb-1.5">
+                        <div className="flex items-center space-x-1.5">
+                          <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md ${
+                            doc.esObligatorio
+                              ? "bg-rose-50 text-rose-700 border border-rose-200"
+                              : "bg-slate-100 text-slate-600 border border-slate-200"
+                          }`}>
+                            {doc.esObligatorio ? "Obligatorio" : "Complementario"}
+                          </span>
+                          {esExcelOpcional && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 flex items-center gap-1 border border-emerald-200">
+                              <FileSpreadsheet className="w-3 h-3" />
+                              <span>Excel / PDF</span>
+                            </span>
+                          )}
+                        </div>
+
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
+                          tieneSoporte
+                            ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                            : "bg-amber-50 text-amber-700 border border-amber-200"
+                        }`}>
+                          {tieneSoporte ? "Cargado" : "Pendiente"}
+                        </span>
+                      </div>
+
+                      <h5 className="font-bold text-xs text-slate-900 leading-snug mb-1">
+                        {doc.nombre}
+                      </h5>
+
+                      <p className="text-[11px] text-slate-500 leading-relaxed line-clamp-2 mb-3">
+                        {doc.descripcion}
+                      </p>
+
+                      {tieneSoporte && doc.soporte && (
+                        <div className="p-2.5 bg-white rounded-lg border border-slate-200 mb-3 space-y-1 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-[11px] text-slate-800 truncate max-w-[180px]" title={doc.soporte.nombreArchivo}>
+                              {doc.soporte.nombreArchivo}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {doc.soporte.tamanoBytes ? `${Math.round(doc.soporte.tamanoBytes / 1024)} KB` : "Documento"}
+                            </span>
+                          </div>
+                          {doc.fechaCarga && (
+                            <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                              <span>Cargado: {doc.fechaCarga.split("T")[0]}</span>
+                              {doc.cargadoPorNombre && <span>• {doc.cargadoPorNombre}</span>}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2 mt-auto">
+                      {tieneSoporte ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onAbrirVisor({
+                                titulo: doc.nombre,
+                                nombreArchivo: doc.soporte!.nombreArchivo,
+                                mimeType: doc.soporte!.mimeType || "application/pdf",
+                                tamanoBytes: doc.soporte!.tamanoBytes,
+                                sha256Hash: doc.soporte!.sha256Hash,
+                                subidoPor: doc.cargadoPorNombre,
+                                subidoEn: doc.fechaCarga,
+                                archivoDataUrl: doc.soporte!.archivoDataUrl
+                              })
+                            }
+                            className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-semibold flex items-center space-x-1 transition-colors cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Ver Documento</span>
+                          </button>
+
+                          {puedeOperar && (
+                            <div className="flex items-center space-x-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setArchivoDocPlaneacion(null);
+                                  setObsDocPlaneacion(doc.observaciones || "");
+                                  setModalCargarDocPlaneacion(doc);
+                                }}
+                                className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer"
+                              >
+                                Reemplazar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setModalEliminarDocPlaneacion(doc)}
+                                className="text-xs text-rose-600 hover:text-rose-800 hover:underline cursor-pointer flex items-center"
+                                title="Desvincular documento"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        puedeOperar && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setArchivoDocPlaneacion(null);
+                              setObsDocPlaneacion("");
+                              setModalCargarDocPlaneacion(doc);
+                            }}
+                            className="w-full py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
+                          >
+                            <UploadCloud className="w-3.5 h-3.5" />
+                            <span>{esExcelOpcional ? "Cargar Memorias (.xlsx/.pdf)" : "Cargar PDF"}</span>
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* SECCIÓN DETALLADA: HISTORIAL DE RONDAS DE SUBSANACIÓN (FLUJO FLEXIBLE SIN LÍMITE) */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
@@ -2229,6 +2612,277 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 6: CARGAR / ACTUALIZAR DOCUMENTO TÉCNICO DE PLANEACIÓN             */}
+      {/* ========================================================================= */}
+      {modalCargarDocPlaneacion && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+          <div role="dialog" aria-modal="true" aria-labelledby="f5-modal-docplan-titulo" className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-5 bg-indigo-900 text-white flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Building2 className="w-5 h-5 text-indigo-300" />
+                <h3 id="f5-modal-docplan-titulo" className="font-bold text-sm truncate max-w-sm">
+                  {modalCargarDocPlaneacion.soporte ? "Actualizar Documento:" : "Cargar Documento:"} {modalCargarDocPlaneacion.nombre}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setModalCargarDocPlaneacion(null);
+                  setArchivoDocPlaneacion(null);
+                  setObsDocPlaneacion("");
+                }}
+                className="text-indigo-200 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleGuardarDocPlaneacion} className="p-5 space-y-4">
+              <p className="text-xs text-slate-600 bg-indigo-50/60 p-3 rounded-xl border border-indigo-100">
+                {modalCargarDocPlaneacion.descripcion || "Documentación oficial exigida por Planeación Municipal o Curaduría para trámite de licencia."}
+              </p>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Seleccione el Archivo *
+                </label>
+                <div className="border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/30 rounded-xl p-5 text-center cursor-pointer transition-colors">
+                  <input
+                    type="file"
+                    id="input-archivo-planeacion"
+                    accept={
+                      modalCargarDocPlaneacion.tipo === "memorias_calculo"
+                        ? ".pdf,.xlsx,.xls,.csv,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                        : ".pdf,application/pdf"
+                    }
+                    onClick={(e) => {
+                      (e.target as HTMLInputElement).value = "";
+                    }}
+                    onChange={(e) => setArchivoDocPlaneacion(e.target.files ? e.target.files[0] : null)}
+                    className="hidden"
+                  />
+                  <label htmlFor="input-archivo-planeacion" className="cursor-pointer block space-y-2">
+                    <div className="w-10 h-10 mx-auto rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center">
+                      <UploadCloud className="w-5 h-5" />
+                    </div>
+                    {archivoDocPlaneacion ? (
+                      <div className="text-xs font-bold text-indigo-900">
+                        {archivoDocPlaneacion.name} ({(archivoDocPlaneacion.size / 1024).toFixed(1)} KB)
+                      </div>
+                    ) : (
+                      <>
+                        <span className="text-xs font-bold text-indigo-700 hover:underline block">
+                          Haga clic aquí para seleccionar el archivo oficial
+                        </span>
+                        <span className="text-[10px] text-slate-400 block">
+                          {modalCargarDocPlaneacion.tipo === "memorias_calculo"
+                            ? "Formatos válidos: Excel (.xlsx, .xls) o PDF (.pdf) hasta 25 MB"
+                            : "Formato oficial: Documento PDF firmado (.pdf) hasta 25 MB"}
+                        </span>
+                      </>
+                    )}
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Observaciones Técnicas o Matrícula Profesional
+                </label>
+                <textarea
+                  rows={2}
+                  value={obsDocPlaneacion}
+                  onChange={(e) => setObsDocPlaneacion(e.target.value)}
+                  placeholder="Ej: Radicado con firma digital y matrícula profesional vigente No. 25202-00000 COPNIA."
+                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalCargarDocPlaneacion(null);
+                    setArchivoDocPlaneacion(null);
+                    setObsDocPlaneacion("");
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={cargandoAccion || !archivoDocPlaneacion}
+                  className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
+                >
+                  {cargandoAccion ? "Guardando..." : "Confirmar Carga de Documento"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 7: AGREGAR DOCUMENTO COMPLEMENTARIO DE RADICACIÓN                   */}
+      {/* ========================================================================= */}
+      {modalNuevoDocPlaneacion && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+          <div role="dialog" aria-modal="true" className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-5 bg-indigo-900 text-white flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Plus className="w-5 h-5 text-indigo-300" />
+                <h3 className="font-bold text-sm">
+                  Agregar Documento Complementario de Radicación
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setModalNuevoDocPlaneacion(false);
+                  setArchivoDocPlaneacion(null);
+                }}
+                className="text-indigo-200 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCrearNuevoDocPlaneacion} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Nombre del Documento Técnico *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={nuevoDocNombre}
+                  onChange={(e) => setNuevoDocNombre(e.target.value)}
+                  placeholder="Ej: Certificado de Estratificación / Certificación de Uso de Suelo"
+                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Tipo de Documento
+                  </label>
+                  <select
+                    value={nuevoDocTipo}
+                    onChange={(e) => setNuevoDocTipo(e.target.value as TipoDocumentoRadicacionPlaneacion)}
+                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-white"
+                  >
+                    <option value="otro">Documento Complementario General</option>
+                    <option value="planos_radicacion">Plano Oficial de Radicación</option>
+                    <option value="memorias_calculo">Memorias de Cálculo / Cantidades</option>
+                    <option value="memorial_interventor">Memorial de Constructor / Interventor</option>
+                    <option value="fun">Formulario Oficial Adicional</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center pt-5">
+                  <label className="flex items-center space-x-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={nuevoDocObligatorio}
+                      onChange={(e) => setNuevoDocObligatorio(e.target.checked)}
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    />
+                    <span>¿Es de carácter obligatorio?</span>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Descripción o Finalidad
+                </label>
+                <input
+                  type="text"
+                  value={nuevoDocDesc}
+                  onChange={(e) => setNuevoDocDesc(e.target.value)}
+                  placeholder="Breve aclaración del propósito del documento ante la entidad."
+                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Archivo Digital (PDF o Excel) *
+                </label>
+                <input
+                  type="file"
+                  required
+                  accept=".pdf,.xlsx,.xls,application/pdf"
+                  onChange={(e) => setArchivoDocPlaneacion(e.target.files ? e.target.files[0] : null)}
+                  className="w-full text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setModalNuevoDocPlaneacion(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={cargandoAccion || !nuevoDocNombre.trim() || !archivoDocPlaneacion}
+                  className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
+                >
+                  {cargandoAccion ? "Creando..." : "Guardar y Vincular Documento"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 8: CONFIRMAR DESVINCULAR DOCUMENTO DE PLANEACIÓN                    */}
+      {/* ========================================================================= */}
+      {modalEliminarDocPlaneacion && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div role="dialog" aria-modal="true" className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
+            <div className="flex items-center space-x-3 text-rose-600 mb-3">
+              <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-900 text-sm">¿Desvincular soporte?</h4>
+                <p className="text-xs text-slate-500 truncate max-w-[200px]">{modalEliminarDocPlaneacion.nombre}</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+              El archivo cargado para <strong className="text-slate-800">{modalEliminarDocPlaneacion.nombre}</strong> será removido y el requisito volverá a estar pendiente de carga.
+            </p>
+
+            <div className="flex items-center justify-end space-x-2">
+              <button
+                type="button"
+                onClick={() => setModalEliminarDocPlaneacion(null)}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={cargandoAccion}
+                onClick={handleEliminarDocPlaneacion}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white transition-all shadow-sm cursor-pointer disabled:opacity-50"
+              >
+                {cargandoAccion ? "Desvinculando..." : "Sí, Desvincular"}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -6049,6 +6049,13 @@ export default function App() {
           modalSubirArchivoReq.nombre.toLowerCase().includes("fotogr") ||
           modalSubirArchivoReq.nombre.toLowerCase().includes("foto");
 
+        const esPresupuestoOMemorias =
+          modalSubirArchivoReq.codigoRequisito === "F5-01" ||
+          modalSubirArchivoReq.nombre.toLowerCase().includes("presupuesto") ||
+          modalSubirArchivoReq.nombre.toLowerCase().includes("memoria") ||
+          modalSubirArchivoReq.nombre.toLowerCase().includes("apu") ||
+          modalSubirArchivoReq.nombre.toLowerCase().includes("calculo");
+
         const categoriasPermitidas = [
           "Fachada / Vivienda actual",
           "Lote / Terreno",
@@ -6316,7 +6323,11 @@ export default function App() {
                     <input
                       type="file"
                       id="inputArchivoRealModal"
-                      accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"
+                      accept={
+                        esPresupuestoOMemorias
+                          ? ".pdf,.xlsx,.xls,.csv,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                          : "application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"
+                      }
                       className="hidden"
                       onClick={(e) => {
                         (e.target as HTMLInputElement).value = "";
@@ -6376,8 +6387,10 @@ export default function App() {
                             o arrastre y suelte el archivo aquí
                           </span>
                         </div>
-                        <p className="text-[10px] text-slate-400">
-                          Formatos admitidos: PDF, JPG, PNG, WEBP (hasta 25 MB)
+                        <p className="text-[10px] text-slate-500 font-medium">
+                          {esPresupuestoOMemorias
+                            ? "Formatos aceptados: Hojas de cálculo Excel (.xlsx, .xls, .csv) y documentos PDF (.pdf) hasta 25 MB"
+                            : "Formatos admitidos: PDF, JPG, PNG, WEBP, DOCX (hasta 25 MB)"}
                         </p>
                       </label>
                     )}

@@ -86,27 +86,51 @@ const HITOS_DEFAULT_CONFIG = [
   }
 ];
 
-// 4 documentos de cierre oficiales
+// 6 documentos oficiales de Fase 7 (3 Formatos de Compensar + 3 Formatos de Cierre Técnico)
 const DOCUMENTOS_DEFAULT_CONFIG = [
+  // 1. INCORPORACIÓN DE FORMATOS DE COMPENSAR
   {
     codigo: "F7-01",
-    nombre: "Acta de Recibo a Satisfacción de Vivienda",
-    descripcion: "Firma formal de recepción de la vivienda terminada al 100% por el beneficiario y la supervisión técnica."
+    nombre: "Acta de inicio de contrato",
+    descripcion: "Formato oficial de Compensar para el acta de inicio de contrato del subsidio de vivienda rural.",
+    seccion: "formatos_compensar" as const,
+    tiposPermitidos: ".pdf,application/pdf"
   },
   {
     codigo: "F7-02",
-    nombre: "Certificación de Habitabilidad y Servicios",
-    descripcion: "Constancia técnica de servicios públicos domiciliarios activos y plenas condiciones higiénico-sanitarias."
+    nombre: "Acta de inicio de obra",
+    descripcion: "Formato oficial de Compensar que certifica el inicio formal de las obras civiles en el predio.",
+    seccion: "formatos_compensar" as const,
+    tiposPermitidos: ".pdf,application/pdf"
   },
   {
     codigo: "F7-03",
-    nombre: "Registro Fotográfico de Entrega de Llaves",
-    descripcion: "Acto solemne de entrega de llaves al hogar beneficiario con evidencia fotográfica en alta resolución."
+    nombre: "Acta de entrega",
+    descripcion: "Formato oficial de Compensar para el acta de entrega y cierre técnico entre las partes.",
+    seccion: "formatos_compensar" as const,
+    tiposPermitidos: ".pdf,application/pdf"
   },
+  // 2. CONSERVACIÓN DE FORMATOS EXISTENTES
   {
     codigo: "F7-04",
-    nombre: "Acta de Liquidación y Archivo Documental",
-    descripcion: "Liquidación contractual y financiera de la obra, paz y salvo final y consolidación documental definitiva."
+    nombre: "Certificado de habitabilidad y servicios",
+    descripcion: "Constancia técnica de servicios públicos domiciliarios activos y plenas condiciones higiénico-sanitarias.",
+    seccion: "formatos_cierre_existentes" as const,
+    tiposPermitidos: ".pdf,image/*,application/pdf,image/jpeg,image/png"
+  },
+  {
+    codigo: "F7-05",
+    nombre: "Registro fotográfico de entrega",
+    descripcion: "Evidencia fotográfica en alta resolución y/o reporte consolidado de la vivienda terminada y entrega de llaves.",
+    seccion: "formatos_cierre_existentes" as const,
+    tiposPermitidos: ".pdf,image/*,application/pdf,image/jpeg,image/png"
+  },
+  {
+    codigo: "F7-06",
+    nombre: "Acta de recibo a satisfacción de vivienda",
+    descripcion: "Firma formal de recepción de la vivienda terminada al 100% por el beneficiario y la supervisión técnica.",
+    seccion: "formatos_cierre_existentes" as const,
+    tiposPermitidos: ".pdf,image/*,application/pdf,image/jpeg,image/png"
   }
 ];
 
@@ -132,16 +156,20 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
     })),
     obraFinalizada: false,
     documentosCierre: DOCUMENTOS_DEFAULT_CONFIG.map((cfg) => ({
+      id: `f7-doc-${cfg.codigo.toLowerCase()}-${expediente.id}`,
       codigo: cfg.codigo,
       nombre: cfg.nombre,
       descripcion: cfg.descripcion,
+      seccion: cfg.seccion,
+      tiposPermitidos: cfg.tiposPermitidos,
       estado: "pendiente"
     })),
     documentosCierreCompletos: false,
+    formatosDocumentales: {},
     desembolso: {
       estadoActual: "pendiente_documentos",
       entidad: "Compensar (Caja de Compensación Familiar)",
-      documentosIncluidos: ["F7-01", "F7-02", "F7-03", "F7-04"],
+      documentosIncluidos: ["F7-01", "F7-02", "F7-03", "F7-04", "F7-05", "F7-06"],
       rondasSubsanacion: []
     },
     historial: [],
@@ -210,12 +238,37 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
   const hito4 = hitos.find((h) => h.numero === 4);
   const obraTotalmenteFinalizada = !!(hito4 && hito4.completado);
 
-  const documentosCierre = gestionFase7.documentosCierre || [];
+  // Reconciliación de los 6 documentos oficiales (Formatos Compensar + Formatos de Cierre Técnico)
+  const documentosCierre: DocumentoCierreCobro[] = DOCUMENTOS_DEFAULT_CONFIG.map((cfg) => {
+    const docExistente = (gestionFase7.documentosCierre || []).find((d) => d.codigo === cfg.codigo);
+    if (docExistente) {
+      return {
+        ...cfg,
+        ...docExistente,
+        id: docExistente.id || `f7-doc-${cfg.codigo.toLowerCase()}-${expediente.id}`,
+        seccion: cfg.seccion,
+        tiposPermitidos: cfg.tiposPermitidos
+      };
+    }
+    return {
+      id: `f7-doc-${cfg.codigo.toLowerCase()}-${expediente.id}`,
+      codigo: cfg.codigo,
+      nombre: cfg.nombre,
+      descripcion: cfg.descripcion,
+      seccion: cfg.seccion,
+      tiposPermitidos: cfg.tiposPermitidos,
+      estado: "pendiente"
+    };
+  });
+
+  const docsCompensar = documentosCierre.filter((d) => d.seccion === "formatos_compensar");
+  const docsCierreTecnico = documentosCierre.filter((d) => d.seccion === "formatos_cierre_existentes");
+
   const docsCompletadosCount = documentosCierre.filter(
     (d) => d.estado === "aceptado" || d.estado === "cargado"
   ).length;
   const todosDocumentosCompletos =
-    documentosCierre.length === 4 &&
+    documentosCierre.length >= 6 &&
     documentosCierre.every((d) => d.estado === "aceptado" || d.estado === "cargado");
 
   const desembolso: SeguimientoDesembolsoCompensar = gestionFase7.desembolso || {
@@ -465,6 +518,7 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
       setErrorAccion(null);
 
       const payload = {
+        idDoc: modalDoc.id || `f7-doc-${modalDoc.codigo.toLowerCase()}-${expediente.id}`,
         codigoDoc: modalDoc.codigo,
         nombreArchivo: docArchivoTemp.nombreArchivo,
         archivoDataUrl: docArchivoTemp.archivoDataUrl,
@@ -482,7 +536,7 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al cargar documento de cierre.");
 
-      setMensajeExito(`Documento ${modalDoc.codigo} cargado y validado exitosamente.`);
+      setMensajeExito(`Documento ${modalDoc.codigo} (${modalDoc.nombre}) cargado y validado exitosamente.`);
       setModalDoc(null);
       await onActualizarExpediente();
     } catch (err: any) {
@@ -534,7 +588,7 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
         fechaSolicitud: formFechaSolicitud,
         radicadoSolicitud: formRadicadoSolicitud.trim(),
         observacionesSolicitud: formNotasSolicitud.trim(),
-        documentosIncluidos: ["F7-01", "F7-02", "F7-03", "F7-04"],
+        documentosIncluidos: ["F7-01", "F7-02", "F7-03", "F7-04", "F7-05", "F7-06"],
         soporte: soporteSolicitudTemp
       };
 
@@ -885,12 +939,12 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
               {todosDocumentosCompletos ? <CheckCircle2 className="w-4 h-4" /> : "2"}
             </div>
             <div>
-              <div className="text-xs font-bold">Bloque 2: Documentos de Cobro</div>
+              <div className="text-xs font-bold">Bloque 2: Formatos de Cobro</div>
               <div className="text-[11px] text-slate-500">
                 {todosDocumentosCompletos
-                  ? "4 de 4 Documentos Consolidados"
+                  ? `${documentosCierre.length} de ${documentosCierre.length} Documentos Consolidados`
                   : obraTotalmenteFinalizada
-                  ? `${docsCompletadosCount} de 4 Documentos Cargados`
+                  ? `${docsCompletadosCount} de ${documentosCierre.length} Documentos Cargados`
                   : "Bloqueado (Requiere Hito 4)"}
               </div>
             </div>
@@ -1161,7 +1215,7 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
       </div>
 
       {/* ========================================================= */}
-      {/* BLOQUE 2: DOCUMENTOS PARA EL COBRO DEL SUBSIDIO (4 DOCS) */}
+      {/* BLOQUE 2: DOCUMENTOS PARA EL COBRO DEL SUBSIDIO (6 DOCS) */}
       {/* ========================================================= */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-slate-100 mb-5 gap-2">
@@ -1171,18 +1225,22 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
                 2
               </span>
               <h4 className="font-bold text-base text-slate-900">
-                Documentos para el Cobro del Subsidio (Liquidación y Recibo)
+                Formatos Oficiales de Compensar y Cierre Técnico para Cobro del Subsidio
               </h4>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Se habilitan formalmente una vez la vivienda está 100% terminada (Hito 4 completado). Requisito obligatorio para radicar ante Compensar.
+              Se habilitan formalmente una vez la vivienda está 100% terminada (Hito 4 completado). Requisitos indispensables para radicación y desembolso ante Compensar.
             </p>
           </div>
 
           <div className="flex items-center space-x-2 text-xs font-bold">
-            <span className="text-slate-500">Consolidación:</span>
-            <span className="px-2.5 py-1 bg-blue-50 border border-blue-200 text-blue-800 rounded-lg">
-              {docsCompletadosCount} de 4 Documentos
+            <span className="text-slate-500">Consolidación General:</span>
+            <span className={`px-2.5 py-1 border rounded-lg font-bold ${
+              todosDocumentosCompletos
+                ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                : "bg-blue-50 border-blue-200 text-blue-800"
+            }`}>
+              {docsCompletadosCount} de {documentosCierre.length} Documentos
             </span>
           </div>
         </div>
@@ -1197,141 +1255,354 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
               Documentos de Cierre Aún Bloqueados
             </h5>
             <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-              Para habilitar la gestión documental de cobro del subsidio (F7-01 a F7-04), el Analista Documental debe certificar previamente la finalización total de la vivienda en el Hito 4 de construcción.
+              Para habilitar la gestión documental de cobro del subsidio (Formatos Compensar F7-01 a F7-03 y Formatos de Cierre Técnico F7-04 a F7-06), el Analista Documental debe certificar previamente la finalización total de la vivienda en el Hito 4 de construcción.
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {documentosCierre.map((doc) => {
-              const estaCargado = doc.estado === "aceptado" || doc.estado === "cargado";
-
-              return (
-                <div
-                  key={doc.codigo}
-                  className={`p-4 rounded-xl border flex flex-col justify-between transition-all ${
-                    estaCargado
-                      ? "bg-emerald-50/40 border-emerald-200"
-                      : "bg-white border-slate-200 hover:border-blue-300"
-                  }`}
-                >
+          <div className="space-y-8">
+            {/* ---------------------------------------------------------------- */}
+            {/* SECCIÓN 1: FORMATOS OFICIALES DE COMPENSAR                       */}
+            {/* ---------------------------------------------------------------- */}
+            <div className="border border-blue-100 bg-blue-50/20 rounded-2xl p-4 sm:p-5">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-3.5 border-b border-blue-100 mb-4 gap-2">
+                <div className="flex items-center space-x-2.5">
+                  <div className="p-2 bg-blue-600 text-white rounded-xl shadow-xs">
+                    <Building2 className="w-4 h-4" />
+                  </div>
                   <div>
-                    <div className="flex items-start justify-between gap-2 mb-1.5">
-                      <div className="flex items-center space-x-2">
-                        <span className="font-mono text-xs font-bold px-2 py-0.5 bg-blue-100 text-blue-800 rounded-md border border-blue-200">
-                          {doc.codigo}
-                        </span>
-                        <h5 className="font-bold text-xs text-slate-900 leading-snug">
-                          {doc.nombre}
-                        </h5>
-                      </div>
-
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
-                          doc.estado === "aceptado"
-                            ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                            : doc.estado === "cargado"
-                            ? "bg-blue-100 text-blue-800 border border-blue-200"
-                            : "bg-amber-50 text-amber-700 border border-amber-200"
-                        }`}
-                      >
-                        {doc.estado === "aceptado"
-                          ? "Aceptado"
-                          : doc.estado === "cargado"
-                          ? "Cargado"
-                          : "Pendiente"}
+                    <h5 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                      <span>1. Formatos Oficiales de Compensar</span>
+                      <span className="text-2xs font-semibold px-2 py-0.5 rounded-md bg-blue-100 text-blue-800 border border-blue-300">
+                        Compensar Oficial
                       </span>
-                    </div>
-
-                    <p className="text-[11px] text-slate-600 leading-relaxed mb-3">
-                      {doc.descripcion}
+                    </h5>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Formatos institucionales requeridos para perfeccionamiento del contrato, inicio y cierre de entrega.
                     </p>
+                  </div>
+                </div>
 
-                    {estaCargado && doc.nombreArchivo && (
-                      <div className="p-2.5 bg-white rounded-lg border border-slate-200 space-y-1 mb-3 text-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="font-medium text-slate-700 truncate max-w-[200px]">
-                            {doc.nombreArchivo}
-                          </span>
-                          <span className="text-[10px] text-slate-400">
-                            {doc.tamanoBytes
-                              ? `${Math.round(doc.tamanoBytes / 1024)} KB`
-                              : "PDF/IMG"}
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs text-slate-500 font-medium">Avance:</span>
+                  <span className="px-2 py-0.5 text-xs font-bold rounded-lg bg-white border border-blue-200 text-blue-900 shadow-2xs">
+                    {docsCompensar.filter((d) => d.estado === "aceptado" || d.estado === "cargado").length} de {docsCompensar.length}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {docsCompensar.map((doc) => {
+                  const estaCargado = doc.estado === "aceptado" || doc.estado === "cargado";
+
+                  return (
+                    <div
+                      key={doc.codigo}
+                      className={`p-4 rounded-xl border flex flex-col justify-between transition-all ${
+                        estaCargado
+                          ? "bg-emerald-50/50 border-emerald-300 shadow-2xs"
+                          : "bg-white border-blue-200 hover:border-blue-400 shadow-2xs"
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div className="flex items-center space-x-1.5">
+                            <span className="font-mono text-xs font-bold px-2 py-0.5 bg-blue-700 text-white rounded-md shadow-2xs">
+                              {doc.codigo}
+                            </span>
+                            <span className="text-[10px] font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                              PDF Oficial
+                            </span>
+                          </div>
+
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                              doc.estado === "aceptado"
+                                ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                                : doc.estado === "cargado"
+                                ? "bg-blue-100 text-blue-800 border border-blue-200"
+                                : "bg-amber-50 text-amber-700 border border-amber-200"
+                            }`}
+                          >
+                            {doc.estado === "aceptado"
+                              ? "Aceptado"
+                              : doc.estado === "cargado"
+                              ? "Cargado"
+                              : "Pendiente"}
                           </span>
                         </div>
-                        {doc.subidoPorNombre && (
-                          <div className="text-[10px] text-slate-400">
-                            Subido por: {doc.subidoPorNombre}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
 
-                  {/* ACCIONES DEL DOCUMENTO */}
-                  <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
-                    {estaCargado ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onAbrirVisor({
-                              titulo: `${doc.codigo}: ${doc.nombre}`,
-                              nombreArchivo: doc.nombreArchivo || `${doc.codigo}.pdf`,
-                              mimeType: doc.mimeType || "application/pdf",
-                              archivoDataUrl: doc.archivoDataUrl,
-                              tamanoBytes: doc.tamanoBytes,
-                              sha256Hash: doc.sha256Hash,
-                              fotos: doc.fotos
-                            })
-                          }
-                          className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer"
-                        >
-                          <Eye className="w-3.5 h-3.5 text-emerald-700" />
-                          <span>Ver Soporte</span>
-                        </button>
+                        <h6 className="font-bold text-xs text-slate-900 leading-snug mb-1">
+                          {doc.nombre}
+                        </h6>
 
-                        {puedeGestionarDocumentos && (
-                          <div className="flex items-center space-x-2">
-                            <button
-                              type="button"
-                              onClick={() => abrirModalDocumento(doc)}
-                              className="text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
-                            >
-                              Reemplazar
-                            </button>
-                            {(desembolso.estadoActual === "pendiente_documentos" || desembolso.estadoActual === "listo_para_solicitar") && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setErrorAccion(null);
-                                  setModalConfirmarEliminarDoc(doc);
-                                }}
-                                className="text-xs font-semibold text-rose-600 hover:text-rose-800 hover:underline cursor-pointer flex items-center space-x-0.5"
-                                title="Desvincular documento de cierre"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                                <span>Eliminar</span>
-                              </button>
+                        <p className="text-[11px] text-slate-500 leading-relaxed mb-3">
+                          {doc.descripcion}
+                        </p>
+
+                        {estaCargado && doc.nombreArchivo && (
+                          <div className="p-2.5 bg-white rounded-lg border border-slate-200 space-y-1 mb-3 text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-[11px] font-medium text-slate-800 truncate max-w-[150px]" title={doc.nombreArchivo}>
+                                {doc.nombreArchivo}
+                              </span>
+                              <span className="text-[10px] text-slate-400">
+                                {doc.tamanoBytes ? `${Math.round(doc.tamanoBytes / 1024)} KB` : "PDF"}
+                              </span>
+                            </div>
+                            {doc.id && (
+                              <div className="text-[10px] font-mono text-slate-400 truncate" title={`ID: ${doc.id}`}>
+                                ID: {doc.id}
+                              </div>
+                            )}
+                            {doc.subidoPorNombre && (
+                              <div className="text-[10px] text-slate-400">
+                                Por: {doc.subidoPorNombre}
+                              </div>
                             )}
                           </div>
                         )}
-                      </>
-                    ) : (
-                      puedeGestionarDocumentos && (
-                        <button
-                          type="button"
-                          onClick={() => abrirModalDocumento(doc)}
-                          className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 shadow-xs cursor-pointer active:scale-98"
-                        >
-                          <Upload className="w-3.5 h-3.5" />
-                          <span>Cargar {doc.codigo}</span>
-                        </button>
-                      )
-                    )}
+                      </div>
+
+                      {/* ACCIONES DEL DOCUMENTO COMPENSAR */}
+                      <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2 mt-auto">
+                        {estaCargado ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onAbrirVisor({
+                                  titulo: `${doc.codigo}: ${doc.nombre}`,
+                                  nombreArchivo: doc.nombreArchivo || `${doc.codigo}.pdf`,
+                                  mimeType: doc.mimeType || "application/pdf",
+                                  archivoDataUrl: doc.archivoDataUrl,
+                                  tamanoBytes: doc.tamanoBytes,
+                                  sha256Hash: doc.sha256Hash,
+                                  subidoPor: doc.subidoPorNombre,
+                                  subidoEn: doc.subidoEn,
+                                  fotos: doc.fotos
+                                })
+                              }
+                              className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-emerald-700" />
+                              <span>Previsualizar</span>
+                            </button>
+
+                            {puedeGestionarDocumentos && (
+                              <div className="flex items-center space-x-2">
+                                <button
+                                  type="button"
+                                  onClick={() => abrirModalDocumento(doc)}
+                                  className="text-xs font-bold text-blue-700 hover:text-blue-900 hover:underline cursor-pointer"
+                                >
+                                  Reemplazar
+                                </button>
+                                {(desembolso.estadoActual === "pendiente_documentos" || desembolso.estadoActual === "listo_para_solicitar") && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setErrorAccion(null);
+                                      setModalConfirmarEliminarDoc(doc);
+                                    }}
+                                    className="text-xs font-semibold text-rose-600 hover:text-rose-800 hover:underline cursor-pointer flex items-center space-x-0.5"
+                                    title="Desvincular formato"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          puedeGestionarDocumentos && (
+                            <button
+                              type="button"
+                              onClick={() => abrirModalDocumento(doc)}
+                              className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 shadow-xs cursor-pointer active:scale-98"
+                            >
+                              <Upload className="w-3.5 h-3.5" />
+                              <span>Cargar {doc.codigo} (PDF)</span>
+                            </button>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ---------------------------------------------------------------- */}
+            {/* SECCIÓN 2: CONSERVACIÓN DE FORMATOS EXISTENTES                   */}
+            {/* ---------------------------------------------------------------- */}
+            <div className="border border-slate-200 bg-slate-50/40 rounded-2xl p-4 sm:p-5">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-3.5 border-b border-slate-200 mb-4 gap-2">
+                <div className="flex items-center space-x-2.5">
+                  <div className="p-2 bg-emerald-600 text-white rounded-xl shadow-xs">
+                    <CheckCircle2 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h5 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                      <span>2. Conservación de Formatos Existentes (Cierre Técnico y Habitabilidad)</span>
+                      <span className="text-2xs font-semibold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        Cierre Técnico
+                      </span>
+                    </h5>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Certificación de servicios públicos, registro fotográfico en alta resolución y recibo a satisfacción del beneficiario.
+                    </p>
                   </div>
                 </div>
-              );
-            })}
+
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs text-slate-500 font-medium">Avance:</span>
+                  <span className="px-2 py-0.5 text-xs font-bold rounded-lg bg-white border border-slate-200 text-slate-800 shadow-2xs">
+                    {docsCierreTecnico.filter((d) => d.estado === "aceptado" || d.estado === "cargado").length} de {docsCierreTecnico.length}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {docsCierreTecnico.map((doc) => {
+                  const estaCargado = doc.estado === "aceptado" || doc.estado === "cargado";
+
+                  return (
+                    <div
+                      key={doc.codigo}
+                      className={`p-4 rounded-xl border flex flex-col justify-between transition-all ${
+                        estaCargado
+                          ? "bg-emerald-50/50 border-emerald-300 shadow-2xs"
+                          : "bg-white border-slate-200 hover:border-emerald-300 shadow-2xs"
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div className="flex items-center space-x-1.5">
+                            <span className="font-mono text-xs font-bold px-2 py-0.5 bg-emerald-700 text-white rounded-md shadow-2xs">
+                              {doc.codigo}
+                            </span>
+                            <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                              PDF / Imagen
+                            </span>
+                          </div>
+
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                              doc.estado === "aceptado"
+                                ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                                : doc.estado === "cargado"
+                                ? "bg-blue-100 text-blue-800 border border-blue-200"
+                                : "bg-amber-50 text-amber-700 border border-amber-200"
+                            }`}
+                          >
+                            {doc.estado === "aceptado"
+                              ? "Aceptado"
+                              : doc.estado === "cargado"
+                              ? "Cargado"
+                              : "Pendiente"}
+                          </span>
+                        </div>
+
+                        <h6 className="font-bold text-xs text-slate-900 leading-snug mb-1">
+                          {doc.nombre}
+                        </h6>
+
+                        <p className="text-[11px] text-slate-500 leading-relaxed mb-3">
+                          {doc.descripcion}
+                        </p>
+
+                        {estaCargado && doc.nombreArchivo && (
+                          <div className="p-2.5 bg-white rounded-lg border border-slate-200 space-y-1 mb-3 text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-[11px] font-medium text-slate-800 truncate max-w-[150px]" title={doc.nombreArchivo}>
+                                {doc.nombreArchivo}
+                              </span>
+                              <span className="text-[10px] text-slate-400">
+                                {doc.tamanoBytes ? `${Math.round(doc.tamanoBytes / 1024)} KB` : "PDF/IMG"}
+                              </span>
+                            </div>
+                            {doc.id && (
+                              <div className="text-[10px] font-mono text-slate-400 truncate" title={`ID: ${doc.id}`}>
+                                ID: {doc.id}
+                              </div>
+                            )}
+                            {doc.subidoPorNombre && (
+                              <div className="text-[10px] text-slate-400">
+                                Por: {doc.subidoPorNombre}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* ACCIONES DEL DOCUMENTO DE CIERRE */}
+                      <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2 mt-auto">
+                        {estaCargado ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onAbrirVisor({
+                                  titulo: `${doc.codigo}: ${doc.nombre}`,
+                                  nombreArchivo: doc.nombreArchivo || `${doc.codigo}.pdf`,
+                                  mimeType: doc.mimeType || "application/pdf",
+                                  archivoDataUrl: doc.archivoDataUrl,
+                                  tamanoBytes: doc.tamanoBytes,
+                                  sha256Hash: doc.sha256Hash,
+                                  subidoPor: doc.subidoPorNombre,
+                                  subidoEn: doc.subidoEn,
+                                  fotos: doc.fotos
+                                })
+                              }
+                              className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-emerald-700" />
+                              <span>Previsualizar</span>
+                            </button>
+
+                            {puedeGestionarDocumentos && (
+                              <div className="flex items-center space-x-2">
+                                <button
+                                  type="button"
+                                  onClick={() => abrirModalDocumento(doc)}
+                                  className="text-xs font-bold text-emerald-700 hover:text-emerald-900 hover:underline cursor-pointer"
+                                >
+                                  Reemplazar
+                                </button>
+                                {(desembolso.estadoActual === "pendiente_documentos" || desembolso.estadoActual === "listo_para_solicitar") && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setErrorAccion(null);
+                                      setModalConfirmarEliminarDoc(doc);
+                                    }}
+                                    className="text-xs font-semibold text-rose-600 hover:text-rose-800 hover:underline cursor-pointer flex items-center space-x-0.5"
+                                    title="Desvincular formato"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          puedeGestionarDocumentos && (
+                            <button
+                              type="button"
+                              onClick={() => abrirModalDocumento(doc)}
+                              className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 shadow-xs cursor-pointer active:scale-98"
+                            >
+                              <Upload className="w-3.5 h-3.5" />
+                              <span>Cargar {doc.codigo} (PDF/IMG)</span>
+                            </button>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -1818,55 +2089,166 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
       )}
 
       {/* ========================================================= */}
-      {/* MODAL 2: CARGAR DOCUMENTO DE CIERRE (F7-01 a F7-04) */}
+      {/* MODAL 2: CARGAR / REEMPLAZAR DOCUMENTO DE CIERRE (6 DOCS) */}
       {/* ========================================================= */}
       {modalDoc && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 my-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center space-x-2">
-                <FileCheck2 className="w-5 h-5 text-blue-600" />
-                <h4 className="font-bold text-sm text-slate-900">
-                  Cargar {modalDoc.codigo}: {modalDoc.nombre}
-                </h4>
+              <div className="flex items-center space-x-2.5">
+                <div className={`p-2 rounded-xl text-white ${
+                  modalDoc.seccion === "formatos_compensar" ? "bg-blue-600" : "bg-emerald-600"
+                }`}>
+                  <FileCheck2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-slate-900">
+                    {modalDoc.nombreArchivo ? "Reemplazar Documento" : "Cargar Documento"}: {modalDoc.codigo}
+                  </h4>
+                  <p className="text-xs text-slate-500 font-medium">
+                    {modalDoc.nombre}
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => setModalDoc(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer rounded-lg hover:bg-slate-100"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="py-4 space-y-3">
-              <p className="text-xs text-slate-600">{modalDoc.descripcion}</p>
-
-              <label className="border-2 border-dashed border-blue-200 hover:border-blue-400 bg-blue-50/40 rounded-xl p-5 flex flex-col items-center justify-center cursor-pointer transition-colors text-center">
-                <Upload className="w-7 h-7 text-blue-500 mb-1" />
-                <span className="text-xs font-bold text-blue-950">
-                  Seleccione el soporte firmado en PDF o Imagen
+            <div className="py-4 space-y-3.5">
+              <div className="flex items-center space-x-2">
+                <span className={`text-2xs font-bold px-2 py-0.5 rounded-md ${
+                  modalDoc.seccion === "formatos_compensar"
+                    ? "bg-blue-50 text-blue-800 border border-blue-200"
+                    : "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                }`}>
+                  {modalDoc.seccion === "formatos_compensar" ? "Formato Oficial Compensar" : "Cierre Técnico y Habitabilidad"}
                 </span>
-                <span className="text-[10px] text-slate-400 mt-0.5">
-                  Máximo 15 MB (.pdf, .jpg, .png)
+                <span className="text-[11px] text-slate-400">
+                  {modalDoc.seccion === "formatos_compensar" ? "Formato oficial en PDF" : "Admite PDF e imágenes (JPG, PNG)"}
                 </span>
-                <input
-                  type="file"
-                  accept="application/pdf,image/jpeg,image/png"
-                  onClick={(e) => {
-                    (e.target as HTMLInputElement).value = "";
-                  }}
-                  onChange={handleSeleccionarArchivoDoc}
-                  className="hidden"
-                />
-              </label>
+              </div>
 
-              {docArchivoTemp && (
-                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-xs text-emerald-900">
-                  <div className="truncate font-semibold">
-                    {docArchivoTemp.nombreArchivo} ({Math.round(docArchivoTemp.tamanoBytes / 1024)} KB)
+              <p className="text-xs text-slate-600 leading-relaxed bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                {modalDoc.descripcion}
+              </p>
+
+              {!docArchivoTemp ? (
+                <label className="border-2 border-dashed border-blue-200 hover:border-blue-400 bg-blue-50/40 rounded-xl p-5 flex flex-col items-center justify-center cursor-pointer transition-colors text-center">
+                  <Upload className="w-7 h-7 text-blue-500 mb-1.5" />
+                  <span className="text-xs font-bold text-blue-950">
+                    Haga clic aquí para seleccionar el archivo oficial
+                  </span>
+                  <span className="text-[10px] text-slate-500 mt-1">
+                    {modalDoc.seccion === "formatos_compensar"
+                      ? "Formatos válidos: PDF oficial firmado (.pdf) hasta 20 MB"
+                      : "Formatos admitidos: Documentos PDF (.pdf) o Imágenes (.jpg, .png) hasta 20 MB"}
+                  </span>
+                  <input
+                    type="file"
+                    accept={
+                      modalDoc.seccion === "formatos_compensar"
+                        ? "application/pdf,.pdf"
+                        : "application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+                    }
+                    onClick={(e) => {
+                      (e.target as HTMLInputElement).value = "";
+                    }}
+                    onChange={handleSeleccionarArchivoDoc}
+                    className="hidden"
+                  />
+                </label>
+              ) : (
+                <div className="space-y-3">
+                  <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl space-y-2 text-xs text-emerald-950">
+                    <div className="flex items-center justify-between">
+                      <div className="truncate font-bold text-emerald-900 max-w-[280px]">
+                        {docArchivoTemp.nombreArchivo}
+                      </div>
+                      <span className="text-[11px] font-semibold text-emerald-700 shrink-0">
+                        {(docArchivoTemp.tamanoBytes / 1024).toFixed(1)} KB
+                      </span>
+                    </div>
+
+                    <div className="text-[10px] text-emerald-700 font-mono">
+                      Tipo: {docArchivoTemp.mimeType}
+                    </div>
+
+                    {/* Previsualización directa en el modal si es imagen */}
+                    {docArchivoTemp.mimeType?.startsWith("image/") && (
+                      <div className="mt-2 pt-2 border-t border-emerald-200 text-center">
+                        <span className="text-[10px] font-bold text-emerald-800 block mb-1">
+                          Vista previa de la imagen cargada:
+                        </span>
+                        <img
+                          src={docArchivoTemp.archivoDataUrl}
+                          alt="Vista previa"
+                          className="max-h-44 mx-auto rounded-lg border border-emerald-300 shadow-2xs object-contain"
+                        />
+                      </div>
+                    )}
+
+                    {/* Previsualización en visor si es PDF */}
+                    {docArchivoTemp.mimeType === "application/pdf" && (
+                      <div className="mt-2 pt-2 border-t border-emerald-200 flex items-center justify-between">
+                        <span className="text-[11px] text-emerald-800 font-medium">
+                          Documento PDF listo para vinculación
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onAbrirVisor({
+                              titulo: `Previsualización: ${docArchivoTemp.nombreArchivo}`,
+                              nombreArchivo: docArchivoTemp.nombreArchivo,
+                              mimeType: docArchivoTemp.mimeType,
+                              tamanoBytes: docArchivoTemp.tamanoBytes,
+                              archivoDataUrl: docArchivoTemp.archivoDataUrl
+                            })
+                          }
+                          className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-semibold flex items-center space-x-1 cursor-pointer transition-colors"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Previsualizar PDF</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 ml-2" />
+
+                  <div className="flex items-center justify-end space-x-2">
+                    <label className="px-3 py-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer shadow-2xs">
+                      Cambiar archivo
+                      <input
+                        type="file"
+                        accept={
+                          modalDoc.seccion === "formatos_compensar"
+                            ? "application/pdf,.pdf"
+                            : "application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+                        }
+                        onClick={(e) => {
+                          (e.target as HTMLInputElement).value = "";
+                        }}
+                        onChange={handleSeleccionarArchivoDoc}
+                        className="hidden"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setDocArchivoTemp(null)}
+                      className="px-3 py-1 bg-white border border-rose-200 hover:bg-rose-50 text-rose-600 rounded-lg text-xs font-semibold cursor-pointer shadow-2xs"
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {errorAccion && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700">
+                  {errorAccion}
                 </div>
               )}
             </div>
@@ -1883,9 +2265,10 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
                 type="button"
                 disabled={cargandoAccion || !docArchivoTemp}
                 onClick={handleGuardarDocumentoCierre}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-xs"
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-xs flex items-center space-x-1.5"
               >
-                {cargandoAccion ? "Cargando..." : "Confirmar Carga de Documento"}
+                <CheckCircle2 className="w-4 h-4" />
+                <span>{cargandoAccion ? "Guardando..." : "Confirmar Carga de Documento"}</span>
               </button>
             </div>
           </div>
@@ -1968,7 +2351,7 @@ export const Fase7ConstruccionCobro: React.FC<Fase7ConstruccionCobroProps> = ({
 
             <div className="py-4 space-y-3">
               <p className="text-xs text-slate-600 leading-relaxed bg-emerald-50/60 p-3 rounded-xl border border-emerald-100">
-                Se enviará el paquete de cobro incluyendo los 4 documentos de cierre aprobados: Acta de Recibo a Satisfacción (F7-01), Certificación de Habitabilidad (F7-02), Registro Fotográfico de Llaves (F7-03) y Acta de Liquidación (F7-04).
+                Se enviará el paquete de cobro consolidado con los 6 documentos requeridos: 3 Formatos Oficiales de Compensar (Acta de Inicio de Contrato, Acta de Inicio de Obra y Acta de Entrega) y 3 Formatos de Cierre Técnico (Certificado de Habitabilidad, Registro Fotográfico de Entrega y Acta de Recibo a Satisfacción).
               </p>
 
               <div>

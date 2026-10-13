@@ -68,11 +68,22 @@ export async function verificarBucketStorage(): Promise<{ existe: boolean; mensa
       return { existe: false, mensaje: `Error listando buckets: ${error.message}` };
     }
     const existe = Boolean(buckets?.some((b) => b.name === STORAGE_BUCKET_NAME));
+    const allowedMimeTypes = [
+      "application/pdf",
+      "application/vnd.ms-excel",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "text/csv",
+      "image/jpeg",
+      "image/png",
+      "image/webp"
+    ];
+
     if (!existe) {
       // Intentar crear el bucket si no existe
       const { error: createError } = await supabase.storage.createBucket(STORAGE_BUCKET_NAME, {
         public: true,
-        fileSizeLimit: 25 * 1024 * 1024 // 25 MB
+        fileSizeLimit: 25 * 1024 * 1024, // 25 MB
+        allowedMimeTypes
       });
       if (createError) {
         return {
@@ -80,9 +91,20 @@ export async function verificarBucketStorage(): Promise<{ existe: boolean; mensa
           mensaje: `Bucket '${STORAGE_BUCKET_NAME}' no existe. Crear manualmente en Supabase Dashboard: ${createError.message}`
         };
       }
-      return { existe: true, mensaje: `Bucket '${STORAGE_BUCKET_NAME}' creado exitosamente.` };
+      return { existe: true, mensaje: `Bucket '${STORAGE_BUCKET_NAME}' creado exitosamente con soporte para PDF, Excel e imágenes.` };
+    } else {
+      // Si el bucket existe, asegurar que los tipos MIME de Excel estén habilitados
+      try {
+        await supabase.storage.updateBucket(STORAGE_BUCKET_NAME, {
+          public: true,
+          fileSizeLimit: 25 * 1024 * 1024,
+          allowedMimeTypes
+        });
+      } catch (updErr) {
+        // En caso de que no tenga permisos de updateBucket, continuar normalmente
+      }
     }
-    return { existe: true, mensaje: `Bucket '${STORAGE_BUCKET_NAME}' verificado y disponible.` };
+    return { existe: true, mensaje: `Bucket '${STORAGE_BUCKET_NAME}' verificado y disponible con soporte para PDF y Excel.` };
   } catch (err: any) {
     return { existe: false, mensaje: `Excepción verificando bucket: ${err?.message}` };
   }

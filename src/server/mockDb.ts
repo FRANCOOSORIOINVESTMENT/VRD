@@ -216,35 +216,35 @@ class MockDatabase {
         {
           id: "req-m-f1-01",
           codigo: "F1-01",
-          nombre: "Cédula de Ciudadanía del Titular",
-          descripcion: "Fotocopia legible por ambas caras al 150% del documento de identidad del postulante titular.",
+          nombre: "Certificado de Tradición y Libertad",
+          descripcion: "Certificado de matrícula inmobiliaria expedido por la ORIP con vigencia no mayor a 90 días calendario respecto a la revisión. Debe registrar el folio de matrícula.",
           fase: 1,
           esObligatorio: true,
           activo: true,
           orden: 1,
-          orientacionTecnica: "Verificar vigencia y concordancia con bases de datos de Registraduría."
+          orientacionTecnica: "Verificar que el predio no cuente con embargos, hipotecas activas ni gravámenes que limiten la titulación."
         },
         {
           id: "req-m-f1-02",
           codigo: "F1-02",
-          nombre: "Certificado de Tradición y Libertad / Escritura",
-          descripcion: "Certificado de matrícula inmobiliaria con expedición no mayor a 30 días o escritura pública que demuestre posesión o propiedad del predio rural.",
+          nombre: "Escritura Pública",
+          descripcion: "Copia de la escritura pública del predio, resolución administrativa de adjudicación o título de sana posesión debidamente protocolizado con número y fecha correspondiente.",
           fase: 1,
           esObligatorio: true,
           activo: true,
           orden: 2,
-          orientacionTecnica: "El predio no debe poseer embargos, hipotecas ni gravámenes que limiten la titulación."
+          orientacionTecnica: "Debe estar completamente separado del Certificado de Tradición y Libertad. Verificar número de escritura, notaría y fecha."
         },
         {
           id: "req-m-f1-03",
           codigo: "F1-03",
-          nombre: "Certificado de Afiliación a Compensar o Sisbén",
-          descripcion: "Constancia de afiliación activa a la Caja de Compensación Compensar o ficha técnica de clasificación Sisbén IV.",
+          nombre: "Cédula de Ciudadanía del Postulante",
+          descripcion: "Fotocopia legible por ambas caras al 150% del documento de identidad del postulante titular.",
           fase: 1,
           esObligatorio: true,
           activo: true,
           orden: 3,
-          orientacionTecnica: "Para caja de compensación se requiere encontrarse en estado activo cotizante o beneficiario."
+          orientacionTecnica: "Verificar plena coincidencia con las bases de datos de Registraduría."
         },
         // Fase 2
         {
@@ -327,6 +327,28 @@ class MockDatabase {
           activo: true,
           orden: 8
         },
+        {
+          id: "req-m-f2-09",
+          codigo: "F2-09",
+          nombre: "Certificado de Disponibilidad de Agua",
+          descripcion: "Certificación o factura de disponibilidad del servicio público de acueducto o agua veredal con vigencia no superior a 90 días.",
+          fase: 2,
+          esObligatorio: true,
+          activo: true,
+          orden: 9,
+          orientacionTecnica: "Completamente separado del recibo de energía. Vigencia máxima 90 días."
+        },
+        {
+          id: "req-m-f2-10",
+          codigo: "F2-10",
+          nombre: "Certificado de Disponibilidad de Energía",
+          descripcion: "Constancia de disponibilidad de servicio de energía eléctrica o factura reciente del operador de red con vigencia no superior a 90 días.",
+          fase: 2,
+          esObligatorio: true,
+          activo: true,
+          orden: 10,
+          orientacionTecnica: "Completamente separado del recibo de agua. Vigencia máxima 90 días."
+        },
         // Fase 3
         {
           id: "req-m-f3-01",
@@ -383,11 +405,12 @@ class MockDatabase {
           id: "req-m-f4-03",
           codigo: "F4-03",
           nombre: "Planos Arquitectónicos y Distribución Espacial",
-          descripcion: "Plantas, cortes, fachadas y detalles constructivos firmados por arquitecto con matrícula profesional vigente.",
+          descripcion: "Juego técnico integral de planos del proyecto. NOTA OBLIGATORIA: El paquete se conforma obligatoriamente de: 1. Planos estructurales, 2. Planos arquitectónicos, 3. Plano de implantación, 4. Planos eléctricos y 5. Planos hidrosanitarios.",
           fase: 4,
           esObligatorio: true,
           activo: true,
-          orden: 3
+          orden: 3,
+          orientacionTecnica: "Se debe validar la inclusión de los 5 tipos de planos técnicos: estructurales, arquitectónicos, implantación, eléctricos e hidrosanitarios."
         },
         {
           id: "req-m-f4-04",
@@ -460,53 +483,321 @@ class MockDatabase {
           activo: true,
           orden: 4
         },
-        // Fase 6
+        // Fase 6 (Catálogo Oficial de 28 Documentos en Orden Estricto)
         {
           id: "req-m-f6-01",
           codigo: "F6-01",
-          nombre: "Formulario de Postulación al Subsidio Familiar de Vivienda Rural",
-          descripcion: "Formulario oficial de postulación suscrito por los miembros del hogar con firma y huella.",
+          nombre: "Datos del proyecto ANEXO DOC",
+          descripcion: "Ficha y anexo técnico con los datos consolidados del proyecto de vivienda rural.",
           fase: 6,
           esObligatorio: true,
           activo: true,
-          orden: 1
+          orden: 1,
+          orientacionTecnica: "Documento inicial oficial del proyecto."
         },
         {
           id: "req-m-f6-02",
           codigo: "F6-02",
-          nombre: "Certificación de Cierre Financiero y Aporte del 10%",
-          descripcion: "Documento que acredita la conformación de los recursos totales (subsidio + aporte propio o municipal).",
+          nombre: "Formulario de postulación diligenciado",
+          descripcion: "Formulario oficial de postulación al subsidio familiar suscrito por el hogar con firma y huella.",
           fase: 6,
           esObligatorio: true,
           activo: true,
-          orden: 2
+          orden: 2,
+          orientacionTecnica: "Verificar firmas y huellas de todos los integrantes mayores de edad."
         },
         {
           id: "req-m-f6-03",
           codigo: "F6-03",
-          nombre: "Certificado de Elegibilidad Emitido por Entidad Evaluadora",
-          descripcion: "Certificación de cumplimiento integral de los requisitos normativos del programa de vivienda rural.",
+          nombre: "Documentos de identidad del grupo familiar",
+          descripcion: "Cédulas de ciudadanía al 150%, tarjetas de identidad y registros civiles de los integrantes del hogar.",
           fase: 6,
           esObligatorio: true,
           activo: true,
-          orden: 3
+          orden: 3,
+          orientacionTecnica: "Legibilidad al 100% por ambas caras."
         },
         {
           id: "req-m-f6-04",
           codigo: "F6-04",
-          nombre: "Carta de Asignación y Resolución de Subsidio Compensar",
-          descripcion: "Resolución formal de asignación de recursos del subsidio expedida por el Consejo Directivo de Compensar.",
+          nombre: "Certificado de ingresos o certificado laboral",
+          descripcion: "Certificación laboral vigente (no mayor a 30 días) o colillas de nómina para asalariados.",
           fase: 6,
           esObligatorio: true,
           activo: true,
-          orden: 4
+          orden: 4,
+          orientacionTecnica: "Indica cargo, salario, antigüedad y tipo de vinculación."
         },
-        // Fase 7
+        {
+          id: "req-m-f6-05",
+          codigo: "F6-05",
+          nombre: "Paquete Contador (independientes: antecedentes, cédula y tarjeta profesional)",
+          descripcion: "Certificación de ingresos suscrita por contador público con antecedentes vigentes y tarjeta profesional.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 5,
+          orientacionTecnica: "Para independientes. Certificado de la JCC vigente."
+        },
+        {
+          id: "req-m-f6-06",
+          codigo: "F6-06",
+          nombre: "Constancia de independientes",
+          descripcion: "Declaración formal o extrajuicio de la actividad comercial o agropecuaria independiente.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 6,
+          orientacionTecnica: "Acredita actividad económica lícita."
+        },
+        {
+          id: "req-m-f6-07",
+          codigo: "F6-07",
+          nombre: "Certificado de ahorro (cesantías, preaprobado, aprobado, CDT, subsidios complementarios, cuenta bancaria con saldo)",
+          descripcion: "Certificación bancaria que acredite disponibilidad del recurso de cierre financiero y aporte del hogar.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 7,
+          orientacionTecnica: "Cuenta inmovilizada o saldo disponible."
+        },
+        {
+          id: "req-m-f6-08",
+          codigo: "F6-08",
+          nombre: "Documento civil (registro civil matrimonio, extrajuicio)",
+          descripcion: "Acreditación del estado civil del hogar (registro civil de matrimonio o unión marital de hecho).",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 8,
+          orientacionTecnica: "Acredita conformación del hogar."
+        },
+        {
+          id: "req-m-f6-09",
+          codigo: "F6-09",
+          nombre: "Certificado de tradición y libertad (con número de matrícula)",
+          descripcion: "Certificado de tradición y libertad con número de matrícula inmobiliaria expedido dentro de los 90 días.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 9,
+          orientacionTecnica: "Vigencia menor a 90 días. Matrícula visible."
+        },
+        {
+          id: "req-m-f6-10",
+          codigo: "F6-10",
+          nombre: "Escritura, Resolución o sana posesión (con número o fecha correspondiente)",
+          descripcion: "Título de propiedad, escritura pública, resolución de adjudicación o sana posesión. SEPARADO DE TRADICIÓN.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 10,
+          orientacionTecnica: "Debe quedar en archivo separado de tradición y libertad."
+        },
+        {
+          id: "req-m-f6-11",
+          codigo: "F6-11",
+          nombre: "Impuesto predial (año en curso)",
+          descripcion: "Comprobante de pago o paz y salvo del impuesto predial unificado de la vigencia del año en curso.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 11,
+          orientacionTecnica: "Vigencia obligatoria del año en curso."
+        },
+        {
+          id: "req-m-f6-12",
+          codigo: "F6-12",
+          nombre: "Presupuesto (PDF firmado)",
+          descripcion: "Presupuesto consolidado oficial de obra firmado en PDF por el profesional competente.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 12,
+          orientacionTecnica: "Verificar firma y matrícula profesional."
+        },
+        {
+          id: "req-m-f6-13",
+          codigo: "F6-13",
+          nombre: "Memoria de cantidades",
+          descripcion: "Desglose detallado de cantidades de obra y cómputos métricos por capítulos constructivos.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 13,
+          orientacionTecnica: "Cálculo de materiales y unidades."
+        },
+        {
+          id: "req-m-f6-14",
+          codigo: "F6-14",
+          nombre: "Especificaciones técnicas",
+          descripcion: "Manual de especificaciones constructivas y calidades de materiales según NSR-10.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 14,
+          orientacionTecnica: "Detalle constructivo de acabados y estructura."
+        },
+        {
+          id: "req-m-f6-15",
+          codigo: "F6-15",
+          nombre: "Acta y registro fotográfico",
+          descripcion: "Registro fotográfico nítido y acta técnica de inspección del terreno y linderos del predio.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 15,
+          orientacionTecnica: "Fotografías a color de entorno y lote."
+        },
+        {
+          id: "req-m-f6-16",
+          codigo: "F6-16",
+          nombre: "Planos de intervención (Sellados)",
+          descripcion: "Planos de intervención en predio debidamente sellados por la autoridad municipal o curaduría.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 16,
+          orientacionTecnica: "Sellos oficiales legibles."
+        },
+        {
+          id: "req-m-f6-17",
+          codigo: "F6-17",
+          nombre: "Licencia de construcción (con número de resolución)",
+          descripcion: "Acto administrativo de otorgamiento de la licencia urbanística con número de resolución y constancia de ejecutoria.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 17,
+          orientacionTecnica: "Resolución municipal ejecutoriada."
+        },
+        {
+          id: "req-m-f6-18",
+          codigo: "F6-18",
+          nombre: "Planos aprobados",
+          descripcion: "Juego de planos aprobados. NOTA OBLIGATORIA: Deben incluir: estructurales, arquitectónicos, implantación, eléctricos e hidrosanitarios.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 18,
+          orientacionTecnica: "Paquete de 5 especialidades de planos."
+        },
+        {
+          id: "req-m-f6-19",
+          codigo: "F6-19",
+          nombre: "Nomenclatura (vigencia año en curso)",
+          descripcion: "Certificado oficial de nomenclatura expedido por la alcaldía municipal con vigencia del año en curso.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 19,
+          orientacionTecnica: "Vigencia año en curso."
+        },
+        {
+          id: "req-m-f6-20",
+          codigo: "F6-20",
+          nombre: "Certificado de uso de suelo individual (vigencia año en curso)",
+          descripcion: "Concepto de uso del suelo expedido por planeación municipal con vigencia del año en curso.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 20,
+          orientacionTecnica: "Vigencia año en curso."
+        },
+        {
+          id: "req-m-f6-21",
+          codigo: "F6-21",
+          nombre: "Certificado de riesgo individual (vigencia año en curso)",
+          descripcion: "Certificación de no riesgo ni amenaza no mitigable expedida en el año en curso.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 21,
+          orientacionTecnica: "Vigencia año en curso."
+        },
+        {
+          id: "req-m-f6-22",
+          codigo: "F6-22",
+          nombre: "Certificado de No habitabilidad o demolición objeto de postulación (Si aplica)",
+          descripcion: "Dictamen técnico de inhabitabilidad de la vivienda actual o autorización de demolición (si aplica).",
+          fase: 6,
+          esObligatorio: false,
+          activo: true,
+          orden: 22,
+          orientacionTecnica: "Aplica para sustitución o predio en riesgo."
+        },
+        {
+          id: "req-m-f6-23",
+          codigo: "F6-23",
+          nombre: "Formato de transporte (expedido por nuestra interventoría)",
+          descripcion: "Certificación oficial de transporte y acarreo de materiales expedida por nuestra interventoría.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 23,
+          orientacionTecnica: "Firma de la interventoría técnica."
+        },
+        {
+          id: "req-m-f6-24",
+          codigo: "F6-24",
+          nombre: "Contrato",
+          descripcion: "Contrato de obra o mandato suscrito entre el hogar postulante y el constructor / operador.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 24,
+          orientacionTecnica: "Firmado por las partes."
+        },
+        {
+          id: "req-m-f6-25",
+          codigo: "F6-25",
+          nombre: "Servicios públicos (vigencia no superior a 90 días)",
+          descripcion: "Disponibilidad de agua y energía con vigencia no superior a 90 días (archivos separados).",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 25,
+          orientacionTecnica: "Vigencia no superior a 90 días. Agua y Energía separados."
+        },
+        {
+          id: "req-m-f6-26",
+          codigo: "F6-26",
+          nombre: "Arraigo (si lo requiere)",
+          descripcion: "Certificado de arraigo y permanencia en el territorio rural (si es requerido por el municipio).",
+          fase: 6,
+          esObligatorio: false,
+          activo: true,
+          orden: 26,
+          orientacionTecnica: "Expedido por alcaldía o junta comunal."
+        },
+        {
+          id: "req-m-f6-27",
+          codigo: "F6-27",
+          nombre: "Excel presupuesto",
+          descripcion: "Archivo en formato de hoja de cálculo Excel (.xlsx) con el presupuesto detallado y análisis de precios unitarios.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 27,
+          orientacionTecnica: "Archivo nativo en Excel con fórmulas."
+        },
+        {
+          id: "req-m-f6-28",
+          codigo: "F6-28",
+          nombre: "Anexo (CONSTANCIA)",
+          descripcion: "Constancia final institucional y anexo de cierre documental para entrega ante Compensar.",
+          fase: 6,
+          esObligatorio: true,
+          activo: true,
+          orden: 28,
+          orientacionTecnica: "Constancia de radicación formal."
+        },
+        // Fase 7: Formatos Oficiales de Compensar y Cierre Técnico
         {
           id: "req-m-f7-01",
           codigo: "F7-01",
-          nombre: "Acta de Recibo a Satisfacción de Vivienda",
-          descripcion: "Firma formal de recepción de la vivienda terminada al 100% por el beneficiario y la supervisión técnica.",
+          nombre: "Acta de Inicio de Contrato (Compensar)",
+          descripcion: "Formato oficial de Compensar para el acta de inicio de contrato del subsidio de vivienda.",
           fase: 7,
           esObligatorio: true,
           activo: true,
@@ -515,8 +806,8 @@ class MockDatabase {
         {
           id: "req-m-f7-02",
           codigo: "F7-02",
-          nombre: "Certificación de Habitabilidad y Servicios",
-          descripcion: "Constancia técnica de servicios públicos domiciliarios activos y plenas condiciones higiénico-sanitarias.",
+          nombre: "Acta de Inicio de Obra (Compensar)",
+          descripcion: "Formato oficial de Compensar que certifica el inicio formal de las obras civiles en terreno.",
           fase: 7,
           esObligatorio: true,
           activo: true,
@@ -525,8 +816,8 @@ class MockDatabase {
         {
           id: "req-m-f7-03",
           codigo: "F7-03",
-          nombre: "Registro Fotográfico de Entrega de Llaves",
-          descripcion: "Acto solemne de entrega de llaves al hogar beneficiario con evidencia fotográfica en alta resolución.",
+          nombre: "Acta de Entrega (Compensar)",
+          descripcion: "Formato oficial de Compensar para el acta de entrega y cierre técnico entre las partes.",
           fase: 7,
           esObligatorio: true,
           activo: true,
@@ -535,12 +826,32 @@ class MockDatabase {
         {
           id: "req-m-f7-04",
           codigo: "F7-04",
-          nombre: "Acta de Liquidación y Archivo Documental",
-          descripcion: "Liquidación contractual y financiera de la obra, paz y salvo final y consolidación documental definitiva.",
+          nombre: "Certificado de Habitabilidad y Servicios",
+          descripcion: "Constancia técnica de servicios públicos domiciliarios activos y plenas condiciones higiénico-sanitarias.",
           fase: 7,
           esObligatorio: true,
           activo: true,
           orden: 4
+        },
+        {
+          id: "req-m-f7-05",
+          codigo: "F7-05",
+          nombre: "Registro Fotográfico de Entrega",
+          descripcion: "Evidencia fotográfica en alta resolución y/o reporte consolidado de la vivienda terminada y entrega de llaves.",
+          fase: 7,
+          esObligatorio: true,
+          activo: true,
+          orden: 5
+        },
+        {
+          id: "req-m-f7-06",
+          codigo: "F7-06",
+          nombre: "Acta de Recibo a Satisfacción de Vivienda",
+          descripcion: "Firma formal de recepción de la vivienda terminada al 100% por el beneficiario y la supervisión técnica.",
+          fase: 7,
+          esObligatorio: true,
+          activo: true,
+          orden: 6
         }
       ],
       plantillasFases: {

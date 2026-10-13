@@ -845,6 +845,251 @@ export async function generarCasosEjemploParaCadaFase(
     observacionesEnvio:
       "Expediente técnico, jurídico y financiero completo radicado ante el Comité de Vivienda de Compensar para la emisión de la resolución de asignación del subsidio.",
     rondasSubsanacion: [],
+    documentosCargaActiva: {
+      "F6-01": {
+        nombreArchivo: "01_Datos_del_proyecto_ANEXO_DOC.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/01_Datos_del_proyecto_ANEXO_DOC.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 180,
+        sha256Hash: "sha256-f6-01-anexo-doc-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-02": {
+        nombreArchivo: "02_Formulario_de_postulacion_diligenciado.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/02_Formulario_de_postulacion_diligenciado.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 240,
+        sha256Hash: "sha256-f6-02-formulario-firmas-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-03": {
+        nombreArchivo: "03_Documentos_de_identidad_del_grupo_familiar.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/03_Documentos_de_identidad_del_grupo_familiar.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 310,
+        sha256Hash: "sha256-f6-03-cedulas-150-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-04": {
+        nombreArchivo: "04_Certificado_de_ingresos_o_certificado_laboral.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/04_Certificado_de_ingresos_o_certificado_laboral.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 190,
+        sha256Hash: "sha256-f6-04-laboral-vigente-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-05": {
+        nombreArchivo: "05_Paquete_Contador_antecedentes_cedula_tarjeta.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/05_Paquete_Contador_antecedentes_cedula_tarjeta.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 260,
+        sha256Hash: "sha256-f6-05-jcc-contador-vigente",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-06": {
+        nombreArchivo: "06_Constancia_de_independientes.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/06_Constancia_de_independientes.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 140,
+        sha256Hash: "sha256-f6-06-constancia-independiente-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-07": {
+        nombreArchivo: "07_Certificado_de_ahorro_programado_y_cesantias.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/07_Certificado_de_ahorro_programado_y_cesantias.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 175,
+        sha256Hash: "sha256-f6-07-ahorro-inmovilizado-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-08": {
+        nombreArchivo: "08_Documento_civil_matrimonio_extrajuicio.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/08_Documento_civil_matrimonio_extrajuicio.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 160,
+        sha256Hash: "sha256-f6-08-registro-civil-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-09": {
+        nombreArchivo: "09_Certificado_de_tradicion_y_libertad_Matricula_257_992341.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/09_Certificado_de_tradicion_y_libertad_Matricula_257_992341.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 220,
+        sha256Hash: "sha256-f6-09-ctl-tenjo-vigente",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-10": {
+        nombreArchivo: "10_Escritura_Publica_No_1842_Notaria_Tenjo.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/10_Escritura_Publica_No_1842_Notaria_Tenjo.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 380,
+        sha256Hash: "sha256-f6-10-escritura-separada-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-11": {
+        nombreArchivo: "11_Impuesto_predial_vigencia_2026.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/11_Impuesto_predial_vigencia_2026.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 150,
+        sha256Hash: "sha256-f6-11-predial-2026-pago",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-12": {
+        nombreArchivo: "12_Presupuesto_Oficial_PDF_firmado_Mat_25202_114.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/12_Presupuesto_Oficial_PDF_firmado_Mat_25202_114.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 410,
+        sha256Hash: "sha256-f6-12-presupuesto-firmado-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-13": {
+        nombreArchivo: "13_Memoria_de_cantidades_de_obra.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/13_Memoria_de_cantidades_de_obra.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 320,
+        sha256Hash: "sha256-f6-13-memoria-cantidades-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-14": {
+        nombreArchivo: "14_Especificaciones_tecnicas_constructivas_NSR10.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/14_Especificaciones_tecnicas_constructivas_NSR10.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 350,
+        sha256Hash: "sha256-f6-14-especificaciones-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-15": {
+        nombreArchivo: "15_Acta_y_registro_fotografico_predio.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/15_Acta_y_registro_fotografico_predio.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 650,
+        sha256Hash: "sha256-f6-15-fotos-acta-terreno-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-16": {
+        nombreArchivo: "16_Planos_de_intervencion_sellados_Curaduria.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/16_Planos_de_intervencion_sellados_Curaduria.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 580,
+        sha256Hash: "sha256-f6-16-planos-sellados-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-17": {
+        nombreArchivo: "17_Licencia_de_construccion_Resolucion_LC_2026_0982.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/17_Licencia_de_construccion_Resolucion_LC_2026_0982.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 280,
+        sha256Hash: "sha256-f6-17-licencia-resolucion-0982",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-18": {
+        nombreArchivo: "18_Planos_aprobados_Estructural_Arquitectonico_Implantacion_Electrico_Hidro.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/18_Planos_aprobados_Estructural_Arquitectonico_Implantacion_Electrico_Hidro.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 920,
+        sha256Hash: "sha256-f6-18-planos-5-especialidades-aprobados",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-19": {
+        nombreArchivo: "19_Nomenclatura_Alcaldia_Tenjo_2026.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/19_Nomenclatura_Alcaldia_Tenjo_2026.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 160,
+        sha256Hash: "sha256-f6-19-nomenclatura-2026-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-20": {
+        nombreArchivo: "20_Certificado_de_uso_de_suelo_individual_Tenjo_2026.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/20_Certificado_de_uso_de_suelo_individual_Tenjo_2026.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 175,
+        sha256Hash: "sha256-f6-20-uso-suelo-2026-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-21": {
+        nombreArchivo: "21_Certificado_de_riesgo_individual_Tenjo_2026.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/21_Certificado_de_riesgo_individual_Tenjo_2026.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 165,
+        sha256Hash: "sha256-f6-21-riesgo-mitigable-2026-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-23": {
+        nombreArchivo: "23_Formato_de_transporte_interventoria_VRD.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/23_Formato_de_transporte_interventoria_VRD.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 190,
+        sha256Hash: "sha256-f6-23-transporte-interventoria-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-24": {
+        nombreArchivo: "24_Contrato_de_obra_y_mandato_postulacion.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/24_Contrato_de_obra_y_mandato_postulacion.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 310,
+        sha256Hash: "sha256-f6-24-contrato-mandato-firmas-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-25": {
+        nombreArchivo: "25_Servicios_publicos_Agua_y_Energia_separados.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/25_Servicios_publicos_Agua_y_Energia_separados.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 280,
+        sha256Hash: "sha256-f6-25-servicios-separados-vigencia-30dias",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-26": {
+        nombreArchivo: "26_Certificado_de_arraigo_rural_JAC.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/26_Certificado_de_arraigo_rural_JAC.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 140,
+        sha256Hash: "sha256-f6-26-arraigo-tenjo-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-27": {
+        nombreArchivo: "27_Excel_presupuesto_oficial_APU_Tenjo.xlsx",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/27_Excel_presupuesto_oficial_APU_Tenjo.xlsx",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        tamanoBytes: 1024 * 115,
+        sha256Hash: "sha256-f6-27-excel-presupuesto-formulas-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      },
+      "F6-28": {
+        nombreArchivo: "28_Anexo_CONSTANCIA_radicacion_Compensar.pdf",
+        url: "expedientes/66666666-f006-4000-8000-000000000006/28_Anexo_CONSTANCIA_radicacion_Compensar.pdf",
+        mimeType: "application/pdf",
+        tamanoBytes: 1024 * 195,
+        sha256Hash: "sha256-f6-28-constancia-institucional-ok",
+        subidoPor: "Ing. Roberto Salazar",
+        subidoEn: diasAtras(16)
+      }
+    },
     historial: [
       {
         id: `hist-post-1-${c6ExpId}`,
@@ -985,35 +1230,66 @@ export async function generarCasosEjemploParaCadaFase(
     ],
     documentosCierre: [
       {
+        id: `f7-doc-f7-01-${c7ExpId}`,
         codigo: "F7-01",
+        nombre: "Acta de Inicio de Contrato (Compensar)",
+        descripcion: "Formato oficial de Compensar para el acta de inicio de contrato del subsidio de vivienda.",
+        seccion: "formatos_compensar",
+        tiposPermitidos: ".pdf,application/pdf",
+        estado: "pendiente"
+      },
+      {
+        id: `f7-doc-f7-02-${c7ExpId}`,
+        codigo: "F7-02",
+        nombre: "Acta de Inicio de Obra (Compensar)",
+        descripcion: "Formato oficial de Compensar que certifica el inicio formal de las obras civiles en terreno.",
+        seccion: "formatos_compensar",
+        tiposPermitidos: ".pdf,application/pdf",
+        estado: "pendiente"
+      },
+      {
+        id: `f7-doc-f7-03-${c7ExpId}`,
+        codigo: "F7-03",
+        nombre: "Acta de Entrega (Compensar)",
+        descripcion: "Formato oficial de Compensar para el acta de entrega y cierre técnico entre las partes.",
+        seccion: "formatos_compensar",
+        tiposPermitidos: ".pdf,application/pdf",
+        estado: "pendiente"
+      },
+      {
+        id: `f7-doc-f7-04-${c7ExpId}`,
+        codigo: "F7-04",
+        nombre: "Certificado de Habitabilidad y Servicios",
+        descripcion: "Constancia técnica de servicios públicos domiciliarios activos y plenas condiciones higiénico-sanitarias.",
+        seccion: "formatos_cierre_existentes",
+        tiposPermitidos: ".pdf,image/*,application/pdf,image/jpeg,image/png",
+        estado: "pendiente"
+      },
+      {
+        id: `f7-doc-f7-05-${c7ExpId}`,
+        codigo: "F7-05",
+        nombre: "Registro Fotográfico de Entrega",
+        descripcion: "Evidencia fotográfica en alta resolución y/o reporte consolidado de la vivienda terminada y entrega de llaves.",
+        seccion: "formatos_cierre_existentes",
+        tiposPermitidos: ".pdf,image/*,application/pdf,image/jpeg,image/png",
+        estado: "pendiente"
+      },
+      {
+        id: `f7-doc-f7-06-${c7ExpId}`,
+        codigo: "F7-06",
         nombre: "Acta de Recibo a Satisfacción de Vivienda",
         descripcion: "Firma formal de recepción de la vivienda terminada al 100% por el beneficiario y la supervisión técnica.",
-        estado: "pendiente"
-      },
-      {
-        codigo: "F7-02",
-        nombre: "Certificación de Habitabilidad y Servicios",
-        descripcion: "Constancia técnica de servicios públicos domiciliarios activos y plenas condiciones higiénico-sanitarias.",
-        estado: "pendiente"
-      },
-      {
-        codigo: "F7-03",
-        nombre: "Registro Fotográfico de Entrega de Llaves",
-        descripcion: "Acto solemne de entrega de llaves al hogar beneficiario con evidencia fotográfica en alta resolución.",
-        estado: "pendiente"
-      },
-      {
-        codigo: "F7-04",
-        nombre: "Acta de Liquidación y Archivo Documental",
-        descripcion: "Liquidación contractual y financiera de la obra, paz y salvo final y consolidación documental definitiva.",
+        seccion: "formatos_cierre_existentes",
+        tiposPermitidos: ".pdf,image/*,application/pdf,image/jpeg,image/png",
         estado: "pendiente"
       }
     ],
     documentosCierreCompletos: false,
+    formatosDocumentales: {},
     desembolso: {
       estadoActual: "pendiente_documentos",
       entidad: "Compensar (Caja de Compensación Familiar)",
-      documentosIncluidos: ["F7-01", "F7-02", "F7-03", "F7-04"],
+      documentosIncluidos: ["F7-01", "F7-02", "F7-03", "F7-04", "F7-05", "F7-06"],
       rondasSubsanacion: []
     },
     historial: [
@@ -1331,13 +1607,15 @@ export async function generarCasosEjemploParaCadaFase(
       });
     }
 
-    // Requisitos Fase 7 (F7-01 a F7-04) si fase >= 7
+    // Requisitos Fase 7 (F7-01 a F7-06) si fase >= 7
     if (exp.faseActual >= 7) {
       const reqsF7 = [
-        { cod: "F7-01", nom: "Acta de Recibo a Satisfacción de Vivienda" },
-        { cod: "F7-02", nom: "Certificación de Habitabilidad y Servicios" },
-        { cod: "F7-03", nom: "Registro Fotográfico de Entrega de Llaves" },
-        { cod: "F7-04", nom: "Acta de Liquidación y Archivo Documental" }
+        { cod: "F7-01", nom: "Acta de Inicio de Contrato (Compensar)" },
+        { cod: "F7-02", nom: "Acta de Inicio de Obra (Compensar)" },
+        { cod: "F7-03", nom: "Acta de Entrega (Compensar)" },
+        { cod: "F7-04", nom: "Certificado de Habitabilidad y Servicios" },
+        { cod: "F7-05", nom: "Registro Fotográfico de Entrega" },
+        { cod: "F7-06", nom: "Acta de Recibo a Satisfacción de Vivienda" }
       ];
       reqsF7.forEach((rf7) => {
         nuevosRequisitos.push({
