@@ -227,13 +227,13 @@ class MockDatabase {
         {
           id: "req-m-f1-02",
           codigo: "F1-02",
-          nombre: "Escritura Pública",
-          descripcion: "Copia de la escritura pública del predio, resolución administrativa de adjudicación o título de sana posesión debidamente protocolizado con número y fecha correspondiente.",
+          nombre: "Impuesto Predial Unificado",
+          descripcion: "Último recibo o paz y salvo del impuesto predial unificado. Vigencia del año en curso.",
           fase: 1,
           esObligatorio: true,
           activo: true,
           orden: 2,
-          orientacionTecnica: "Debe estar completamente separado del Certificado de Tradición y Libertad. Verificar número de escritura, notaría y fecha."
+          orientacionTecnica: "Debe estar completamente separado del Certificado de Tradición y Libertad. Verificar vigencia del año en curso."
         },
         {
           id: "req-m-f1-03",

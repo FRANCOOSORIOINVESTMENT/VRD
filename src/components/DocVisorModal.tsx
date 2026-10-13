@@ -85,9 +85,9 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
 
   const aplicarParametroAntiCache = (url?: string) => {
     if (!url || url.startsWith("data:")) return url;
-    if (url.includes("t=")) return url;
-    const sep = url.includes("?") ? "&" : "?";
-    return `${url}${sep}t=${new Date().getTime()}`;
+    const urlLimpia = url.replace(/([?&])t=\d+(&|$)/g, "$1").replace(/[?&]$/, "");
+    const sep = urlLimpia.includes("?") ? "&" : "?";
+    return `${urlLimpia}${sep}t=${Date.now()}`;
   };
 
   const urlBase = fotoActual ? fotoActual.url : archivoDataUrl;

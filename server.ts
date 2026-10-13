@@ -293,57 +293,208 @@ export async function createApp(): Promise<express.Express> {
     };
   }
 
-  // Helper para inicializar los requisitos obligatorios de Fase 1
-  function inicializarRequisitosFase1(exp: Expediente) {
-    const yaTieneF1 = mockDb.requisitosCaso.some((r) => r.expedienteId === exp.id && r.fase === 1);
-    if (yaTieneF1) return;
+  // Sanitizador y limpiador de requisitos huérfanos o inconsistentes para el expediente
+  function limpiarRequisitosHuerfanosExpediente(exp: Expediente) {
+    if (!exp || !exp.id) return;
 
     const titularPersonaId = exp.postulante?.id || `per-${exp.id}`;
     const titularNombre = exp.postulante
       ? `${exp.postulante.nombres || exp.postulante.primerNombre || 'Postulante'} ${exp.postulante.primerApellido || ''}`.trim()
       : "Titular Principal";
+    const predioId = exp.predioVivienda?.id || `pre-${exp.id}`;
 
-    const reqTradicion: RequisitoCaso = {
-      id: `req-f1-01-${exp.id}`,
-      expedienteId: exp.id,
-      codigoRequisito: "F1-01",
-      nombre: "Certificado de Tradición y Libertad",
-      descripcion: "Antigüedad máxima de 90 días calendario respecto a la revisión.",
-      fase: 1,
-      predioId: exp.predioVivienda?.id || `pre-${exp.id}`,
-      estado: "pendiente_carga",
-      esObligatorio: true,
-      esAdicional: false
-    };
+    // Conjunto de IDs de personas registradas válidas en el grupo familiar del hogar
+    const integrantesIdsValidos = new Set<string>();
+    if (titularPersonaId) integrantesIdsValidos.add(titularPersonaId);
+    if (exp.hogar?.integrantes && Array.isArray(exp.hogar.integrantes)) {
+      exp.hogar.integrantes.forEach((integ) => {
+        if (integ.persona?.id) integrantesIdsValidos.add(integ.persona.id);
+      });
+    }
 
-    const reqEscritura: RequisitoCaso = {
-      id: `req-f1-02-${exp.id}`,
-      expedienteId: exp.id,
-      codigoRequisito: "F1-02",
-      nombre: "Escritura Pública",
-      descripcion: "Copia de escritura pública, resolución o posesión protocolizada (archivo independiente de tradición).",
-      fase: 1,
-      predioId: exp.predioVivienda?.id || `pre-${exp.id}`,
-      estado: "pendiente_carga",
-      esObligatorio: true,
-      esAdicional: false
-    };
+    // 1. Corregir y unificar requisitos de Fase 1
+    // En Fase 1 SOLO pueden existir: F1-01 (Tradición), F1-02 (Predial) y F1-03 (Cédula Titular)
+    const reqsF1 = mockDb.requisitosCaso.filter(
+      (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && (r.fase === 1 || !r.fase)
+    );
 
-    const reqCedulaPostulante: RequisitoCaso = {
-      id: `req-f1-03-${exp.id}-${titularPersonaId}`,
-      expedienteId: exp.id,
-      codigoRequisito: "F1-03",
-      nombre: `Cédula del Postulante: ${titularNombre}`,
-      descripcion: "Documento de identidad legible del postulante principal.",
-      fase: 1,
-      personaId: titularPersonaId,
-      personaNombre: titularNombre,
-      estado: "pendiente_carga",
-      esObligatorio: true,
-      esAdicional: false
-    };
+    // Ajustar F1-02 a Impuesto Predial Unificado si quedó como Escritura Pública
+    reqsF1.forEach((r) => {
+      if (r.codigoRequisito === "F1-02") {
+        r.nombre = "Impuesto Predial Unificado";
+        r.descripcion = "Vigencia del año en curso. Aceptado pagado o sin pagar.";
+        r.predioId = predioId;
+        r.fase = 1;
+      }
+      if (r.codigoRequisito === "F1-01") {
+        r.nombre = "Certificado de Tradición y Libertad";
+        r.descripcion = "Antigüedad máxima de 90 días calendario respecto a la revisión.";
+        r.predioId = predioId;
+        r.fase = 1;
+      }
+    });
 
-    mockDb.requisitosCaso.push(reqTradicion, reqEscritura, reqCedulaPostulante);
+    // Migrar cualquier F1-03 que pertenezca a un familiar hacia Fase 2 (F2-01)
+    reqsF1.forEach((r) => {
+      if (r.codigoRequisito === "F1-03" && r.personaId && r.personaId !== titularPersonaId) {
+        if (integrantesIdsValidos.has(r.personaId)) {
+          // Es un integrante registrado: migrarlo a Fase 2 para no ensuciar Fase 1
+          r.fase = 2;
+          r.codigoRequisito = "F2-01";
+          if (!r.nombre.includes("Cédula de Integrante")) {
+            r.nombre = `Cédula de Integrante: ${r.personaNombre || "Familiar"}`;
+          }
+        }
+      }
+    });
+
+    // Purgar de Fase 1 cualquier requisito ajeno:
+    // - Requisitos F1-04 (fotos u otros)
+    // - Requisitos F1-03 de personas huérfanas que ya no están registradas
+    // - Requisitos de personas que no pertenezcan al titular en Fase 1
+    mockDb.requisitosCaso = mockDb.requisitosCaso.filter((r) => {
+      const esDeEsteExp = r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible);
+      if (!esDeEsteExp) return true;
+
+      // Si es de Fase 1
+      if (r.fase === 1 || (!r.fase && r.codigoRequisito?.startsWith("F1-"))) {
+        // Eliminar F1-04 o registros fotográficos
+        if (r.codigoRequisito === "F1-04" || r.nombre?.toLowerCase().includes("fotogr")) {
+          return false;
+        }
+        // Si es F1-03 pero no pertenece al titular
+        if (r.codigoRequisito === "F1-03") {
+          if (r.personaId && r.personaId !== titularPersonaId) {
+            // Si ya no está en el hogar, purgar
+            if (!integrantesIdsValidos.has(r.personaId)) return false;
+          }
+        }
+        // Solo permitir códigos F1-01, F1-02, F1-03 en Fase 1
+        if (!["F1-01", "F1-02", "F1-03"].includes(r.codigoRequisito)) {
+          return false;
+        }
+      }
+
+      // Para requisitos generales con personaId: si la persona ya no está en el hogar y no tiene documento real, purgar
+      if (r.personaId && !integrantesIdsValidos.has(r.personaId)) {
+        if (!r.documentoAsociado?.versionActual) {
+          return false; // Requisito huérfano sin documento cargado
+        }
+      }
+
+      return true;
+    });
+
+    // 2. De-duplicación de requisitos en Fase 1:
+    // Asegurar que exista exactamente UN F1-01, UN F1-02 y UN F1-03 del titular
+    const codigosF1 = ["F1-01", "F1-02", "F1-03"];
+    codigosF1.forEach((cod) => {
+      const duplicados = mockDb.requisitosCaso.filter(
+        (r) =>
+          (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
+          r.fase === 1 &&
+          r.codigoRequisito === cod &&
+          (cod !== "F1-03" || r.personaId === titularPersonaId || !r.personaId)
+      );
+
+      if (duplicados.length > 1) {
+        // Elegir el que tenga documento cargado, o el primero
+        const conDoc = duplicados.find((d) => Boolean(d.documentoAsociado?.versionActual)) || duplicados[0];
+        // Remover los demás duplicados
+        mockDb.requisitosCaso = mockDb.requisitosCaso.filter(
+          (r) => !duplicados.includes(r) || r.id === conDoc.id
+        );
+      }
+    });
+  }
+
+  // Helper para inicializar y garantizar los requisitos obligatorios de Fase 1
+  function inicializarRequisitosFase1(exp: Expediente) {
+    if (!exp || !exp.id) return;
+
+    const titularPersonaId = exp.postulante?.id || `per-${exp.id}`;
+    const titularNombre = exp.postulante
+      ? `${exp.postulante.nombres || exp.postulante.primerNombre || 'Postulante'} ${exp.postulante.primerApellido || ''}`.trim()
+      : "Titular Principal";
+    const predioId = exp.predioVivienda?.id || `pre-${exp.id}`;
+
+    // 1. Asegurar F1-01 (Certificado de Tradición y Libertad)
+    let reqTradicion = mockDb.requisitosCaso.find(
+      (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && r.fase === 1 && r.codigoRequisito === "F1-01"
+    );
+    if (!reqTradicion) {
+      reqTradicion = {
+        id: `req-f1-01-${exp.id}`,
+        expedienteId: exp.id,
+        codigoRequisito: "F1-01",
+        nombre: "Certificado de Tradición y Libertad",
+        descripcion: "Antigüedad máxima de 90 días calendario respecto a la revisión.",
+        fase: 1,
+        predioId,
+        estado: "pendiente_carga",
+        esObligatorio: true,
+        esAdicional: false
+      };
+      mockDb.requisitosCaso.push(reqTradicion);
+    } else {
+      reqTradicion.predioId = predioId;
+    }
+
+    // 2. Asegurar F1-02 (Impuesto Predial Unificado)
+    let reqPredial = mockDb.requisitosCaso.find(
+      (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && r.fase === 1 && r.codigoRequisito === "F1-02"
+    );
+    if (!reqPredial) {
+      reqPredial = {
+        id: `req-f1-02-${exp.id}`,
+        expedienteId: exp.id,
+        codigoRequisito: "F1-02",
+        nombre: "Impuesto Predial Unificado",
+        descripcion: "Vigencia del año en curso. Aceptado pagado o sin pagar.",
+        fase: 1,
+        predioId,
+        estado: "pendiente_carga",
+        esObligatorio: true,
+        esAdicional: false
+      };
+      mockDb.requisitosCaso.push(reqPredial);
+    } else {
+      reqPredial.nombre = "Impuesto Predial Unificado";
+      reqPredial.descripcion = "Vigencia del año en curso. Aceptado pagado o sin pagar.";
+      reqPredial.predioId = predioId;
+    }
+
+    // 3. Asegurar F1-03 (Cédula Postulante Principal)
+    let reqCedulaPostulante = mockDb.requisitosCaso.find(
+      (r) =>
+        (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
+        r.fase === 1 &&
+        r.codigoRequisito === "F1-03" &&
+        (r.personaId === titularPersonaId || !r.personaId)
+    );
+    if (!reqCedulaPostulante) {
+      reqCedulaPostulante = {
+        id: `req-f1-03-${exp.id}-${titularPersonaId}`,
+        expedienteId: exp.id,
+        codigoRequisito: "F1-03",
+        nombre: `Cédula del Postulante: ${titularNombre}`,
+        descripcion: "Documento de identidad legible del postulante principal.",
+        fase: 1,
+        personaId: titularPersonaId,
+        personaNombre: titularNombre,
+        estado: "pendiente_carga",
+        esObligatorio: true,
+        esAdicional: false
+      };
+      mockDb.requisitosCaso.push(reqCedulaPostulante);
+    } else {
+      reqCedulaPostulante.personaId = titularPersonaId;
+      reqCedulaPostulante.personaNombre = titularNombre;
+      reqCedulaPostulante.nombre = `Cédula del Postulante: ${titularNombre}`;
+    }
+
+    // 4. Limpiar cualquier anomalía o requisito huérfano
+    limpiarRequisitosHuerfanosExpediente(exp);
   }
 
   // Mapeador robusto de filas de Supabase a modelo canónico de Expediente
@@ -1530,7 +1681,13 @@ export async function createApp(): Promise<express.Express> {
         }
       }
 
-      // 4. Preparar listado enriquecido de expedientes
+      // 4. Sanitizar y limpiar requisitos huérfanos en todos los expedientes
+      mockDb.expedientes.forEach((exp) => {
+        inicializarRequisitosFase1(exp);
+        limpiarRequisitosHuerfanosExpediente(exp);
+      });
+
+      // 5. Preparar listado enriquecido de expedientes
       const listadoExpedientes = mockDb.expedientes.map((exp) => {
         if (exp.faseActual >= 4 && !exp.gestionFase4) {
           inicializarFase4(exp);
@@ -3061,15 +3218,13 @@ export async function createApp(): Promise<express.Express> {
       inicializarFase7(exp);
     }
 
-    // El registro fotográfico del predio hace parte exclusivamente de la Fase 2 (F2-11), no de la Fase 1.
-    // Purgar cualquier requisito residual de F1-04 o registro fotográfico en Fase 1:
-    mockDb.requisitosCaso = mockDb.requisitosCaso.filter(
-      (r) => !(r.expedienteId === exp.id && (r.fase === 1 || !r.fase) && (r.codigoRequisito === "F1-04" || r.nombre.toLowerCase().includes("fotogr")))
-    );
+    // Garantizar requisitos canónicos limpios de Fase 1 y purga de huérfanos
+    inicializarRequisitosFase1(exp);
+    limpiarRequisitosHuerfanosExpediente(exp);
 
     // Requisitos asociados al expediente con sus documentos y versiones
     const requisitos = mockDb.requisitosCaso
-      .filter((r) => r.expedienteId === exp.id)
+      .filter((r) => r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible))
       .map((r) => {
         let doc = mockDb.documentos.find((d) => d.id === r.documentoAsociado?.id) || r.documentoAsociado;
         if (doc && doc.versiones && doc.versiones.length > 0) {
@@ -3260,24 +3415,43 @@ export async function createApp(): Promise<express.Express> {
         if (exp.faseActual >= 7) inicializarFase7(exp);
 
         const reqIdParam = String(req.params.reqId || "").trim();
-        const { codigoRequisito, fase, requisitoNombre } = req.body || {};
+        const { codigoRequisito, fase, requisitoNombre, personaId } = req.body || {};
         const codigoBuscado = String(codigoRequisito || "").toUpperCase().trim();
 
         // Extracción del código estándar (ej: F1-01, F1-02, F1-03, F2-11, F5-01)
-        const matchCodigo = reqIdParam.match(/F\d+-\d+/i) || (codigoBuscado ? [codigoBuscado] : null);
+        const matchCodigo = (codigoBuscado || reqIdParam).match(/F\d+-\d+/i);
         const codigoNormalizado = matchCodigo ? matchCodigo[0].toUpperCase() : null;
 
-        // Búsqueda resiliente del requisito
-        let reqCaso = mockDb.requisitosCaso.find(
-          (r) =>
-            r.id === reqIdParam ||
-            (codigoNormalizado && r.codigoRequisito?.toUpperCase() === codigoNormalizado) ||
-            (codigoBuscado && r.codigoRequisito?.toUpperCase() === codigoBuscado) ||
-            ((r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && (
-              r.codigoRequisito === reqIdParam ||
-              (r.codigoRequisito && reqIdParam.toLowerCase().includes(r.codigoRequisito.toLowerCase()))
-            ))
-        );
+        // Búsqueda estrictamente scoped dentro del expediente actual
+        const perteneceAExp = (r: RequisitoCaso) =>
+          r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible);
+
+        // 1. Coincidencia exacta por ID de requisito dentro de este expediente
+        let reqCaso = mockDb.requisitosCaso.find((r) => perteneceAExp(r) && r.id === reqIdParam);
+
+        // 2. Si no coincide por ID exacto pero tenemos personaId y código (ej. cédulas de integrantes o titular)
+        if (!reqCaso && personaId && (codigoBuscado || codigoNormalizado)) {
+          const cod = codigoBuscado || codigoNormalizado!;
+          reqCaso = mockDb.requisitosCaso.find(
+            (r) => perteneceAExp(r) && r.codigoRequisito?.toUpperCase() === cod && r.personaId === personaId
+          );
+        }
+
+        // 3. Si no hay personaId específico pero busca requisito de predio o código único de fase
+        if (!reqCaso && (codigoBuscado || codigoNormalizado)) {
+          const cod = codigoBuscado || codigoNormalizado!;
+          reqCaso = mockDb.requisitosCaso.find(
+            (r) =>
+              perteneceAExp(r) &&
+              r.codigoRequisito?.toUpperCase() === cod &&
+              (!personaId || r.personaId === personaId)
+          );
+        }
+
+        // 4. Búsqueda por ID directo en toda la colección si pertenece a este expediente
+        if (!reqCaso) {
+          reqCaso = mockDb.requisitosCaso.find((r) => r.id === reqIdParam && perteneceAExp(r));
+        }
 
         // Si aún no se encontró en memoria, inicializarlo o crearlo dinámicamente de forma segura
         if (!reqCaso) {
@@ -3292,7 +3466,7 @@ export async function createApp(): Promise<express.Express> {
             descripcion: `Documento soporte para ${codigoFinal}`,
             fase: faseFinal,
             predioId: exp.predioVivienda?.id || `pre-${exp.id}`,
-            personaId: exp.postulante?.id || `per-${exp.id}`,
+            personaId: personaId || (codigoFinal === "F1-03" ? exp.postulante?.id : undefined) || `per-${exp.id}`,
             estado: "pendiente_carga",
             esObligatorio: true,
             esAdicional: false
@@ -3350,20 +3524,22 @@ export async function createApp(): Promise<express.Express> {
           return;
         }
 
-        // 1. Obtener o crear entidad Documento
+        // 1. Obtener o crear entidad Documento con título sincronizado
         let doc = mockDb.documentos.find((d) => d.id === reqCaso.documentoAsociado?.id);
+        const nombreSujeto = reqCaso.personaNombre || exp.postulante?.nombres || exp.postulante?.primerApellido || exp.codigoVisible || "Titular";
         if (!doc) {
-          const titularNombre = exp.postulante?.primerApellido || exp.postulante?.nombres || exp.codigoVisible || "Titular";
           doc = {
             id: `doc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
             expedienteId: exp.id,
-            titulo: `${reqCaso.nombre} - ${titularNombre}`,
+            titulo: `${reqCaso.nombre} - ${nombreSujeto}`,
             personaId: reqCaso.personaId || exp.postulante?.id || `per-${exp.id}`,
             predioId: reqCaso.predioId || exp.predioVivienda?.id || `pre-${exp.id}`,
             versiones: []
           };
           mockDb.documentos.push(doc);
           reqCaso.documentoAsociado = doc;
+        } else {
+          doc.titulo = `${reqCaso.nombre} - ${nombreSujeto}`;
         }
         if (!Array.isArray(doc.versiones)) {
           doc.versiones = [];
@@ -3603,7 +3779,9 @@ export async function createApp(): Promise<express.Express> {
         res.status(201).json({
           success: true,
           documento: doc,
-          version: nuevaVersion
+          version: nuevaVersion,
+          requisito: reqCaso,
+          expedienteId: exp.id
         });
       } catch (err: any) {
         console.error("[UPLOAD EXCEPTION]: Error no controlado al subir documento:", err);
@@ -3675,14 +3853,16 @@ export async function createApp(): Promise<express.Express> {
       });
 
       // Crear requisito de cédula para este integrante
-      const numFase = exp.faseActual;
+      // CRÍTICO: Los integrantes secundarios del hogar corresponden a la Fase 2 (F2-01: Documentos del Grupo Familiar).
+      // NUNCA deben añadirse como F1-03 ni en Fase 1, pues Fase 1 es exclusiva del postulante titular y del predio.
+      const faseReq = exp.faseActual > 2 ? exp.faseActual : 2;
       const nuevoReq: RequisitoCaso = {
-        id: `req-f${numFase}-03-${nuevaPersonaId}`,
+        id: `req-f2-01-${nuevaPersonaId}`,
         expedienteId: exp.id,
-        codigoRequisito: `F${numFase}-03`,
+        codigoRequisito: "F2-01",
         nombre: `Cédula de Integrante: ${nombreCompleto}`,
         descripcion: `Documento de identidad de integrante del hogar (${parentesco}).`,
-        fase: numFase,
+        fase: faseReq,
         personaId: nuevaPersonaId,
         personaNombre: `${nombreCompleto} (${parentesco})`,
         estado: "pendiente_carga",
@@ -3691,6 +3871,7 @@ export async function createApp(): Promise<express.Express> {
       };
 
       mockDb.requisitosCaso.push(nuevoReq);
+      limpiarRequisitosHuerfanosExpediente(exp);
 
       // Bitácora
       mockDb.notas.push({
@@ -3747,12 +3928,11 @@ export async function createApp(): Promise<express.Express> {
                 }
               ]);
 
-              // 4. Crear requisito documental de cédula para este integrante
-              const codPlantilla = numFase === 1 ? "F1-03" : "F2-04";
+              // 4. Crear requisito documental de cédula para este integrante (Fase 2)
               const { data: plantilla } = await supabaseAdmin
                 .from("plantillas_requisito")
                 .select("id")
-                .eq("codigo_requisito", codPlantilla)
+                .or("codigo_requisito.eq.F2-01,codigo_requisito.eq.F2-04")
                 .maybeSingle();
 
               if (plantilla?.id) {
@@ -3760,7 +3940,7 @@ export async function createApp(): Promise<express.Express> {
                   {
                     expediente_id: expDb.id,
                     plantilla_id: plantilla.id,
-                    fase: numFase,
+                    fase: faseReq,
                     persona_id: personaDb.id,
                     estado: "pendiente_carga"
                   }

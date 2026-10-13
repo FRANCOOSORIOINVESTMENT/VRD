@@ -1,0 +1,6 @@
+{
+  "summary": "Plan de solución integral para corregir la gestión de archivos, requisitos de Fase 1 (predio y postulante), sincronización con Supabase y refresco reactivo del visor. Incluye análisis de causas raíz, eliminación de requisitos huérfanos, unificación canónica de F1-01 a F1-03 y robustecimiento del flujo de sincronización.",
+  "updatedAt": "2026-10-13T17:28:40.590461451Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

@@ -576,9 +576,9 @@ export default function App() {
   const obtenerUrlConAntiCache = (url?: string): string => {
     if (!url) return "";
     if (url.startsWith("data:")) return url;
-    if (url.includes("t=")) return url;
-    const sep = url.includes("?") ? "&" : "?";
-    return `${url}${sep}t=${new Date().getTime()}`;
+    const urlLimpia = url.replace(/([?&])t=\d+(&|$)/g, "$1").replace(/[?&]$/, "");
+    const sep = urlLimpia.includes("?") ? "&" : "?";
+    return `${urlLimpia}${sep}t=${Date.now()}`;
   };
 
   // Ajustar pestaña de requisitos según la fase actual activa del expediente (Cambio 2)
@@ -898,7 +898,10 @@ export default function App() {
     setEstadoSincronizacion("cargando");
     setMensajeSincronizacion("Sincronizando...");
     try {
-      await recargarDatosSistema(true);
+      await recargarDatosSistema(true, expedienteSeleccionadoId);
+      if (expedienteSeleccionadoId) {
+        await cargarDetalleExpediente(expedienteSeleccionadoId);
+      }
       setEstadoSincronizacion("exito");
       setMensajeSincronizacion("¡Actualizado!");
       setTimeout(() => {
@@ -1646,15 +1649,42 @@ export default function App() {
             sha256Hash,
             codigoRequisito: requisito.codigoRequisito,
             fase: requisito.fase,
-            requisitoNombre: requisito.nombre
+            requisitoNombre: requisito.nombre,
+            personaId: requisito.personaId
           })
         }
       );
 
       if (res.ok) {
+        const respJson = await res.json().catch(() => null);
         setModalSubirArchivoReq(null);
         setArchivoSeleccionadoSubir(null);
-        mostrarToast(`Documento "${archivoParaCargar.name}" cargado exitosamente.`);
+        mostrarToast(`Documento "${archivoParaCargar.name}" cargado exitosamente.`, "exito");
+
+        // Actualización reactiva instantánea del estado en memoria
+        if (respJson?.documento) {
+          setDetalleExp((prev) => {
+            if (!prev) return prev;
+            const reqsActualizados = prev.requisitos.map((r) => {
+              if (
+                r.id === requisito.id ||
+                (r.codigoRequisito === requisito.codigoRequisito && (!requisito.personaId || r.personaId === requisito.personaId))
+              ) {
+                return {
+                  ...r,
+                  estado: (prev.expediente.faseActual >= 3 || r.documentoAsociado?.versionActual) ? ("actualizado" as const) : ("recibido_revision" as const),
+                  documentoAsociado: respJson.documento
+                };
+              }
+              return r;
+            });
+            return {
+              ...prev,
+              requisitos: reqsActualizados
+            };
+          });
+        }
+
         // Forzar re-fetch inmediato y reactivo de la lista de documentos y estado del expediente
         await cargarDetalleExpediente(expedienteSeleccionadoId);
         await cargarExpedientes();
@@ -4213,15 +4243,28 @@ export default function App() {
                 { num: 7, label: "Fase 7: En Construcción y Cobro Subsidio", desc: "Ejecución de obra constructiva, actas de recibo y cobro del subsidio" }
               ];
 
+              const titularId = detalleExp.expediente.postulante?.id;
               const reqsFaseActual = detalleExp.requisitos.filter((r) => {
-                if (tabRequisitos === 1) return r.fase === 1 || !r.fase;
+                if (tabRequisitos === 1) {
+                  const esFase1 = r.fase === 1 || (!r.fase && r.codigoRequisito?.startsWith("F1-"));
+                  if (!esFase1) return false;
+                  if (r.codigoRequisito === "F1-04" || r.nombre?.toLowerCase().includes("fotogr")) return false;
+                  if (r.codigoRequisito === "F1-03" && r.personaId && titularId && r.personaId !== titularId) return false;
+                  return ["F1-01", "F1-02", "F1-03"].includes(r.codigoRequisito);
+                }
                 return r.fase === tabRequisitos;
               });
               const reqsFaseActualObligatorios = reqsFaseActual.filter((r) => r.esObligatorio);
               const faltanSubirFaseActual = reqsFaseActualObligatorios.filter((r) => r.estado === "pendiente_carga" && !r.documentoAsociado);
               const todosFaseActualAceptados = reqsFaseActualObligatorios.length > 0 && reqsFaseActualObligatorios.every((r) => r.estado === "aceptado");
 
-              const reqsFase1 = detalleExp.requisitos.filter((r) => r.fase === 1 || !r.fase);
+              const reqsFase1 = detalleExp.requisitos.filter((r) => {
+                const esFase1 = r.fase === 1 || (!r.fase && r.codigoRequisito?.startsWith("F1-"));
+                if (!esFase1) return false;
+                if (r.codigoRequisito === "F1-04" || r.nombre?.toLowerCase().includes("fotogr")) return false;
+                if (r.codigoRequisito === "F1-03" && r.personaId && titularId && r.personaId !== titularId) return false;
+                return ["F1-01", "F1-02", "F1-03"].includes(r.codigoRequisito);
+              });
               const reqsFase1Obligatorios = reqsFase1.filter((r) => r.esObligatorio);
               const faltanSubirFase1 = reqsFase1Obligatorios.filter((r) => r.estado === "pendiente_carga" && !r.documentoAsociado);
               const todosFase1Aceptados = reqsFase1Obligatorios.length > 0 && reqsFase1Obligatorios.every((r) => r.estado === "aceptado");
