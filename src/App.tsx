@@ -41,6 +41,7 @@ import {
   Image,
   FileSpreadsheet,
   Phone,
+  PhoneCall,
   KeyRound,
   Printer,
   RefreshCw,
@@ -262,6 +263,7 @@ export default function App() {
   const [filtroTextoCaptacion, setFiltroTextoCaptacion] = useState("");
   const [filtroMunicipioCaptacion, setFiltroMunicipioCaptacion] = useState("");
   const [filtroOrigenCaptacion, setFiltroOrigenCaptacion] = useState("");
+  const [origenesCaptacion, setOrigenesCaptacion] = useState<string[]>(OPCIONES_ORIGEN_CAPTACION);
   const [filtroRangoDiasCaptacion, setFiltroRangoDiasCaptacion] = useState("");
   const [modalGestionarVencimiento, setModalGestionarVencimiento] = useState<Interesado | null>(null);
   const [diasExtensionSeleccionados, setDiasExtensionSeleccionados] = useState<number>(7);
@@ -279,15 +281,20 @@ export default function App() {
   });
   const [tabRequisitos, setTabRequisitos] = useState<number>(1);
 
-  // Formularios de entrada con estructura de 4 nombres (Cambio 4 y 6)
+  // Formularios de entrada con estructura de 4 nombres y cédula desde captación
   const [formInteresado, setFormInteresado] = useState({
     primerNombre: "",
     segundoNombre: "",
     primerApellido: "",
     segundoApellido: "",
     nombreContacto: "",
+    tipoIdentificacion: "CC" as TipoIdentificacion,
+    numeroIdentificacion: "",
     telefono: "",
     tieneWhatsapp: true,
+    habilitarSegundoTelefono: false,
+    telefonoSecundario: "",
+    tieneWhatsappSecundario: false,
     correo: "",
     departamentoCodigo: "25",
     municipioCodigo: "25151",
@@ -468,6 +475,7 @@ export default function App() {
     if (currentUser) {
       cargarExpedientes();
       cargarUsuarios();
+      cargarOrigenesCaptacion();
       const rolesConAccesoCaptacion = ["comercial", "administrador", "planeacion", "supervisor", "asistente"];
       if (rolesConAccesoCaptacion.includes(currentUser.rol)) {
         cargarInteresados();
@@ -802,25 +810,19 @@ export default function App() {
       });
   };
 
-  const [cargandoCasosEjemplo, setCargandoCasosEjemplo] = useState<boolean>(false);
-
-  const handleGenerarCasosEjemplo = async () => {
-    setCargandoCasosEjemplo(true);
-    try {
-      const res = await authFetch("/api/admin/crear-casos-ejemplo", { method: "POST" });
-      const data = await res.json();
-      if (res.ok) {
-        mostrarToast(data.mensaje || "Se han generado los 7 casos de ejemplo (uno por fase) con éxito.", "exito");
-        await cargarExpedientes();
-      } else {
-        mostrarToast(data.error || "Error al generar casos de ejemplo", "error");
-      }
-    } catch (err: any) {
-      mostrarToast("Error de conexión al generar casos de ejemplo", "error");
-    } finally {
-      setCargandoCasosEjemplo(false);
-    }
+  const cargarOrigenesCaptacion = (): Promise<void> => {
+    return authFetch(`/api/configuracion/origenes-captacion?t=${Date.now()}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.success && Array.isArray(data.origenes) && data.origenes.length > 0) {
+          setOrigenesCaptacion(data.origenes);
+        }
+      })
+      .catch((err) => {
+        console.warn("[CARGA ORIGENES ERROR]:", err);
+      });
   };
+
 
   const cargarDetalleExpediente = (id: string): Promise<any> => {
     return authFetch(`/api/expedientes/${id}?t=${Date.now()}`)
@@ -879,6 +881,7 @@ export default function App() {
         ? cargarInteresados()
         : Promise.resolve(),
       cargarUsuarios(),
+      cargarOrigenesCaptacion(),
       idAconsultar ? cargarDetalleExpediente(idAconsultar) : Promise.resolve()
     ]);
 
@@ -1225,14 +1228,20 @@ export default function App() {
       nombreLimpio = construirNombreCompleto(primerNom, segNom, primerAp, segAp);
     }
 
+    const numIdLimpio = formInteresado.numeroIdentificacion.trim();
     const telLimpio = formInteresado.telefono.trim();
+    const telSecLimpio = formInteresado.habilitarSegundoTelefono ? formInteresado.telefonoSecundario.trim() : "";
 
     if (!nombreLimpio && !primerNom) {
       setErrorInteresado("Debe ingresar el primer nombre y primer apellido de contacto.");
       return;
     }
+    if (!numIdLimpio) {
+      setErrorInteresado("Debe ingresar el número de cédula / identificación del interesado.");
+      return;
+    }
     if (!telLimpio) {
-      setErrorInteresado("Debe ingresar un número de teléfono.");
+      setErrorInteresado("Debe ingresar un número de teléfono principal.");
       return;
     }
 
@@ -1246,7 +1255,12 @@ export default function App() {
         primerApellido: primerAp,
         segundoApellido: segAp,
         nombreContacto: nombreLimpio,
+        tipoIdentificacion: formInteresado.tipoIdentificacion,
+        numeroIdentificacion: numIdLimpio,
+        cedula: numIdLimpio,
         telefono: telLimpio,
+        telefonoSecundario: telSecLimpio || undefined,
+        tieneWhatsappSecundario: formInteresado.habilitarSegundoTelefono ? formInteresado.tieneWhatsappSecundario : false,
         departamentoCodigo: mun?.departamentoCodigo || (formInteresado.municipioCodigo ? formInteresado.municipioCodigo.substring(0, 2) : "25")
       };
 
@@ -1265,13 +1279,18 @@ export default function App() {
           primerApellido: "",
           segundoApellido: "",
           nombreContacto: "",
+          tipoIdentificacion: "CC",
+          numeroIdentificacion: "",
           telefono: "",
           tieneWhatsapp: true,
+          habilitarSegundoTelefono: false,
+          telefonoSecundario: "",
+          tieneWhatsappSecundario: false,
           correo: "",
           departamentoCodigo: "25",
           municipioCodigo: "25151",
           vereda: "",
-          origenContacto: "Llamada",
+          origenContacto: origenesCaptacion[0] || "Llamada",
           resumenNecesidad: ""
         });
         cargarInteresados();
@@ -1367,8 +1386,8 @@ export default function App() {
     const nombres = [primerNombre, segundoNombre].filter(Boolean).join(" ");
 
     setFormConvertir({
-      tipoIdentificacion: "CC",
-      numeroIdentificacion: "",
+      tipoIdentificacion: (item.tipoIdentificacion as TipoIdentificacion) || "CC",
+      numeroIdentificacion: item.numeroIdentificacion || item.cedula || "",
       primerNombre,
       segundoNombre,
       primerApellido,
@@ -2793,17 +2812,6 @@ export default function App() {
               <div className="flex items-center space-x-2">
                 <button
                   type="button"
-                  onClick={handleGenerarCasosEjemplo}
-                  disabled={cargandoCasosEjemplo}
-                  className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-[#285943] hover:bg-[#1E4332] active:bg-[#163326] text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer disabled:opacity-50"
-                  title="Generar o actualizar un caso de ejemplo para cada una de las 7 fases operativas"
-                >
-                  <Sparkles className={`w-4 h-4 ${cargandoCasosEjemplo ? "animate-spin" : ""}`} />
-                  <span>{cargandoCasosEjemplo ? "Generando..." : "Casos de Ejemplo (Fases 1 a 7)"}</span>
-                </button>
-
-                <button
-                  type="button"
                   onClick={() => window.print()}
                   className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 shadow-xs transition-colors cursor-pointer"
                   title="Imprimir listado actual o guardar como PDF"
@@ -3349,7 +3357,7 @@ export default function App() {
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg outline-none focus:border-blue-500 text-slate-700 bg-white font-medium"
                   >
                     <option value="">Todos los orígenes</option>
-                    {OPCIONES_ORIGEN_CAPTACION.map((origen) => (
+                    {origenesCaptacion.map((origen) => (
                       <option key={origen} value={origen}>
                         {origen}
                       </option>
@@ -3413,7 +3421,10 @@ export default function App() {
                   const match =
                     item.id.toLowerCase().includes(q) ||
                     item.nombreContacto.toLowerCase().includes(q) ||
+                    (item.numeroIdentificacion && item.numeroIdentificacion.toLowerCase().includes(q)) ||
+                    (item.cedula && item.cedula.toLowerCase().includes(q)) ||
                     (item.telefono && item.telefono.includes(q)) ||
+                    (item.telefonoSecundario && item.telefonoSecundario.includes(q)) ||
                     (item.correo && item.correo.toLowerCase().includes(q)) ||
                     (item.vereda && item.vereda.toLowerCase().includes(q)) ||
                     (item.resumenNecesidad && item.resumenNecesidad.toLowerCase().includes(q));
@@ -3520,6 +3531,13 @@ export default function App() {
                                 <div className="font-semibold text-slate-900">
                                   {item.nombreContacto}
                                 </div>
+                                {(item.numeroIdentificacion || item.cedula) && (
+                                  <div className="text-[11px] font-mono text-blue-700 flex items-center space-x-1 mt-0.5">
+                                    <span className="bg-blue-50 text-blue-800 border border-blue-200 px-1.5 py-0.2 rounded font-semibold text-[10px]">
+                                      {item.tipoIdentificacion || "CC"}: {item.numeroIdentificacion || item.cedula}
+                                    </span>
+                                  </div>
+                                )}
                                 <div className="text-[11px] text-slate-500 max-w-xs truncate" title={item.resumenNecesidad}>
                                   {item.resumenNecesidad || "Sin resumen registrado."}
                                 </div>
@@ -3531,21 +3549,40 @@ export default function App() {
                                 </div>
                               </td>
                               <td className="px-4 py-3">
-                                <div className="flex items-center space-x-1.5 font-mono text-slate-800">
-                                  <Phone className="w-3 h-3 text-slate-400" />
-                                  <span>{item.telefono}</span>
+                                <div className="space-y-1">
+                                  <div className="flex items-center space-x-1.5 font-mono text-slate-800">
+                                    <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                                    <span>{item.telefono}</span>
+                                    {item.tieneWhatsapp && (
+                                      <a
+                                        href={`https://wa.me/57${item.telefono}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center space-x-0.5 text-[9px] text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 font-bold hover:bg-emerald-100"
+                                        title="WhatsApp Teléfono Principal"
+                                      >
+                                        <span>WA</span>
+                                      </a>
+                                    )}
+                                  </div>
+                                  {item.telefonoSecundario && (
+                                    <div className="flex items-center space-x-1.5 font-mono text-slate-600 text-[11px]">
+                                      <PhoneCall className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                                      <span title="Teléfono de Contacto 2">{item.telefonoSecundario}</span>
+                                      {item.tieneWhatsappSecundario && (
+                                        <a
+                                          href={`https://wa.me/57${item.telefonoSecundario}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center space-x-0.5 text-[9px] text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 font-bold hover:bg-emerald-100"
+                                          title="WhatsApp Teléfono Secundario"
+                                        >
+                                          <span>WA</span>
+                                        </a>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
-                                {item.tieneWhatsapp && (
-                                  <a
-                                    href={`https://wa.me/57${item.telefono}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center space-x-1 text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-0.5 font-medium hover:bg-emerald-100"
-                                    title="Abrir conversación de WhatsApp"
-                                  >
-                                    <span>WhatsApp Directo</span>
-                                  </a>
-                                )}
                               </td>
                               {/* CAMBIO 8: Visualización fidedigna del origen de captación */}
                               <td className="px-4 py-3">
@@ -5624,6 +5661,42 @@ export default function App() {
             )}
 
             <form onSubmit={handleCrearInteresado} className="space-y-3.5 text-xs">
+              {/* Espacio para guardar la Cédula / Documento desde un primer lugar */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Tipo de Doc. <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={formInteresado.tipoIdentificacion}
+                    onChange={(e) => setFormInteresado({ ...formInteresado, tipoIdentificacion: e.target.value as TipoIdentificacion })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white font-medium"
+                  >
+                    <option value="CC">Cédula Ciudadanía (CC)</option>
+                    <option value="CE">Cédula Extranjería (CE)</option>
+                    <option value="TI">Tarjeta Identidad (TI)</option>
+                    <option value="PAS">Pasaporte (PAS)</option>
+                    <option value="RC">Registro Civil (RC)</option>
+                  </select>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Cédula / Documento de Identidad <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={formInteresado.numeroIdentificacion}
+                    onChange={(e) => setFormInteresado({ ...formInteresado, numeroIdentificacion: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono font-medium"
+                    placeholder="ej: 75097530 o 1023456789"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    Se almacena desde la captación y se utilizará en todos los trámites futuros del expediente.
+                  </p>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
@@ -5696,29 +5769,96 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Teléfono <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={formInteresado.telefono}
-                    onChange={(e) => setFormInteresado({ ...formInteresado, telefono: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                    placeholder="ej: 3104567890"
-                  />
-                  <label className="mt-1.5 flex items-center space-x-1.5 cursor-pointer text-slate-600 select-none">
-                    <input
-                      type="checkbox"
-                      checked={formInteresado.tieneWhatsapp}
-                      onChange={(e) => setFormInteresado({ ...formInteresado, tieneWhatsapp: e.target.checked })}
-                      className="rounded text-blue-600 focus:ring-blue-500"
-                    />
-                    <span className="text-[11px]">Tiene WhatsApp</span>
-                  </label>
+              {/* Opción para poner 2 teléfonos de contacto en caso de ser necesario */}
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-800 flex items-center space-x-1.5">
+                    <Phone className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Teléfonos de Contacto</span>
+                  </span>
+                  {!formInteresado.habilitarSegundoTelefono && (
+                    <button
+                      type="button"
+                      onClick={() => setFormInteresado({ ...formInteresado, habilitarSegundoTelefono: true })}
+                      className="text-[11px] text-blue-600 hover:text-blue-800 font-semibold inline-flex items-center space-x-1 cursor-pointer"
+                    >
+                      <PlusCircle className="w-3 h-3" />
+                      <span>+ Añadir 2do teléfono</span>
+                    </button>
+                  )}
                 </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Teléfono Principal (Contacto 1) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="tel"
+                      required
+                      value={formInteresado.telefono}
+                      onChange={(e) => setFormInteresado({ ...formInteresado, telefono: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono bg-white"
+                      placeholder="ej: 3104567890"
+                    />
+                    <label className="mt-1.5 flex items-center space-x-1.5 cursor-pointer text-slate-600 select-none">
+                      <input
+                        type="checkbox"
+                        checked={formInteresado.tieneWhatsapp}
+                        onChange={(e) => setFormInteresado({ ...formInteresado, tieneWhatsapp: e.target.checked })}
+                        className="rounded text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-[11px]">Tiene WhatsApp</span>
+                    </label>
+                  </div>
+
+                  {formInteresado.habilitarSegundoTelefono ? (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block font-semibold text-slate-700">
+                          Teléfono Contacto 2 (Opcional)
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setFormInteresado({ ...formInteresado, habilitarSegundoTelefono: false, telefonoSecundario: "", tieneWhatsappSecundario: false })}
+                          className="text-[10px] text-red-500 hover:text-red-700 font-medium cursor-pointer"
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                      <input
+                        type="tel"
+                        value={formInteresado.telefonoSecundario}
+                        onChange={(e) => setFormInteresado({ ...formInteresado, telefonoSecundario: e.target.value })}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono bg-white"
+                        placeholder="ej: 3209876543 / 6012345678"
+                      />
+                      <label className="mt-1.5 flex items-center space-x-1.5 cursor-pointer text-slate-600 select-none">
+                        <input
+                          type="checkbox"
+                          checked={formInteresado.tieneWhatsappSecundario}
+                          onChange={(e) => setFormInteresado({ ...formInteresado, tieneWhatsappSecundario: e.target.checked })}
+                          className="rounded text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-[11px]">Tiene WhatsApp</span>
+                      </label>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center border border-dashed border-slate-300 rounded-lg p-2.5 text-center text-slate-400 bg-white">
+                      <button
+                        type="button"
+                        onClick={() => setFormInteresado({ ...formInteresado, habilitarSegundoTelefono: true })}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center space-x-1.5 cursor-pointer"
+                      >
+                        <PlusCircle className="w-3.5 h-3.5" />
+                        <span>Opción de 2do teléfono de contacto</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Municipio Tentativo</label>
                   <select
@@ -5731,7 +5871,7 @@ export default function App() {
                         departamentoCodigo: mun?.departamentoCodigo || e.target.value.substring(0, 2)
                       });
                     }}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white"
                   >
                     {CATALOGO_MUNICIPIOS.map((m) => (
                       <option key={m.codigoCompleto} value={m.codigoCompleto}>
@@ -5740,9 +5880,6 @@ export default function App() {
                     ))}
                   </select>
                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Vereda (Opcional)</label>
                   <input
@@ -5752,6 +5889,26 @@ export default function App() {
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                     placeholder="ej: Rincón Grande"
                   />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Origen de la Captación <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    required
+                    value={formInteresado.origenContacto}
+                    onChange={(e) => setFormInteresado({ ...formInteresado, origenContacto: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 bg-white"
+                  >
+                    {origenesCaptacion.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Correo Electrónico (Opcional)</label>
@@ -5763,25 +5920,6 @@ export default function App() {
                     placeholder="ej: marta@correo.com"
                   />
                 </div>
-              </div>
-
-              {/* CAMBIO 8: Campo de Origen de Captación con 15 opciones */}
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Origen de la Captación <span className="text-red-500">*</span>
-                </label>
-                <select
-                  required
-                  value={formInteresado.origenContacto}
-                  onChange={(e) => setFormInteresado({ ...formInteresado, origenContacto: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 bg-white"
-                >
-                  {OPCIONES_ORIGEN_CAPTACION.map((opt) => (
-                    <option key={opt} value={opt}>
-                      {opt}
-                    </option>
-                  ))}
-                </select>
               </div>
 
               {/* CAMBIO 8: Detalles del Contacto / Resumen de la Necesidad */}

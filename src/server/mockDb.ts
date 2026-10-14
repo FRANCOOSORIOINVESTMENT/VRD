@@ -19,7 +19,9 @@ import {
   RegistroAuditoriaAdmin,
   FaseConfiguracion,
   RequisitoMaestroConfig,
-  PlantillasFasesConfig
+  PlantillasFasesConfig,
+  OrigenCaptacionConfig,
+  OPCIONES_ORIGEN_CAPTACION
 } from "../types";
 import { CATALOGO_MUNICIPIOS, DEPARTAMENTOS_CONFIG } from "../data/municipios";
 import { normalizarTextoNombre, construirNombreCompleto } from "../utils/normalizacion";
@@ -146,6 +148,14 @@ class MockDatabase {
     this.configuracionSistema = {
       departamentos: DEPARTAMENTOS_CONFIG.map((d) => ({ ...d })),
       municipios: CATALOGO_MUNICIPIOS.map((m) => ({ ...m, activo: true })),
+      origenesCaptacion: OPCIONES_ORIGEN_CAPTACION.map((nombre, idx) => ({
+        id: `orig-${String(idx + 1).padStart(2, "0")}`,
+        nombre,
+        descripcion: "Canal institucional predeterminado de captación",
+        activo: true,
+        esPersonalizado: false,
+        creadoEn: "2026-09-01T00:00:00Z"
+      })),
       fases: [
         {
           num: 1,

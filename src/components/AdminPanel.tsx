@@ -8,7 +8,8 @@ import {
   RequisitoMaestroConfig,
   FaseConfiguracion,
   MunicipioConfig,
-  Expediente
+  Expediente,
+  OrigenCaptacionConfig
 } from "../types";
 import { formatearRol, formatearNombreUsuario } from "../utils/formatoRoles";
 import {
@@ -80,7 +81,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [expedientes, setExpedientes] = useState<Expediente[]>([]);
 
   // Subpestaña de configuración
-  const [subTabConfig, setSubTabConfig] = useState<"fases" | "requisitos" | "municipios" | "plantillas" | "supabase">("fases");
+  const [subTabConfig, setSubTabConfig] = useState<"fases" | "requisitos" | "municipios" | "origenes" | "plantillas" | "supabase">("fases");
   const [supabaseDiag, setSupabaseDiag] = useState<{
     ok: boolean;
     message: string;
@@ -180,31 +181,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  const [cargandoCasosEjemplo, setCargandoCasosEjemplo] = useState<boolean>(false);
-
-  const ejecutarCrearCasosEjemplo = async () => {
-    setCargandoCasosEjemplo(true);
-    try {
-      const res = await fetch("/api/admin/crear-casos-ejemplo", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${currentUser.id}`
-        }
-      });
-      const data = await res.json();
-      if (res.ok) {
-        mostrarToast(data.mensaje || "Se han generado los 7 casos de ejemplo (uno por fase) con éxito.", "exito");
-        cargarDatos();
-      } else {
-        mostrarToast(data.error || "Error al generar casos de ejemplo", "error");
-      }
-    } catch (err: any) {
-      mostrarToast("Error de conexión al generar casos de ejemplo", "error");
-    } finally {
-      setCargandoCasosEjemplo(false);
-    }
-  };
 
   // Modales
   const [modalNuevoUsuario, setModalNuevoUsuario] = useState<boolean>(false);
@@ -214,6 +190,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [modalNuevoRequisito, setModalNuevoRequisito] = useState<boolean>(false);
   const [modalEditarFase, setModalEditarFase] = useState<FaseConfiguracion | null>(null);
   const [modalNuevoMunicipio, setModalNuevoMunicipio] = useState<boolean>(false);
+  const [modalNuevoOrigen, setModalNuevoOrigen] = useState<boolean>(false);
 
   // Form states
   const [formUsuario, setFormUsuario] = useState({
@@ -247,11 +224,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     municipioNombre: ""
   });
 
+  const [formOrigen, setFormOrigen] = useState({
+    nombre: "",
+    descripcion: "",
+    activo: true
+  });
+
   // Filtros
   const [filtroUsuarioTexto, setFiltroUsuarioTexto] = useState<string>("");
   const [filtroUsuarioRol, setFiltroUsuarioRol] = useState<string>("todos");
   const [filtroRequisitoFase, setFiltroRequisitoFase] = useState<number>(1);
   const [filtroMunicipioTexto, setFiltroMunicipioTexto] = useState<string>("");
+  const [filtroOrigenTexto, setFiltroOrigenTexto] = useState<string>("");
 
   // Acciones en curso
   const [guardando, setGuardando] = useState<boolean>(false);
@@ -622,6 +606,69 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  const handleCrearOrigen = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formOrigen.nombre.trim()) {
+      mostrarToast("El nombre del origen de captación es obligatorio.", "error");
+      return;
+    }
+    setGuardando(true);
+    try {
+      const res = await authFetch("/api/admin/configuracion/origenes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formOrigen)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al registrar origen de captación.");
+
+      mostrarToast(`Origen '${data.origen?.nombre || formOrigen.nombre}' agregado con éxito.`);
+      setModalNuevoOrigen(false);
+      setFormOrigen({ nombre: "", descripcion: "", activo: true });
+      cargarDatos();
+    } catch (err: any) {
+      mostrarToast(err.message, "error");
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  const handleToggleEstadoOrigen = async (origen: OrigenCaptacionConfig) => {
+    try {
+      const nuevoEstado = !origen.activo;
+      const res = await authFetch(`/api/admin/configuracion/origenes/${origen.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ activo: nuevoEstado })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al actualizar estado del origen.");
+
+      mostrarToast(`Origen '${origen.nombre}' ${nuevoEstado ? "habilitado" : "deshabilitado"}.`);
+      cargarDatos();
+    } catch (err: any) {
+      mostrarToast(err.message, "error");
+    }
+  };
+
+  const handleEliminarOrigen = async (origen: OrigenCaptacionConfig) => {
+    const seguro = window.confirm(`¿Confirma eliminar el origen de captación '${origen.nombre}'?`);
+    if (!seguro) return;
+
+    try {
+      const res = await authFetch(`/api/admin/configuracion/origenes/${origen.id}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al eliminar origen.");
+
+      mostrarToast(`Origen '${origen.nombre}' eliminado correctamente.`);
+      cargarDatos();
+    } catch (err: any) {
+      mostrarToast(err.message, "error");
+    }
+  };
+
   // Handlers Bloque 4: Decisiones Críticas
   const handleAprobarRechazoDirecto = async (expedienteId: string) => {
     if (!confirm("¿Está seguro de aprobar el Rechazo Definitivo de este hogar? Esta acción pasará el expediente a Salida Definitiva.")) {
@@ -687,6 +734,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       m.codigoCompleto.includes(filtroMunicipioTexto)
     );
   }, [configuracion, filtroMunicipioTexto]);
+
+  const origenesList = configuracion?.origenesCaptacion || [];
+  const origenesFiltrados = useMemo(() => {
+    if (!origenesList) return [];
+    if (!filtroOrigenTexto.trim()) return origenesList;
+    const q = filtroOrigenTexto.toLowerCase();
+    return origenesList.filter(
+      (o) =>
+        o.nombre.toLowerCase().includes(q) ||
+        (o.descripcion && o.descripcion.toLowerCase().includes(q))
+    );
+  }, [origenesList, filtroOrigenTexto]);
 
   // Solicitudes de rechazo pendientes para Bloque 4
   const solicitudesRechazoPendientes = useMemo(() => {
@@ -1276,6 +1335,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </button>
             <button
               type="button"
+              onClick={() => setSubTabConfig("origenes")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                subTabConfig === "origenes" ? "bg-white text-blue-700 shadow-xs font-bold" : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Orígenes de Captación
+            </button>
+            <button
+              type="button"
               onClick={() => setSubTabConfig("plantillas")}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                 subTabConfig === "plantillas" ? "bg-white text-blue-700 shadow-xs" : "text-slate-600 hover:text-slate-900"
@@ -1513,6 +1581,108 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
           )}
 
+          {/* Sub-tab: Orígenes de Captación */}
+          {subTabConfig === "origenes" && (
+            <div className="space-y-4">
+              <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs">
+                <div className="relative w-full sm:w-80">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    placeholder="Buscar origen de captación por nombre..."
+                    value={filtroOrigenTexto}
+                    onChange={(e) => setFiltroOrigenTexto(e.target.value)}
+                    className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-hidden"
+                  />
+                </div>
+
+                <div className="flex items-center space-x-3">
+                  <span className="text-xs text-slate-500 font-medium">
+                    {origenesFiltrados.length} de {origenesList.length} orígenes
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setModalNuevoOrigen(true)}
+                    className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center space-x-1.5 transition-colors shadow-xs cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Agregar Origen</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl border border-slate-200 shadow-xs max-h-96 overflow-y-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead className="sticky top-0 bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                    <tr>
+                      <th className="py-2.5 px-4">Canal / Origen de Captación</th>
+                      <th className="py-2.5 px-4">Descripción / Referencia</th>
+                      <th className="py-2.5 px-4 text-center">Clasificación</th>
+                      <th className="py-2.5 px-4 text-center">Estado Operativo</th>
+                      <th className="py-2.5 px-4 text-right">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
+                    {origenesFiltrados.map((orig) => (
+                      <tr key={orig.id} className="hover:bg-slate-50/70 transition-colors">
+                        <td className="py-2.5 px-4 font-semibold text-slate-900">
+                          {orig.nombre}
+                        </td>
+                        <td className="py-2.5 px-4 text-slate-500 max-w-xs truncate">
+                          {orig.descripcion || "Sin descripción"}
+                        </td>
+                        <td className="py-2.5 px-4 text-center">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              orig.esPersonalizado
+                                ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                : "bg-indigo-50 text-indigo-700 border border-indigo-200"
+                            }`}
+                          >
+                            {orig.esPersonalizado ? "Personalizado" : "Institucional"}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-4 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleEstadoOrigen(orig)}
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold cursor-pointer transition-transform hover:scale-105 ${
+                              orig.activo
+                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
+                                : "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
+                            }`}
+                            title="Haz clic para alternar entre habilitado e inactivo"
+                          >
+                            {orig.activo ? "Habilitado" : "Inactivo"}
+                          </button>
+                        </td>
+                        <td className="py-2.5 px-4 text-right space-x-1">
+                          {orig.esPersonalizado && (
+                            <button
+                              type="button"
+                              onClick={() => handleEliminarOrigen(orig)}
+                              className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Eliminar origen personalizado"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {origenesFiltrados.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-slate-400 text-xs">
+                          No se encontraron orígenes de captación coincidentes.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* Sub-tab 4: Plantillas de Fases Especiales */}
           {subTabConfig === "plantillas" && (
             <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
@@ -1592,17 +1762,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   >
                     <Download className={`w-3.5 h-3.5 ${cargandoSeed ? "animate-spin" : ""}`} />
                     <span>{cargandoSeed ? "Sincronizando..." : "Poblar Municipios y Usuarios"}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={ejecutarCrearCasosEjemplo}
-                    disabled={cargandoCasosEjemplo}
-                    className="px-3.5 py-2 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
-                    title="Crea automáticamente 7 expedientes de ejemplo realistas, uno para cada fase operativa (Fase 1 a Fase 7)"
-                  >
-                    <Sparkles className={`w-3.5 h-3.5 ${cargandoCasosEjemplo ? "animate-spin" : ""}`} />
-                    <span>{cargandoCasosEjemplo ? "Generando..." : "Generar Casos de Ejemplo (Fases 1 a 7)"}</span>
                   </button>
 
                   <button
@@ -2897,16 +3056,101 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <button
                   type="button"
                   onClick={() => setModalNuevoMunicipio(false)}
-                  className="px-3.5 py-1.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 font-semibold"
+                  className="px-3.5 py-1.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 font-semibold cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={guardando}
-                  className="px-4 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold shadow-xs"
+                  className="px-4 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold shadow-xs cursor-pointer"
                 >
                   {guardando ? "Guardando..." : "Habilitar Municipio"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 8: Agregar Origen de Captación */}
+      {modalNuevoOrigen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700">
+                  <Plus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">Nuevo Origen de Captación</h3>
+                  <p className="text-[11px] text-slate-500">Registrar un nuevo canal de contacto para postulantes</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalNuevoOrigen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCrearOrigen} className="space-y-3.5 text-xs">
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Nombre del Canal u Origen <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ej: Feria Agropecuaria de Guatavita, Convenio Municipal..."
+                  value={formOrigen.nombre}
+                  onChange={(e) => setFormOrigen({ ...formOrigen, nombre: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Descripción o Notas <span className="text-slate-400 font-normal">(Opcional)</span>
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="Ej: Captación en evento rural, convenio municipal o alianza comunitaria..."
+                  value={formOrigen.descripcion}
+                  onChange={(e) => setFormOrigen({ ...formOrigen, descripcion: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div className="flex items-center space-x-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="origen-activo-check"
+                  checked={formOrigen.activo}
+                  onChange={(e) => setFormOrigen({ ...formOrigen, activo: e.target.checked })}
+                  className="rounded text-blue-600 focus:ring-blue-500 h-4 w-4 cursor-pointer"
+                />
+                <label htmlFor="origen-activo-check" className="text-slate-700 font-medium cursor-pointer">
+                  Habilitar inmediatamente en listas y formularios de captación
+                </label>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setModalNuevoOrigen(false)}
+                  className="px-3.5 py-1.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 font-semibold cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={guardando}
+                  className="px-4 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  {guardando ? "Guardando..." : "Agregar Origen"}
                 </button>
               </div>
             </form>

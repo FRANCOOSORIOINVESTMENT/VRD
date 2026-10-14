@@ -20,6 +20,7 @@ import {
 import {
   calcularCodigoVisible,
   RolUsuario,
+  TipoIdentificacion,
   DocVersion,
   RequisitoCaso,
   RevisionHumana,
@@ -2414,7 +2415,14 @@ export async function createApp(): Promise<express.Express> {
               // 1.1 Sincronizar campos actualizados directamente desde Supabase
               const iExistente = mockDb.interesados[index];
               if (row.nombre_contacto) iExistente.nombreContacto = row.nombre_contacto;
+              if (row.numero_identificacion || row.cedula) {
+                iExistente.numeroIdentificacion = row.numero_identificacion || row.cedula;
+                iExistente.cedula = iExistente.numeroIdentificacion;
+              }
+              if (row.tipo_identificacion) iExistente.tipoIdentificacion = row.tipo_identificacion;
               if (row.telefono) iExistente.telefono = row.telefono;
+              if (row.telefono_secundario) iExistente.telefonoSecundario = row.telefono_secundario;
+              if (row.tiene_whatsapp_secundario !== undefined) iExistente.tieneWhatsappSecundario = Boolean(row.tiene_whatsapp_secundario);
               if (row.tiene_whatsapp !== undefined) iExistente.tieneWhatsapp = Boolean(row.tiene_whatsapp);
               if (row.correo !== undefined) iExistente.correo = row.correo || undefined;
               if (row.departamento_codigo) iExistente.departamentoCodigo = row.departamento_codigo;
@@ -2428,8 +2436,12 @@ export async function createApp(): Promise<express.Express> {
               // 1.2 Insertar nuevo interesado creado directamente en Supabase
               const fechaRegMs = new Date(row.creado_en).getTime();
               const fechaCaducidad = new Date(fechaRegMs + 45 * 24 * 60 * 60 * 1000).toISOString();
+              const cedulaRow = row.numero_identificacion || row.cedula || undefined;
               mockDb.interesados.unshift({
                 id: row.id,
+                tipoIdentificacion: row.tipo_identificacion || "CC",
+                numeroIdentificacion: cedulaRow,
+                cedula: cedulaRow,
                 primerNombre: row.nombre_contacto ? String(row.nombre_contacto).split(" ")[0] : "",
                 primerApellido:
                   row.nombre_contacto && String(row.nombre_contacto).split(" ").length > 1
@@ -2437,6 +2449,8 @@ export async function createApp(): Promise<express.Express> {
                     : "",
                 nombreContacto: row.nombre_contacto || "Sin Nombre",
                 telefono: row.telefono || "",
+                telefonoSecundario: row.telefono_secundario || undefined,
+                tieneWhatsappSecundario: Boolean(row.tiene_whatsapp_secundario),
                 tieneWhatsapp: Boolean(row.tiene_whatsapp),
                 correo: row.correo || undefined,
                 departamentoCodigo: row.departamento_codigo || "25",
@@ -2543,7 +2557,12 @@ export async function createApp(): Promise<express.Express> {
       primerApellido,
       segundoApellido,
       nombreContacto,
+      tipoIdentificacion,
+      numeroIdentificacion,
+      cedula,
       telefono,
+      telefonoSecundario,
+      tieneWhatsappSecundario,
       tieneWhatsapp,
       correo,
       departamentoCodigo,
@@ -2565,15 +2584,22 @@ export async function createApp(): Promise<express.Express> {
     const depCodigo = departamentoCodigo || munCodigoNormalizado.substring(0, 2) || "25";
     const ahoraIso = new Date().toISOString();
     const fechaCaducidadIso = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString();
+    const cedulaLimpia = String(numeroIdentificacion || cedula || "").trim() || undefined;
+    const telSecLimpio = telefonoSecundario ? String(telefonoSecundario).trim() : undefined;
 
     const nuevo: typeof mockDb.interesados[0] = {
       id: `int-${Date.now()}`,
+      tipoIdentificacion: tipoIdentificacion || "CC",
+      numeroIdentificacion: cedulaLimpia,
+      cedula: cedulaLimpia,
       primerNombre: primerNombre ? normalizarTextoNombre(primerNombre) : undefined,
       segundoNombre: segundoNombre ? normalizarTextoNombre(segundoNombre) : undefined,
       primerApellido: primerApellido ? normalizarTextoNombre(primerApellido) : undefined,
       segundoApellido: segundoApellido ? normalizarTextoNombre(segundoApellido) : undefined,
       nombreContacto: nombreFinal,
       telefono: String(telefono).trim(),
+      telefonoSecundario: telSecLimpio,
+      tieneWhatsappSecundario: Boolean(tieneWhatsappSecundario),
       tieneWhatsapp: tieneWhatsapp !== undefined ? Boolean(tieneWhatsapp) : true,
       correo: correo ? String(correo).trim() : undefined,
       departamentoCodigo: depCodigo,
@@ -2622,37 +2648,62 @@ export async function createApp(): Promise<express.Express> {
 
           const comercialId = usuarioDb?.id;
           if (comercialId) {
+            const baseRow: any = {
+              nombre_contacto: nuevo.nombreContacto,
+              telefono: nuevo.telefono,
+              tiene_whatsapp: nuevo.tieneWhatsapp,
+              correo: nuevo.correo || null,
+              departamento_codigo: nuevo.departamentoCodigo,
+              municipio_codigo: nuevo.municipioCodigo,
+              vereda: nuevo.vereda || null,
+              origen_contacto: nuevo.origenContacto,
+              resumen_necesidad: nuevo.resumenNecesidad || null,
+              comercial_asignado_id: comercialId,
+              estado_comercial: nuevo.estadoComercial
+            };
+
+            // Intentar inserción con campos extendidos (cédula y segundo teléfono)
+            let insertedId: string | null = null;
+            const fullRow = {
+              ...baseRow,
+              ...(nuevo.numeroIdentificacion ? { numero_identificacion: nuevo.numeroIdentificacion } : {}),
+              ...(nuevo.tipoIdentificacion ? { tipo_identificacion: nuevo.tipoIdentificacion } : {}),
+              ...(nuevo.telefonoSecundario ? { telefono_secundario: nuevo.telefonoSecundario } : {})
+            };
+
             const { data: inserted, error: sbError } = await supabaseAdmin
               .from("interesados")
-              .insert([{
-                nombre_contacto: nuevo.nombreContacto,
-                telefono: nuevo.telefono,
-                tiene_whatsapp: nuevo.tieneWhatsapp,
-                correo: nuevo.correo || null,
-                departamento_codigo: nuevo.departamentoCodigo,
-                municipio_codigo: nuevo.municipioCodigo,
-                vereda: nuevo.vereda || null,
-                origen_contacto: nuevo.origenContacto,
-                resumen_necesidad: nuevo.resumenNecesidad || null,
-                comercial_asignado_id: comercialId,
-                estado_comercial: nuevo.estadoComercial
-              }])
+              .insert([fullRow])
               .select("id")
               .maybeSingle();
 
             if (!sbError && inserted?.id) {
-              console.log(`[SUPABASE]: Hogar de captación persistido exitosamente en Supabase (UUID: ${inserted.id})`);
+              insertedId = inserted.id;
+            } else if (sbError) {
+              // Fallback si las columnas opcionales no existen en el esquema remoto
+              const { data: retryInserted, error: retryError } = await supabaseAdmin
+                .from("interesados")
+                .insert([baseRow])
+                .select("id")
+                .maybeSingle();
+              if (!retryError && retryInserted?.id) {
+                insertedId = retryInserted.id;
+              } else if (retryError) {
+                console.error("[SUPABASE]: Error al insertar interesado en Supabase:", retryError.message);
+              }
+            }
+
+            if (insertedId) {
+              console.log(`[SUPABASE]: Hogar de captación persistido exitosamente en Supabase (UUID: ${insertedId})`);
               if (nuevo.resumenNecesidad) {
                 await supabaseAdmin.from("notas_conversaciones").insert([{
-                  interesado_id: inserted.id,
+                  interesado_id: insertedId,
                   autor_id: comercialId,
                   persona_contactada: nuevo.nombreContacto,
                   canal: nuevo.origenContacto || "contacto_inicial",
                   contenido: `Detalles de captación inicial: ${nuevo.resumenNecesidad}`
                 }]);
               }
-            } else if (sbError) {
-              console.error("[SUPABASE]: Error al insertar interesado en Supabase:", sbError.message);
             }
           }
         } catch (err: any) {
@@ -2878,7 +2929,10 @@ export async function createApp(): Promise<express.Express> {
     const sApellido = segundoApellido ? normalizarTextoNombre(segundoApellido) : undefined;
     const nombreCompleto = construirNombreCompleto(pNombre, sNombre, pApellido, sApellido) || (nombres ? normalizarTextoNombre(nombres) : "");
 
-    if (!numeroIdentificacion || (!pNombre && !nombres) || !pApellido || !municipioCodigo) {
+    const numIdFinal = String(numeroIdentificacion || interesado.numeroIdentificacion || interesado.cedula || "").trim();
+    const tipoIdFinal = (tipoIdentificacion || interesado.tipoIdentificacion || "CC") as TipoIdentificacion;
+
+    if (!numIdFinal || (!pNombre && !nombres) || !pApellido || !municipioCodigo) {
       res.status(400).json({
         error: "Número de identificación, nombres (primer nombre), primer apellido y municipio son obligatorios para abrir el expediente."
       });
@@ -2892,14 +2946,15 @@ export async function createApp(): Promise<express.Express> {
 
     const personaPostulante = {
       id: personaId,
-      tipoIdentificacion: tipoIdentificacion || "CC",
-      numeroIdentificacion: String(numeroIdentificacion).trim(),
+      tipoIdentificacion: tipoIdFinal,
+      numeroIdentificacion: numIdFinal,
       primerNombre: pNombre,
       segundoNombre: sNombre,
       primerApellido: pApellido,
       segundoApellido: sApellido,
       nombres: nombreCompleto,
       telefonoPrincipal: interesado.telefono,
+      telefonoSecundario: interesado.telefonoSecundario,
       correo: interesado.correo
     };
 
@@ -9395,10 +9450,202 @@ export async function createApp(): Promise<express.Express> {
 
   // BLOQUE 2: CONFIGURACIÓN DEL SISTEMA (PARÁMETROS MAESTROS)
   // 2.1 Obtener configuración completa del sistema y auditoría
-  app.get("/api/admin/configuracion", requireAuth(["administrador"]), (req: AuthRequest, res: Response) => {
+  app.get("/api/admin/configuracion", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
+    // Si Supabase está disponible, recuperar origenes de captacion persistidos en configuracion_sistema
+    if (supabaseAdmin) {
+      try {
+        const { data: configRow } = await supabaseAdmin
+          .from("configuracion_sistema")
+          .select("datos")
+          .eq("id", "origenes_captacion")
+          .maybeSingle();
+        if (configRow?.datos && Array.isArray(configRow.datos) && configRow.datos.length > 0) {
+          mockDb.configuracionSistema.origenesCaptacion = configRow.datos;
+        }
+      } catch (err) {
+        // silencioso
+      }
+    }
+
     res.json({
       configuracion: mockDb.configuracionSistema,
       auditoria: mockDb.auditoriaAdmin
+    });
+  });
+
+  // 2.1b Obtener catálogo activo de orígenes de captación para la aplicación
+  app.get("/api/configuracion/origenes-captacion", async (req: Request, res: Response) => {
+    if (supabaseAdmin) {
+      try {
+        const { data: configRow } = await supabaseAdmin
+          .from("configuracion_sistema")
+          .select("datos")
+          .eq("id", "origenes_captacion")
+          .maybeSingle();
+        if (configRow?.datos && Array.isArray(configRow.datos) && configRow.datos.length > 0) {
+          mockDb.configuracionSistema.origenesCaptacion = configRow.datos;
+        }
+      } catch (err) {
+        // silencioso
+      }
+    }
+    const origenes = mockDb.configuracionSistema.origenesCaptacion || [];
+    res.json({
+      success: true,
+      origenes: origenes.filter((o) => o.activo).map((o) => o.nombre),
+      detalles: origenes
+    });
+  });
+
+  // 2.1c Registrar nuevo origen de captación
+  app.post("/api/admin/configuracion/origenes", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
+    const { nombre, descripcion, activo } = req.body;
+    const nombreLimpio = String(nombre || "").trim();
+
+    if (!nombreLimpio) {
+      return res.status(400).json({ error: "El nombre del origen de captación es obligatorio." });
+    }
+
+    if (!mockDb.configuracionSistema.origenesCaptacion) {
+      mockDb.configuracionSistema.origenesCaptacion = [];
+    }
+
+    const duplicado = mockDb.configuracionSistema.origenesCaptacion.find(
+      (o) => o.nombre.toLowerCase() === nombreLimpio.toLowerCase()
+    );
+
+    if (duplicado) {
+      return res.status(400).json({ error: `Ya existe un origen de captación con el nombre '${duplicado.nombre}'.` });
+    }
+
+    const nuevoOrigen = {
+      id: `orig-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      nombre: nombreLimpio,
+      descripcion: String(descripcion || "Origen de captación personalizado registrado por administración").trim(),
+      activo: activo !== undefined ? Boolean(activo) : true,
+      esPersonalizado: true,
+      creadoEn: new Date().toISOString()
+    };
+
+    mockDb.configuracionSistema.origenesCaptacion.push(nuevoOrigen);
+
+    mockDb.auditoriaAdmin.unshift({
+      id: `aud-${Date.now()}`,
+      fecha: new Date().toISOString(),
+      adminId: req.user!.id,
+      adminNombre: req.user!.nombreCompleto,
+      accion: "AGREGAR_ORIGEN_CAPTACION",
+      detalle: `Nuevo origen de captación incorporado: '${nuevoOrigen.nombre}'.`,
+      categoria: "configuracion"
+    });
+
+    if (supabaseAdmin) {
+      try {
+        await supabaseAdmin.from("configuracion_sistema").upsert({
+          id: "origenes_captacion",
+          datos: mockDb.configuracionSistema.origenesCaptacion,
+          actualizado_en: new Date().toISOString()
+        });
+      } catch (err: any) {
+        console.warn("[SUPABASE PERSIST ORIGEN ERROR]:", err?.message || err);
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      mensaje: `Origen '${nuevoOrigen.nombre}' agregado correctamente.`,
+      origen: nuevoOrigen,
+      origenes: mockDb.configuracionSistema.origenesCaptacion
+    });
+  });
+
+  // 2.1d Actualizar origen de captación
+  app.put("/api/admin/configuracion/origenes/:id", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const { nombre, descripcion, activo } = req.body;
+
+    const origen = (mockDb.configuracionSistema.origenesCaptacion || []).find((o) => o.id === id);
+    if (!origen) {
+      return res.status(404).json({ error: "Origen de captación no encontrado." });
+    }
+
+    if (nombre && String(nombre).trim()) {
+      origen.nombre = String(nombre).trim();
+    }
+    if (descripcion !== undefined) {
+      origen.descripcion = String(descripcion).trim();
+    }
+    if (activo !== undefined) {
+      origen.activo = Boolean(activo);
+    }
+
+    mockDb.auditoriaAdmin.unshift({
+      id: `aud-${Date.now()}`,
+      fecha: new Date().toISOString(),
+      adminId: req.user!.id,
+      adminNombre: req.user!.nombreCompleto,
+      accion: "EDITAR_ORIGEN_CAPTACION",
+      detalle: `Origen de captación '${origen.nombre}' actualizado (Activo: ${origen.activo}).`,
+      categoria: "configuracion"
+    });
+
+    if (supabaseAdmin) {
+      try {
+        await supabaseAdmin.from("configuracion_sistema").upsert({
+          id: "origenes_captacion",
+          datos: mockDb.configuracionSistema.origenesCaptacion,
+          actualizado_en: new Date().toISOString()
+        });
+      } catch (err: any) {
+        console.warn("[SUPABASE UPDATE ORIGEN ERROR]:", err?.message || err);
+      }
+    }
+
+    res.json({
+      success: true,
+      mensaje: `Origen de captación '${origen.nombre}' actualizado con éxito.`,
+      origen,
+      origenes: mockDb.configuracionSistema.origenesCaptacion
+    });
+  });
+
+  // 2.1e Eliminar origen de captación personalizado
+  app.delete("/api/admin/configuracion/origenes/:id", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const idx = (mockDb.configuracionSistema.origenesCaptacion || []).findIndex((o) => o.id === id);
+    if (idx === -1) {
+      return res.status(404).json({ error: "Origen de captación no encontrado." });
+    }
+
+    const origenEliminado = mockDb.configuracionSistema.origenesCaptacion![idx];
+    mockDb.configuracionSistema.origenesCaptacion!.splice(idx, 1);
+
+    mockDb.auditoriaAdmin.unshift({
+      id: `aud-${Date.now()}`,
+      fecha: new Date().toISOString(),
+      adminId: req.user!.id,
+      adminNombre: req.user!.nombreCompleto,
+      accion: "ELIMINAR_ORIGEN_CAPTACION",
+      detalle: `Origen de captación eliminado: '${origenEliminado.nombre}'.`,
+      categoria: "configuracion"
+    });
+
+    if (supabaseAdmin) {
+      try {
+        await supabaseAdmin.from("configuracion_sistema").upsert({
+          id: "origenes_captacion",
+          datos: mockDb.configuracionSistema.origenesCaptacion,
+          actualizado_en: new Date().toISOString()
+        });
+      } catch (err: any) {
+        console.warn("[SUPABASE DELETE ORIGEN ERROR]:", err?.message || err);
+      }
+    }
+
+    res.json({
+      success: true,
+      mensaje: `Origen '${origenEliminado.nombre}' eliminado exitosamente.`,
+      origenes: mockDb.configuracionSistema.origenesCaptacion
     });
   });
 

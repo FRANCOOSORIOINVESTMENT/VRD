@@ -69,12 +69,17 @@ export const OPCIONES_ORIGEN_CAPTACION: string[] = [
 
 export interface Interesado {
   id: string;
+  tipoIdentificacion?: TipoIdentificacion;
+  numeroIdentificacion?: string;
+  cedula?: string; // Cédula o número de documento del interesado
   primerNombre?: string;
   segundoNombre?: string;
   primerApellido?: string;
   segundoApellido?: string;
   nombreContacto: string; // Nombre completo normalizado en mayúscula sin tildes
   telefono: string;
+  telefonoSecundario?: string; // Segundo teléfono de contacto opcional
+  tieneWhatsappSecundario?: boolean;
   tieneWhatsapp: boolean;
   correo?: string;
   departamentoCodigo?: string;
@@ -1162,9 +1167,19 @@ export interface MunicipioConfig {
   activo: boolean;
 }
 
+export interface OrigenCaptacionConfig {
+  id: string;
+  nombre: string;
+  descripcion?: string;
+  activo: boolean;
+  esPersonalizado: boolean;
+  creadoEn: string;
+}
+
 export interface ConfiguracionSistema {
   departamentos: { codigo: string; nombre: string; activo: boolean }[];
   municipios: MunicipioConfig[];
+  origenesCaptacion?: OrigenCaptacionConfig[];
   fases: FaseConfiguracion[];
   requisitosMaestros: RequisitoMaestroConfig[];
   plantillasFases: PlantillasFasesConfig;
