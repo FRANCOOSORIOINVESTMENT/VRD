@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Expediente,
   PerfilUsuario,
@@ -8,7 +8,7 @@ import {
   RegistroHistorialLicencia,
   SoporteDocumentoLicencia,
   DocumentoRadicacionPlaneacion,
-  TipoDocumentoRadicacionPlaneacion,
+  PLANTILLA_DOCUMENTOS_FASE_5,
   RequisitoCaso
 } from "../types";
 import {
@@ -32,15 +32,18 @@ import {
   Plus,
   X,
   Lock,
-  ChevronRight,
+  ChevronDown,
+  ChevronUp,
   FileSpreadsheet,
-  Download,
   Trash2,
   Upload,
   RefreshCw,
   FolderArchive,
   Layers,
-  FileCheck
+  FileCheck,
+  FileUp,
+  Sparkles,
+  Info
 } from "lucide-react";
 
 interface Fase5SeguimientoLicenciaProps {
@@ -77,101 +80,58 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
     estadoActual: "sin_radicar",
     entidadMunicipal: `Secretaría de Planeación Municipal`,
     rondasSubsanacion: [],
+    documentosPlaneacion: [],
     historial: []
   };
 
-  const estado = tramite.estadoActual;
-
-  // Estado de bloqueo si el expediente ya avanzó a Fase 6 o superior
+  const estado: EstadoTramiteLicencia = tramite.estadoActual || "sin_radicar";
   const estaBloqueadaPorFaseAvanzada = (expediente.faseActual || 1) > 5;
 
-  // Permisos según el cambio solicitado:
-  // - Ingeniería: responsable directo de la gestión y avance a Fase 6 una vez expedida la licencia.
-  // - Supervisor y Administrador: supervisión, auditoría y avance a Fase 6.
-  const puedeOperar = !estaBloqueadaPorFaseAvanzada && (currentUser.rol === "ingenieria" || currentUser.rol === "administrador");
+  // Permisos:
+  // - Ingeniería: gestor directo de documentos, radicación y avance
+  // - Supervisor y Administrador: supervisión, auditoría y aprobación
+  const puedeOperar =
+    !estaBloqueadaPorFaseAvanzada &&
+    (currentUser.rol === "ingenieria" || currentUser.rol === "administrador");
   const puedeAvanzarFase =
     !estaBloqueadaPorFaseAvanzada &&
     (currentUser.rol === "ingenieria" ||
-    currentUser.rol === "supervisor" ||
-    currentUser.rol === "administrador");
+      currentUser.rol === "supervisor" ||
+      currentUser.rol === "administrador");
 
-  // Estados de modales
-  const [modalRadicar, setModalRadicar] = useState(false);
-  const [modalObservaciones, setModalObservaciones] = useState(false);
-  const [modalSubsanar, setModalSubsanar] = useState<RondaSubsanacionLicencia | null>(null);
-  const [modalAprobar, setModalAprobar] = useState(false);
-  const [modalNota, setModalNota] = useState(false);
-  const [modalConfirmarAvanzarF6, setModalConfirmarAvanzarF6] = useState(false);
-  const [modalRequisitosPendientesF6, setModalRequisitosPendientesF6] = useState(false);
-
-  // Safe Escape key handler for all modals in Fase 5
-  useEffect(() => {
-    const hayModalAbierto =
-      modalRadicar ||
-      modalObservaciones ||
-      modalSubsanar !== null ||
-      modalAprobar ||
-      modalNota ||
-      modalConfirmarAvanzarF6 ||
-      modalRequisitosPendientesF6;
-
-    if (!hayModalAbierto) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        if (modalConfirmarAvanzarF6) setModalConfirmarAvanzarF6(false);
-        else if (modalRequisitosPendientesF6) setModalRequisitosPendientesF6(false);
-        else if (modalRadicar) setModalRadicar(false);
-        else if (modalObservaciones) setModalObservaciones(false);
-        else if (modalSubsanar) setModalSubsanar(null);
-        else if (modalAprobar) setModalAprobar(false);
-        else if (modalNota) setModalNota(false);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [
-    modalRadicar,
-    modalObservaciones,
-    modalSubsanar,
-    modalAprobar,
-    modalNota,
-    modalConfirmarAvanzarF6,
-    modalRequisitosPendientesF6
-  ]);
-
-  // Estados de formularios
+  // Feedback y estados generales
   const [cargandoAccion, setCargandoAccion] = useState(false);
   const [errorAccion, setErrorAccion] = useState<string | null>(null);
   const [exitoAccion, setExitoAccion] = useState<string | null>(null);
 
-  // Form Radicar Inicial
-  const [formEntidad, setFormEntidad] = useState(tramite.entidadMunicipal || "Secretaría de Planeación Municipal");
-  const [formNumRadicado, setFormNumRadicado] = useState(tramite.numeroRadicadoInicial || "");
+  // Estado de carga individual para archivos en el checklist
+  const [subiendoDocKey, setSubiendoDocKey] = useState<string | null>(null);
+  const [progresoCarga, setProgresoCarga] = useState<number>(0);
+
+  // Sección desplegable de datos de radicación / resolución
+  const [seccionRadicacionAbierta, setSeccionRadicacionAbierta] = useState<boolean>(true);
+  const [seccionSubsanacionesAbierta, setSeccionSubsanacionesAbierta] = useState<boolean>(false);
+  const [seccionBitacoraAbierta, setSeccionBitacoraAbierta] = useState<boolean>(false);
+
+  // Formulario en línea de Radicación Oficial
+  const [formEntidad, setFormEntidad] = useState(
+    tramite.entidadMunicipal || "Secretaría de Planeación Municipal"
+  );
+  const [formNumRadicado, setFormNumRadicado] = useState(
+    tramite.numeroRadicadoInicial || ""
+  );
   const [formFechaRad, setFormFechaRad] = useState(
     tramite.fechaRadicacionInicial
       ? tramite.fechaRadicacionInicial.split("T")[0]
       : new Date().toISOString().split("T")[0]
   );
   const [formObsRad, setFormObsRad] = useState("");
-  const [archivoRad, setArchivoRad] = useState<File | null>(null);
+  const [guardandoRadicacion, setGuardandoRadicacion] = useState(false);
 
-  // Form Observaciones
-  const [formNumActaObs, setFormNumActaObs] = useState("");
-  const [formFechaObs, setFormFechaObs] = useState(new Date().toISOString().split("T")[0]);
-  const [formFechaLimite, setFormFechaLimite] = useState("");
-  const [formDetalleObs, setFormDetalleObs] = useState("");
-  const [archivoObs, setArchivoObs] = useState<File | null>(null);
-
-  // Form Subsanar
-  const [formNumRadSub, setFormNumRadSub] = useState("");
-  const [formFechaRadSub, setFormFechaRadSub] = useState(new Date().toISOString().split("T")[0]);
-  const [formDetalleSub, setFormDetalleSub] = useState("");
-  const [archivoSub, setArchivoSub] = useState<File | null>(null);
-
-  // Form Aprobar
-  const [formNumResolucion, setFormNumResolucion] = useState(tramite.numeroResolucionLicencia || "");
+  // Formulario en línea de Resolución Aprobatoria
+  const [formNumResolucion, setFormNumResolucion] = useState(
+    tramite.numeroResolucionLicencia || ""
+  );
   const [formFechaExpedicion, setFormFechaExpedicion] = useState(
     tramite.fechaExpedicionLicencia
       ? tramite.fechaExpedicionLicencia.split("T")[0]
@@ -182,102 +142,457 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
       ? tramite.fechaEjecutoriaLicencia.split("T")[0]
       : new Date().toISOString().split("T")[0]
   );
-  const [formVigenciaMeses, setFormVigenciaMeses] = useState(tramite.vigenciaMeses || 24);
-  const [formObsFinales, setFormObsFinales] = useState(tramite.observacionesFinales || "");
-  const [archivoAprobar, setArchivoAprobar] = useState<File | null>(null);
-  const [archivosAprobar, setArchivosAprobar] = useState<File[]>([]); // CAMBIO 8: Carga múltiple de documentos de licencia
+  const [formVigenciaMeses, setFormVigenciaMeses] = useState(
+    tramite.vigenciaMeses || 24
+  );
+  const [formObsFinales, setFormObsFinales] = useState(
+    tramite.observacionesFinales || ""
+  );
+  const [archivosAprobarNuevos, setArchivosAprobarNuevos] = useState<File[]>([]);
+  const [guardandoResolucion, setGuardandoResolucion] = useState(false);
 
-  // Form Nota Historial
-  const [formTituloNota, setFormTituloNota] = useState("");
-  const [formDescNota, setFormDescNota] = useState("");
+  // Modales de confirmación indispensables (solo confirmaciones críticas de sistema)
+  const [modalConfirmarAvanzarF6, setModalConfirmarAvanzarF6] = useState(false);
+  const [modalRequisitosPendientesF6, setModalRequisitosPendientesF6] = useState(false);
 
-  // Modales y estados para Documentación Técnica de Radicación en Planeación
-  const [modalCargarDocPlaneacion, setModalCargarDocPlaneacion] = useState<DocumentoRadicacionPlaneacion | null>(null);
-  const [modalNuevoDocPlaneacion, setModalNuevoDocPlaneacion] = useState(false);
-  const [modalEliminarDocPlaneacion, setModalEliminarDocPlaneacion] = useState<DocumentoRadicacionPlaneacion | null>(null);
-  const [archivoDocPlaneacion, setArchivoDocPlaneacion] = useState<File | null>(null);
-  const [obsDocPlaneacion, setObsDocPlaneacion] = useState("");
-  const [nuevoDocNombre, setNuevoDocNombre] = useState("");
-  const [nuevoDocTipo, setNuevoDocTipo] = useState<TipoDocumentoRadicacionPlaneacion>("otro");
-  const [nuevoDocDesc, setNuevoDocDesc] = useState("");
-  const [nuevoDocObligatorio, setNuevoDocObligatorio] = useState(false);
+  // Panel inline para nueva observación y subsanación
+  const [mostrarFormNuevaObs, setMostrarFormNuevaObs] = useState(false);
+  const [formNumActaObs, setFormNumActaObs] = useState("");
+  const [formFechaObs, setFormFechaObs] = useState(new Date().toISOString().split("T")[0]);
+  const [formFechaLimite, setFormFechaLimite] = useState("");
+  const [formDetalleObs, setFormDetalleObs] = useState("");
+  const [archivoObs, setArchivoObs] = useState<File | null>(null);
 
-  // Helper para convertir archivo a data URL y hash simulado
+  const [rondaParaSubsanar, setRondaParaSubsanar] = useState<RondaSubsanacionLicencia | null>(null);
+  const [formNumRadSub, setFormNumRadSub] = useState("");
+  const [formFechaRadSub, setFormFechaRadSub] = useState(new Date().toISOString().split("T")[0]);
+  const [formDetalleSub, setFormDetalleSub] = useState("");
+  const [archivoSub, setArchivoSub] = useState<File | null>(null);
+
+  // Refs para inputs de archivo directos en el checklist (sin modales)
+  const fileInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
+
+  // Sincronizar estados locales cuando cambie el expediente recibido
+  useEffect(() => {
+    if (tramite.entidadMunicipal) setFormEntidad(tramite.entidadMunicipal);
+    if (tramite.numeroRadicadoInicial) setFormNumRadicado(tramite.numeroRadicadoInicial);
+    if (tramite.fechaRadicacionInicial) {
+      setFormFechaRad(tramite.fechaRadicacionInicial.split("T")[0]);
+    }
+    if (tramite.numeroResolucionLicencia) {
+      setFormNumResolucion(tramite.numeroResolucionLicencia);
+    }
+    if (tramite.fechaExpedicionLicencia) {
+      setFormFechaExpedicion(tramite.fechaExpedicionLicencia.split("T")[0]);
+    }
+    if (tramite.fechaEjecutoriaLicencia) {
+      setFormFechaEjecutoria(tramite.fechaEjecutoriaLicencia.split("T")[0]);
+    }
+    if (tramite.vigenciaMeses) setFormVigenciaMeses(tramite.vigenciaMeses);
+  }, [tramite]);
+
+  // Lista consolidada de los 15 documentos de Fase 5
+  const lista15Documentos: DocumentoRadicacionPlaneacion[] = useMemo(() => {
+    const docsActuales = tramite.documentosPlaneacion || [];
+    return PLANTILLA_DOCUMENTOS_FASE_5.map((plantilla) => {
+      const docExistente = docsActuales.find(
+        (d) => d.itemNumero === plantilla.itemNumero || d.tipo === plantilla.tipo
+      );
+      if (docExistente) {
+        return {
+          ...docExistente,
+          itemNumero: plantilla.itemNumero,
+          nombre: docExistente.nombre || plantilla.nombre,
+          descripcion: docExistente.descripcion || plantilla.descripcion,
+          formatosPermitidos: plantilla.formatosPermitidos,
+          esObligatorio: plantilla.esObligatorio,
+          requiereDobleArchivo: plantilla.requiereDobleArchivo,
+          soportaArchivoPesado: plantilla.soportaArchivoPesado
+        };
+      }
+      return {
+        id: `doc-fase5-${plantilla.itemNumero}-${expediente.id}`,
+        itemNumero: plantilla.itemNumero,
+        tipo: plantilla.tipo,
+        nombre: plantilla.nombre,
+        descripcion: plantilla.descripcion,
+        formatosPermitidos: plantilla.formatosPermitidos,
+        esObligatorio: plantilla.esObligatorio,
+        requiereDobleArchivo: plantilla.requiereDobleArchivo,
+        soportaArchivoPesado: plantilla.soportaArchivoPesado
+      };
+    });
+  }, [tramite.documentosPlaneacion, expediente.id]);
+
+  // Cálculo de progreso del checklist
+  const statsChecklist = useMemo(() => {
+    let listos = 0;
+    let obligatoriosListos = 0;
+    const total = lista15Documentos.length;
+    const totalObligatorios = lista15Documentos.filter((d) => d.esObligatorio).length;
+
+    lista15Documentos.forEach((doc) => {
+      if (doc.requiereDobleArchivo) {
+        // Item 12: requiere tanto Excel como PDF
+        const tieneExcel = !!doc.soporteExcel;
+        const tienePdf = !!doc.soportePdf || !!doc.soporte;
+        if (tieneExcel && tienePdf) {
+          listos++;
+          if (doc.esObligatorio) obligatoriosListos++;
+        }
+      } else {
+        if (doc.soporte) {
+          listos++;
+          if (doc.esObligatorio) obligatoriosListos++;
+        }
+      }
+    });
+
+    const porcentajeGlobal = Math.round((listos / total) * 100);
+    return {
+      total,
+      listos,
+      totalObligatorios,
+      obligatoriosListos,
+      porcentajeGlobal,
+      todosObligatoriosListos: obligatoriosListos === totalObligatorios
+    };
+  }, [lista15Documentos]);
+
+  // Helper para procesar archivo a Base64 / Hash
   const procesarArchivo = async (
-    file: File
+    file: File,
+    onProgress?: (porcentaje: number) => void
   ): Promise<{ dataUrl: string; sha256: string }> => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
+
+      if (onProgress) {
+        reader.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 90);
+            onProgress(pct);
+          }
+        };
+      }
+
       reader.onload = () => {
+        if (onProgress) onProgress(98);
         const dataUrl = reader.result as string;
         // Hash determinístico simple para auditoría
         let hash = 0;
-        for (let i = 0; i < dataUrl.length; i++) {
+        for (let i = 0; i < Math.min(dataUrl.length, 500000); i++) {
           hash = (hash << 5) - hash + dataUrl.charCodeAt(i);
           hash |= 0;
         }
         const sha256 = `sha256-${Math.abs(hash).toString(16).padStart(16, "0")}-${Date.now().toString(16)}`;
+        if (onProgress) onProgress(100);
         resolve({ dataUrl, sha256 });
       };
+
+      reader.onerror = (err) => reject(err);
       reader.readAsDataURL(file);
     });
   };
 
-  // 1. Guardar Radicación Inicial
-  const handleGuardarRadicacion = async (e: React.FormEvent) => {
+  // Helper para abrir soporte en el visor interno optimizado
+  const abrirSoporte = (
+    soporte?: SoporteDocumentoLicencia,
+    tituloDefecto?: string
+  ) => {
+    if (!soporte) return;
+    onAbrirVisor({
+      titulo: tituloDefecto || soporte.nombreArchivo,
+      nombreArchivo: soporte.nombreArchivo,
+      mimeType: soporte.mimeType || "application/pdf",
+      tamanoBytes: soporte.tamanoBytes || 1024000,
+      sha256Hash: soporte.sha256Hash || soporte.sha256 || "sha256-verified",
+      subidoPor: soporte.subidoPor || currentUser.nombreCompleto,
+      subidoEn: soporte.subidoEn || new Date().toISOString(),
+      archivoDataUrl: soporte.archivoDataUrl || soporte.url
+    });
+  };
+
+  // =========================================================================
+  // CARGA DIRECTA DE DOCUMENTOS DEL CHECKLIST (SIN MODAL NI PANTALLA SECUNDARIA)
+  // =========================================================================
+  const handleSubirArchivoDirecto = async (
+    doc: DocumentoRadicacionPlaneacion,
+    file: File,
+    slotTipo?: "excel" | "pdf"
+  ) => {
+    if (!puedeOperar) {
+      setErrorAccion("No tiene permisos para modificar la documentación de Fase 5.");
+      return;
+    }
+
+    const key = `${doc.itemNumero}-${slotTipo || "main"}`;
+    setSubiendoDocKey(key);
+    setProgresoCarga(15);
+    setErrorAccion(null);
+
+    // Animación de progreso para archivos pesados o extensos
+    const intervaloProgreso = setInterval(() => {
+      setProgresoCarga((prev) => (prev < 85 ? prev + 15 : prev));
+    }, 180);
+
+    try {
+      const p = await procesarArchivo(file, (pct) => {
+        setProgresoCarga(Math.max(pct, 20));
+      });
+
+      clearInterval(intervaloProgreso);
+      setProgresoCarga(92);
+
+      const res = await authFetch(
+        `/api/expedientes/${expediente.id}/licencia/documentos-planeacion`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            idDoc: doc.id,
+            itemNumero: doc.itemNumero,
+            tipo: doc.tipo,
+            nombre: doc.nombre,
+            descripcion: doc.descripcion,
+            esObligatorio: doc.esObligatorio,
+            slotTipo,
+            nombreArchivo: file.name,
+            mimeType:
+              file.type ||
+              (file.name.endsWith(".xlsx")
+                ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                : file.name.endsWith(".xls")
+                ? "application/vnd.ms-excel"
+                : file.name.endsWith(".zip")
+                ? "application/zip"
+                : "application/pdf"),
+            tamanoBytes: file.size,
+            archivoDataUrl: p.dataUrl,
+            sha256Hash: p.sha256
+          })
+        }
+      );
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al cargar archivo.");
+
+      setProgresoCarga(100);
+      setExitoAccion(
+        `Documento "${doc.nombre}"${
+          slotTipo ? ` (${slotTipo.toUpperCase()})` : ""
+        } cargado y sincronizado exitosamente.`
+      );
+      await onActualizarExpediente();
+    } catch (err: any) {
+      clearInterval(intervaloProgreso);
+      setErrorAccion(err.message || "Error al subir el archivo.");
+    } finally {
+      setTimeout(() => {
+        setSubiendoDocKey(null);
+        setProgresoCarga(0);
+      }, 500);
+    }
+  };
+
+  // =========================================================================
+  // ELIMINACIÓN DIRECTA DE ARCHIVO DEL CHECKLIST (SIN REDIRECCIONES)
+  // =========================================================================
+  const handleEliminarArchivoDirecto = async (
+    doc: DocumentoRadicacionPlaneacion,
+    slotTipo?: "excel" | "pdf"
+  ) => {
+    if (!puedeOperar) {
+      setErrorAccion("No tiene permisos para modificar la documentación de Fase 5.");
+      return;
+    }
+
+    const confirmacion = window.confirm(
+      `¿Está seguro de remover el archivo ${
+        slotTipo ? `(${slotTipo.toUpperCase()}) ` : ""
+      }de "${doc.nombre}"?`
+    );
+    if (!confirmacion) return;
+
+    setCargandoAccion(true);
+    setErrorAccion(null);
+    try {
+      const url = `/api/expedientes/${expediente.id}/licencia/documentos-planeacion/${
+        doc.id
+      }${slotTipo ? `?slot=${slotTipo}` : ""}`;
+      const res = await authFetch(url, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al desvincular archivo.");
+
+      setExitoAccion(
+        `Archivo removido de "${doc.nombre}". Puede cargar uno nuevo cuando lo requiera.`
+      );
+      await onActualizarExpediente();
+    } catch (err: any) {
+      setErrorAccion(err.message || "Error al desvincular archivo.");
+    } finally {
+      setCargandoAccion(false);
+    }
+  };
+
+  // =========================================================================
+  // GUARDAR RADICACIÓN INICIAL INLINE (SIN MODAL)
+  // =========================================================================
+  const handleGuardarRadicacionInline = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formNumRadicado.trim() || !formFechaRad) {
       setErrorAccion("El número de radicado y la fecha de radicación son obligatorios.");
       return;
     }
 
-    setCargandoAccion(true);
+    setGuardandoRadicacion(true);
     setErrorAccion(null);
     try {
-      let archivoDataUrl: string | undefined = undefined;
-      let sha256Hash: string | undefined = undefined;
-
-      if (archivoRad) {
-        const p = await procesarArchivo(archivoRad);
-        archivoDataUrl = p.dataUrl;
-        sha256Hash = p.sha256;
-      }
-
-      const res = await authFetch(`/api/expedientes/${expediente.id}/licencia/radicar`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          entidadMunicipal: formEntidad.trim(),
-          numeroRadicado: formNumRadicado.trim(),
-          fechaRadicacion: new Date(formFechaRad).toISOString(),
-          observaciones: formObsRad.trim(),
-          nombreArchivo: archivoRad ? archivoRad.name : undefined,
-          mimeType: archivoRad ? archivoRad.type : undefined,
-          tamanoBytes: archivoRad ? archivoRad.size : undefined,
-          archivoDataUrl,
-          sha256Hash
-        })
-      });
+      const res = await authFetch(
+        `/api/expedientes/${expediente.id}/licencia/radicar`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entidadMunicipal: formEntidad.trim(),
+            numeroRadicado: formNumRadicado.trim(),
+            fechaRadicacion: new Date(formFechaRad).toISOString(),
+            observaciones: formObsRad.trim()
+          })
+        }
+      );
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error al registrar radicación");
+      if (!res.ok) throw new Error(data.error || "Error al registrar radicación.");
 
-      setExitoAccion("Radicación de licencia formalizada con éxito.");
-      setModalRadicar(false);
-      setArchivoRad(null);
+      setExitoAccion("Datos oficiales de radicación municipal guardados exitosamente.");
       await onActualizarExpediente();
     } catch (err: any) {
-      setErrorAccion(err.message || "Error al procesar la solicitud.");
+      setErrorAccion(err.message || "Error al guardar radicación.");
     } finally {
-      setCargandoAccion(false);
+      setGuardandoRadicacion(false);
     }
   };
 
-  // 2. Guardar Acta de Observaciones
-  const handleGuardarObservaciones = async (e: React.FormEvent) => {
+  // Carga directa de comprobante de radicación municipal
+  const handleCargarComprobanteRadicacion = async (file: File) => {
+    setGuardandoRadicacion(true);
+    setErrorAccion(null);
+    try {
+      const p = await procesarArchivo(file);
+      const res = await authFetch(
+        `/api/expedientes/${expediente.id}/licencia/radicar`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entidadMunicipal: formEntidad.trim(),
+            numeroRadicado: formNumRadicado.trim() || "RAD-S-N",
+            fechaRadicacion: new Date(formFechaRad).toISOString(),
+            observaciones: formObsRad.trim(),
+            nombreArchivo: file.name,
+            mimeType: file.type || "application/pdf",
+            tamanoBytes: file.size,
+            archivoDataUrl: p.dataUrl,
+            sha256Hash: p.sha256
+          })
+        }
+      );
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al adjuntar comprobante.");
+
+      setExitoAccion("Comprobante de radicación adjuntado correctamente.");
+      await onActualizarExpediente();
+    } catch (err: any) {
+      setErrorAccion(err.message || "Error al subir comprobante de radicación.");
+    } finally {
+      setGuardandoRadicacion(false);
+    }
+  };
+
+  // =========================================================================
+  // GUARDAR RESOLUCIÓN DE LICENCIA APROBADA INLINE (SIN MODAL)
+  // =========================================================================
+  const handleGuardarResolucionInline = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formNumResolucion.trim() || !formFechaExpedicion) {
+      setErrorAccion("El número de resolución y la fecha de expedición son obligatorios.");
+      return;
+    }
+
+    const tieneSoportesPrevios =
+      (tramite.soporteLicenciaAprobadaDocs &&
+        tramite.soporteLicenciaAprobadaDocs.length > 0) ||
+      !!tramite.soporteLicenciaAprobada;
+
+    if (archivosAprobarNuevos.length === 0 && !tieneSoportesPrevios) {
+      setErrorAccion(
+        "Debe adjuntar al menos un archivo digital de soporte de la Licencia expedida (Resolución o Planos sellados)."
+      );
+      return;
+    }
+
+    setGuardandoResolucion(true);
+    setErrorAccion(null);
+    try {
+      let docsNuevosProcesados: any[] = [];
+      if (archivosAprobarNuevos.length > 0) {
+        docsNuevosProcesados = await Promise.all(
+          archivosAprobarNuevos.map(async (f) => {
+            const p = await procesarArchivo(f);
+            return {
+              nombreArchivo: f.name,
+              mimeType: f.type || "application/pdf",
+              tamanoBytes: f.size,
+              archivoDataUrl: p.dataUrl,
+              sha256Hash: p.sha256
+            };
+          })
+        );
+      }
+
+      const res = await authFetch(
+        `/api/expedientes/${expediente.id}/licencia/aprobar`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            numeroResolucionLicencia: formNumResolucion.trim(),
+            fechaExpedicionLicencia: new Date(formFechaExpedicion).toISOString(),
+            fechaEjecutoriaLicencia: formFechaEjecutoria
+              ? new Date(formFechaEjecutoria).toISOString()
+              : undefined,
+            vigenciaMeses: Number(formVigenciaMeses),
+            observacionesFinales: formObsFinales.trim(),
+            archivos:
+              docsNuevosProcesados.length > 0 ? docsNuevosProcesados : undefined
+          })
+        }
+      );
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al guardar resolución.");
+
+      setExitoAccion(
+        "¡Licencia de Construcción APROBADA! Resolución y documentos oficiales registrados."
+      );
+      setArchivosAprobarNuevos([]);
+      await onActualizarExpediente();
+    } catch (err: any) {
+      setErrorAccion(err.message || "Error al registrar aprobación de la licencia.");
+    } finally {
+      setGuardandoResolucion(false);
+    }
+  };
+
+  // =========================================================================
+  // GESTIÓN DE SUBSANACIONES INLINE
+  // =========================================================================
+  const handleGuardarObservacionesInline = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formDetalleObs.trim() || !formFechaObs) {
-      setErrorAccion("La fecha y el detalle de las observaciones son obligatorios.");
+      setErrorAccion("La fecha y el detalle del requerimiento son obligatorios.");
       return;
     }
 
@@ -293,43 +608,47 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
         sha256Hash = p.sha256;
       }
 
-      const res = await authFetch(`/api/expedientes/${expediente.id}/licencia/observaciones`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          numeroActaObservaciones: formNumActaObs.trim(),
-          fechaObservaciones: new Date(formFechaObs).toISOString(),
-          detalleObservaciones: formDetalleObs.trim(),
-          fechaLimiteSubsanacion: formFechaLimite ? new Date(formFechaLimite).toISOString() : undefined,
-          nombreArchivo: archivoObs ? archivoObs.name : undefined,
-          mimeType: archivoObs ? archivoObs.type : undefined,
-          tamanoBytes: archivoObs ? archivoObs.size : undefined,
-          archivoDataUrl,
-          sha256Hash
-        })
-      });
+      const res = await authFetch(
+        `/api/expedientes/${expediente.id}/licencia/observaciones`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            numeroActaObservaciones: formNumActaObs.trim(),
+            fechaObservaciones: new Date(formFechaObs).toISOString(),
+            detalleObservaciones: formDetalleObs.trim(),
+            fechaLimiteSubsanacion: formFechaLimite
+              ? new Date(formFechaLimite).toISOString()
+              : undefined,
+            nombreArchivo: archivoObs ? archivoObs.name : undefined,
+            mimeType: archivoObs ? archivoObs.type : undefined,
+            tamanoBytes: archivoObs ? archivoObs.size : undefined,
+            archivoDataUrl,
+            sha256Hash
+          })
+        }
+      );
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error al registrar observaciones");
+      if (!res.ok) throw new Error(data.error || "Error al registrar requerimiento.");
 
-      setExitoAccion("Acta de observaciones registrada correctamente.");
-      setModalObservaciones(false);
-      setArchivoObs(null);
+      setExitoAccion("Ronda de observaciones registrada correctamente.");
+      setMostrarFormNuevaObs(false);
       setFormDetalleObs("");
       setFormNumActaObs("");
+      setArchivoObs(null);
       await onActualizarExpediente();
     } catch (err: any) {
-      setErrorAccion(err.message || "Error al registrar observaciones.");
+      setErrorAccion(err.message || "Error al registrar requerimiento.");
     } finally {
       setCargandoAccion(false);
     }
   };
 
-  // 3. Guardar Subsanación
-  const handleGuardarSubsanacion = async (e: React.FormEvent) => {
+  const handleGuardarSubsanacionInline = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formNumRadSub.trim() || !formFechaRadSub || !formDetalleSub.trim()) {
-      setErrorAccion("El número de radicado, fecha y detalle de respuesta son obligatorios.");
+    if (!rondaParaSubsanar || !formNumRadSub.trim() || !formFechaRadSub || !formDetalleSub.trim()) {
+      setErrorAccion("El radicado, fecha y detalle de subsanación son obligatorios.");
       return;
     }
 
@@ -345,30 +664,33 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
         sha256Hash = p.sha256;
       }
 
-      const res = await authFetch(`/api/expedientes/${expediente.id}/licencia/subsanar`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rondaId: modalSubsanar?.id,
-          numeroRadicadoSubsanacion: formNumRadSub.trim(),
-          fechaRadicacionSubsanacion: new Date(formFechaRadSub).toISOString(),
-          detalleRespuestaSubsanacion: formDetalleSub.trim(),
-          nombreArchivo: archivoSub ? archivoSub.name : undefined,
-          mimeType: archivoSub ? archivoSub.type : undefined,
-          tamanoBytes: archivoSub ? archivoSub.size : undefined,
-          archivoDataUrl,
-          sha256Hash
-        })
-      });
+      const res = await authFetch(
+        `/api/expedientes/${expediente.id}/licencia/subsanar`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            rondaId: rondaParaSubsanar.id,
+            numeroRadicadoSubsanacion: formNumRadSub.trim(),
+            fechaRadicacionSubsanacion: new Date(formFechaRadSub).toISOString(),
+            detalleRespuestaSubsanacion: formDetalleSub.trim(),
+            nombreArchivo: archivoSub ? archivoSub.name : undefined,
+            mimeType: archivoSub ? archivoSub.type : undefined,
+            tamanoBytes: archivoSub ? archivoSub.size : undefined,
+            archivoDataUrl,
+            sha256Hash
+          })
+        }
+      );
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error al radicar subsanación");
+      if (!res.ok) throw new Error(data.error || "Error al radicar subsanación.");
 
-      setExitoAccion("Subsanación radicada con éxito ante la entidad municipal.");
-      setModalSubsanar(null);
-      setArchivoSub(null);
+      setExitoAccion("Subsanación técnica radicada exitosamente ante la entidad.");
+      setRondaParaSubsanar(null);
       setFormNumRadSub("");
       setFormDetalleSub("");
+      setArchivoSub(null);
       await onActualizarExpediente();
     } catch (err: any) {
       setErrorAccion(err.message || "Error al radicar subsanación.");
@@ -377,117 +699,16 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
     }
   };
 
-  // 4. Guardar Aprobación de Licencia (CAMBIO 8: Soporte multi-documento)
-  const handleGuardarAprobacion = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formNumResolucion.trim() || !formFechaExpedicion) {
-      setErrorAccion("El número de resolución/licencia y la fecha de expedición son obligatorios.");
-      return;
-    }
-
-    const tieneDocsExistentes = (tramite.soporteLicenciaAprobadaDocs && tramite.soporteLicenciaAprobadaDocs.length > 0) || !!tramite.soporteLicenciaAprobada;
-    if (archivosAprobar.length === 0 && !archivoAprobar && !tieneDocsExistentes) {
-      setErrorAccion("Debe adjuntar al menos un documento oficial de soporte de la Licencia expedida.");
-      return;
-    }
-
-    setCargandoAccion(true);
-    setErrorAccion(null);
-    try {
-      const docsAProcesar = archivosAprobar.length > 0 ? archivosAprobar : (archivoAprobar ? [archivoAprobar] : []);
-      let documentosSoporte: any[] = [];
-
-      if (docsAProcesar.length > 0) {
-        documentosSoporte = await Promise.all(
-          docsAProcesar.map(async (f) => {
-            const p = await procesarArchivo(f);
-            return {
-              nombreArchivo: f.name,
-              mimeType: f.type || "application/pdf",
-              tamanoBytes: f.size,
-              archivoDataUrl: p.dataUrl,
-              sha256Hash: p.sha256
-            };
-          })
-        );
-      }
-
-      const res = await authFetch(`/api/expedientes/${expediente.id}/licencia/aprobar`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          numeroResolucionLicencia: formNumResolucion.trim(),
-          fechaExpedicionLicencia: new Date(formFechaExpedicion).toISOString(),
-          fechaEjecutoriaLicencia: formFechaEjecutoria ? new Date(formFechaEjecutoria).toISOString() : undefined,
-          vigenciaMeses: Number(formVigenciaMeses),
-          observacionesFinales: formObsFinales.trim(),
-          documentosSoporte: documentosSoporte.length > 0 ? documentosSoporte : undefined,
-          nombreArchivo: documentosSoporte[0]?.nombreArchivo || archivoAprobar?.name || tramite.soporteLicenciaAprobada?.nombreArchivo,
-          mimeType: documentosSoporte[0]?.mimeType || archivoAprobar?.type || tramite.soporteLicenciaAprobada?.mimeType || "application/pdf",
-          tamanoBytes: documentosSoporte[0]?.tamanoBytes || archivoAprobar?.size || tramite.soporteLicenciaAprobada?.tamanoBytes || 1500000,
-          archivoDataUrl: documentosSoporte[0]?.archivoDataUrl || tramite.soporteLicenciaAprobada?.archivoDataUrl,
-          sha256Hash: documentosSoporte[0]?.sha256Hash || tramite.soporteLicenciaAprobada?.sha256Hash
-        })
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error al registrar aprobación de la licencia");
-
-      setExitoAccion("¡Licencia de Construcción registrada y aprobada formalmente!");
-      setModalAprobar(false);
-      setArchivoAprobar(null);
-      setArchivosAprobar([]);
-      await onActualizarExpediente();
-    } catch (err: any) {
-      setErrorAccion(err.message || "Error al aprobar la licencia.");
-    } finally {
-      setCargandoAccion(false);
-    }
-  };
-
-  // 5. Guardar Nota en Historial
-  const handleGuardarNota = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formTituloNota.trim() || !formDescNota.trim()) {
-      setErrorAccion("El título y la descripción de la novedad son obligatorios.");
-      return;
-    }
-
-    setCargandoAccion(true);
-    setErrorAccion(null);
-    try {
-      const res = await authFetch(`/api/expedientes/${expediente.id}/licencia/historial`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          titulo: formTituloNota.trim(),
-          descripcion: formDescNota.trim()
-        })
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error al registrar nota en historial");
-
-      setExitoAccion("Novedad agregada al historial de la licencia.");
-      setModalNota(false);
-      setFormTituloNota("");
-      setFormDescNota("");
-      await onActualizarExpediente();
-    } catch (err: any) {
-      setErrorAccion(err.message || "Error al registrar nota.");
-    } finally {
-      setCargandoAccion(false);
-    }
-  };
-
-  // 6. Avanzar a Fase 6
+  // =========================================================================
+  // AVANZAR FORMALMENTE A FASE 6
+  // =========================================================================
   const handleAvanzarFase6 = () => {
     if (estado !== "aprobada") {
       setModalRequisitosPendientesF6(true);
       return;
     }
     if (!puedeAvanzarFase) {
-      setErrorAccion("Acción restringida: solo Ingeniería, Supervisión o Administrador pueden avanzar de fase.");
+      setErrorAccion("Acción restringida: solo Ingeniería, Supervisión o Administrador pueden avanzar a Fase 6.");
       return;
     }
     setModalConfirmarAvanzarF6(true);
@@ -502,10 +723,10 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error al avanzar a Fase 6");
+      if (!res.ok) throw new Error(data.error || "Error al avanzar a Fase 6.");
 
       setModalConfirmarAvanzarF6(false);
-      setExitoAccion("Expediente avanzado con éxito a Fase 6: En Postulación.");
+      setExitoAccion("Expediente avanzado exitosamente a Fase 6: En Postulación.");
       await onActualizarExpediente(6);
     } catch (err: any) {
       setErrorAccion(err.message || "Error al avanzar a Fase 6.");
@@ -514,130 +735,7 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
     }
   };
 
-  // Helper para abrir visor
-  const abrirSoporte = (soporte?: SoporteDocumentoLicencia, tituloDefecto?: string) => {
-    if (!soporte) return;
-    onAbrirVisor({
-      titulo: tituloDefecto || soporte.nombreArchivo,
-      nombreArchivo: soporte.nombreArchivo,
-      mimeType: soporte.mimeType || "application/pdf",
-      tamanoBytes: soporte.tamanoBytes || 1024000,
-      sha256Hash: soporte.sha256Hash || soporte.sha256 || "sha256-demo",
-      subidoPor: soporte.subidoPor || "Ingeniería VRD",
-      subidoEn: soporte.subidoEn || new Date().toISOString(),
-      archivoDataUrl: soporte.archivoDataUrl || soporte.url
-    });
-  };
-
-  // Handler para subir / reemplazar documento de planeación
-  const handleGuardarDocPlaneacion = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!modalCargarDocPlaneacion || !archivoDocPlaneacion) {
-      setErrorAccion("Debe seleccionar un archivo válido (PDF o Excel).");
-      return;
-    }
-    setCargandoAccion(true);
-    setErrorAccion(null);
-    try {
-      const p = await procesarArchivo(archivoDocPlaneacion);
-      const res = await authFetch(`/api/expedientes/${expediente.id}/licencia/documentos-planeacion`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          idDoc: modalCargarDocPlaneacion.id,
-          tipo: modalCargarDocPlaneacion.tipo,
-          nombre: modalCargarDocPlaneacion.nombre,
-          descripcion: modalCargarDocPlaneacion.descripcion,
-          esObligatorio: modalCargarDocPlaneacion.esObligatorio,
-          nombreArchivo: archivoDocPlaneacion.name,
-          mimeType: archivoDocPlaneacion.type || (archivoDocPlaneacion.name.endsWith(".xlsx") ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/pdf"),
-          tamanoBytes: archivoDocPlaneacion.size,
-          archivoDataUrl: p.dataUrl,
-          sha256Hash: p.sha256,
-          observaciones: obsDocPlaneacion.trim() || undefined
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error al subir documento técnico de planeación.");
-      setExitoAccion(`Documento "${modalCargarDocPlaneacion.nombre}" registrado exitosamente.`);
-      setModalCargarDocPlaneacion(null);
-      setArchivoDocPlaneacion(null);
-      setObsDocPlaneacion("");
-      await onActualizarExpediente();
-    } catch (err: any) {
-      setErrorAccion(err.message || "Error al registrar documento.");
-    } finally {
-      setCargandoAccion(false);
-    }
-  };
-
-  // Handler para crear y subir nuevo documento complementario
-  const handleCrearNuevoDocPlaneacion = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!nuevoDocNombre.trim() || !archivoDocPlaneacion) {
-      setErrorAccion("El nombre del documento y el archivo son obligatorios.");
-      return;
-    }
-    setCargandoAccion(true);
-    setErrorAccion(null);
-    try {
-      const p = await procesarArchivo(archivoDocPlaneacion);
-      const res = await authFetch(`/api/expedientes/${expediente.id}/licencia/documentos-planeacion`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tipo: nuevoDocTipo,
-          nombre: nuevoDocNombre.trim(),
-          descripcion: nuevoDocDesc.trim() || "Documento complementario de radicación técnica.",
-          esObligatorio: nuevoDocObligatorio,
-          nombreArchivo: archivoDocPlaneacion.name,
-          mimeType: archivoDocPlaneacion.type || "application/pdf",
-          tamanoBytes: archivoDocPlaneacion.size,
-          archivoDataUrl: p.dataUrl,
-          sha256Hash: p.sha256,
-          observaciones: obsDocPlaneacion.trim() || undefined
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error al registrar documento complementario.");
-      setExitoAccion("Documento complementario creado y radicado exitosamente.");
-      setModalNuevoDocPlaneacion(false);
-      setNuevoDocNombre("");
-      setNuevoDocDesc("");
-      setNuevoDocTipo("otro");
-      setNuevoDocObligatorio(false);
-      setArchivoDocPlaneacion(null);
-      setObsDocPlaneacion("");
-      await onActualizarExpediente();
-    } catch (err: any) {
-      setErrorAccion(err.message || "Error al crear documento.");
-    } finally {
-      setCargandoAccion(false);
-    }
-  };
-
-  // Handler para eliminar / desvincular documento de planeación
-  const handleEliminarDocPlaneacion = async () => {
-    if (!modalEliminarDocPlaneacion) return;
-    setCargandoAccion(true);
-    setErrorAccion(null);
-    try {
-      const res = await authFetch(`/api/expedientes/${expediente.id}/licencia/documentos-planeacion/${modalEliminarDocPlaneacion.id}`, {
-        method: "DELETE"
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error al desvincular documento.");
-      setExitoAccion(`Documento "${modalEliminarDocPlaneacion.nombre}" desvinculado correctamente.`);
-      setModalEliminarDocPlaneacion(null);
-      await onActualizarExpediente();
-    } catch (err: any) {
-      setErrorAccion(err.message || "Error al desvincular documento.");
-    } finally {
-      setCargandoAccion(false);
-    }
-  };
-
-  // Configuración visual del estado único de trámite
+  // Configuración visual del badge de estado
   const getBadgeEstado = () => {
     switch (estado) {
       case "aprobada":
@@ -646,7 +744,8 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
           clase: "bg-emerald-100 text-emerald-800 border-emerald-300",
           icono: ShieldCheck,
           indicadorColor: "bg-emerald-500",
-          descripcion: "La Licencia de Construcción cuenta con resolución oficial ejecutoriada y soporte documental verificado."
+          descripcion:
+            "La Licencia de Construcción cuenta con resolución oficial ejecutoriada y soportes verificados."
         };
       case "con_observaciones":
         return {
@@ -654,15 +753,17 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
           clase: "bg-amber-100 text-amber-900 border-amber-300",
           icono: AlertTriangle,
           indicadorColor: "bg-amber-500",
-          descripcion: "La entidad municipal o curaduría emitió requerimientos técnicos. Se encuentra en etapa de subsanación."
+          descripcion:
+            "La curaduría o secretaría de planeación emitió observaciones técnicas. Trámite en subsanación."
         };
       case "radicado_en_revision":
         return {
-          texto: "Radicado — En Trámite Municipal",
+          texto: "Radicado — En Estudio Municipal",
           clase: "bg-blue-100 text-blue-900 border-blue-300",
           icono: Clock,
           indicadorColor: "bg-blue-500",
-          descripcion: "Solicitud radicada formalmente ante la entidad municipal. En estudio técnico de planeación / curaduría."
+          descripcion:
+            "Solicitud radicada formalmente ante la entidad territorial. En estudio de viabilidad urbanística."
         };
       case "desistida_rechazada":
         return {
@@ -679,7 +780,8 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
           clase: "bg-slate-100 text-slate-800 border-slate-300",
           icono: Building2,
           indicadorColor: "bg-slate-400",
-          descripcion: "El expediente cuenta con los documentos técnicos de Fase 4 y está listo para ser radicado ante la entidad municipal."
+          descripcion:
+            "Cargue y verifique el checklist de los 15 documentos obligatorios para radicar ante la curaduría o planeación."
         };
     }
   };
@@ -687,23 +789,26 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
   const badge = getBadgeEstado();
   const IconoBadge = badge.icono;
   const rondas = tramite.rondasSubsanacion || [];
-  const ultimaRonda = rondas.length > 0 ? rondas[rondas.length - 1] : null;
-  const rondaPendienteSubsanar = ultimaRonda && !ultimaRonda.fechaRadicacionSubsanacion ? ultimaRonda : null;
+  const soportesLicenciaList = (tramite.soporteLicenciaAprobadaDocs && tramite.soporteLicenciaAprobadaDocs.length > 0)
+    ? tramite.soporteLicenciaAprobadaDocs
+    : (tramite.soporteLicenciaAprobada ? [tramite.soporteLicenciaAprobada] : []);
 
   return (
     <div className="space-y-6" id="fase5-seguimiento-licencia-root">
-      {/* MENSAJES DE ALERTA O FEEDBACK */}
+      {/* ========================================================================= */}
+      {/* 1. MENSAJES DE ALERTA O FEEDBACK                                         */}
+      {/* ========================================================================= */}
       {errorAccion && (
-        <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-sm flex items-start justify-between">
-          <div className="flex items-center space-x-2">
-            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
-            <span>{errorAccion}</span>
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-800 text-sm flex items-start justify-between shadow-2xs">
+          <div className="flex items-center space-x-2.5">
+            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+            <span className="font-medium">{errorAccion}</span>
           </div>
           <button
             type="button"
             aria-label="Cerrar alerta de error"
             onClick={() => setErrorAccion(null)}
-            className="text-rose-500 hover:text-rose-700"
+            className="text-rose-500 hover:text-rose-700 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -711,31 +816,33 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
       )}
 
       {exitoAccion && (
-        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-sm flex items-start justify-between">
-          <div className="flex items-center space-x-2">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-            <span>{exitoAccion}</span>
+        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-sm flex items-start justify-between shadow-2xs">
+          <div className="flex items-center space-x-2.5">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+            <span className="font-medium">{exitoAccion}</span>
           </div>
           <button
             type="button"
-            aria-label="Cerrar alerta de confirmación"
+            aria-label="Cerrar confirmación"
             onClick={() => setExitoAccion(null)}
-            className="text-emerald-500 hover:text-emerald-700"
+            className="text-emerald-500 hover:text-emerald-700 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* BANNER INFORMATIVO: FASE 5 CULMINADA (MODO SOLO LECTURA) */}
+      {/* BANNER SOLO LECTURA SI FASE YA AVANZADA */}
       {estaBloqueadaPorFaseAvanzada && (
         <div className="p-4 bg-slate-50 border border-slate-300 rounded-2xl text-slate-800 text-xs flex items-center justify-between shadow-2xs">
           <div className="flex items-center space-x-2.5">
             <Lock className="w-5 h-5 text-slate-600 shrink-0" />
             <div>
-              <strong className="block font-bold text-slate-900 text-sm">Fase 5 Culminada (Modo Solo Lectura)</strong>
+              <strong className="block font-bold text-slate-900 text-sm">
+                Fase 5 Culminada (Modo Consulta y Auditoría)
+              </strong>
               <span className="text-slate-600">
-                La Licencia de Construcción fue obtenida y el expediente avanzó a Fase 6: En Postulación. Los registros y soportes de esta fase se conservan para fines de auditoría y consulta técnica.
+                La Licencia de Construcción fue obtenida y el expediente avanzó a Fase 6: En Postulación. Los 15 documentos oficiales y registros de radicación se conservan de forma inmutable.
               </span>
             </div>
           </div>
@@ -745,13 +852,19 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
         </div>
       )}
 
-      {/* PANEL SUPERIOR: ESTADO ÚNICO DE TRÁMITE Y ACCIONES GLOBALES */}
+      {/* ========================================================================= */}
+      {/* 2. HEADER UNIFICADO: ESTADO DE TRÁMITE, PROGRESO Y ACCIÓN DE AVANCE        */}
+      {/* ========================================================================= */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div>
-            <div className="flex items-center space-x-2">
+            <div className="flex flex-wrap items-center space-x-2">
               <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Fase 5 • Seguimiento de Trámite
+                Fase 5 • Trámite de Licencia de Construcción
+              </span>
+              <span className="text-slate-300">•</span>
+              <span className="text-xs text-blue-700 font-mono font-semibold">
+                {expediente.codigoVisible || expediente.id}
               </span>
               <span className="text-slate-300">•</span>
               <span className="text-xs text-slate-500 font-medium">
@@ -759,19 +872,21 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
               </span>
             </div>
             <h3 className="text-xl font-bold text-slate-900 mt-1 flex items-center space-x-2.5">
-              <span>Licencia de Construcción (Planeación / Curaduría)</span>
+              <span>Gestión y Licenciamiento Municipal (Vista Única de Carga)</span>
             </h3>
             <p className="text-xs text-slate-600 mt-1 max-w-2xl leading-relaxed">
-              {badge.descripcion}
+              Consolidación en una sola pantalla de los 15 documentos técnicos y jurídicos oficiales para radicación territorial, con soporte integrado de radicación municipal y archivos pesados.
             </p>
           </div>
 
-          {/* INDICADOR ÚNICO DE TRÁMITE (REEMPLAZA EL ANTERIOR '4 DE 5 ACEPTADOS') */}
           <div className="flex flex-wrap items-center gap-3">
+            {/* BADGE DE ESTADO SEMÁNTICO */}
             <div
               className={`px-3.5 py-2 rounded-xl border flex items-center space-x-2 text-sm font-semibold shadow-2xs ${badge.clase}`}
             >
-              <span className={`w-2.5 h-2.5 rounded-full ${badge.indicadorColor} animate-pulse`} />
+              <span
+                className={`w-2.5 h-2.5 rounded-full ${badge.indicadorColor} animate-pulse`}
+              />
               <IconoBadge className="w-4 h-4 shrink-0" />
               <span>{badge.texto}</span>
             </div>
@@ -784,7 +899,7 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
                 className="px-4 py-2 rounded-xl text-sm font-semibold flex items-center space-x-2 bg-slate-100 text-slate-500 border border-slate-300 cursor-not-allowed shadow-2xs"
               >
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <span>Fase 5 Culminada (Avanzado a Fase 6)</span>
+                <span>Fase 5 Culminada (En Fase {expediente.faseActual})</span>
               </button>
             ) : (
               <button
@@ -801,1079 +916,1206 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
                 }`}
                 title={
                   estado !== "aprobada"
-                    ? "Haga clic para ver los requisitos pendientes para avanzar a Fase 6 (Resolución de Licencia)."
-                    : !puedeAvanzarFase
-                    ? "Acción disponible para Ingeniería, Supervisión y Administrador."
+                    ? "Requiere Licencia Aprobada para habilitar el avance a Fase 6."
                     : "Avanzar formalmente el expediente a Fase 6: En Postulación"
                 }
               >
-                {cargandoAccion ? <Clock className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+                {cargandoAccion ? (
+                  <Clock className="w-4 h-4 animate-spin" />
+                ) : (
+                  <ArrowRight className="w-4 h-4" />
+                )}
                 <span>Avanzar a Fase 6</span>
               </button>
             )}
           </div>
         </div>
 
-        {/* BANNER ORIENTADOR DE ESTADO PARA AVANCE A FASE 6 */}
-        {estado !== "aprobada" && (
-          <div className="mt-3.5 p-3 rounded-xl bg-amber-50/80 border border-amber-200 text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-            <div className="flex items-start sm:items-center space-x-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5 sm:mt-0" />
-              <span>
-                <strong>Requisito para Fase 6:</strong> La Licencia de Construcción debe estar en estado <strong>Aprobada</strong> con su acto administrativo y resolución cargada. Actualmente el trámite está en estado <em>«{badge.texto}»</em>.
+        {/* BARRA DE PROGRESO DE LOS 15 DOCUMENTOS OFICIALES */}
+        <div className="mt-4 pt-4 border-t border-slate-100">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs mb-2">
+            <div className="flex items-center space-x-2">
+              <span className="font-bold text-slate-800">
+                Avance del Checklist Documental Oficial:
+              </span>
+              <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 font-mono font-bold border border-blue-200">
+                {statsChecklist.listos} de {statsChecklist.total} documentos listos
+              </span>
+              <span className="text-slate-400">•</span>
+              <span className="text-slate-600">
+                ({statsChecklist.obligatoriosListos} de {statsChecklist.totalObligatorios} obligatorios)
               </span>
             </div>
-            {puedeOperar && (
-              <button
-                type="button"
-                onClick={() => {
-                  setFormNumResolucion(tramite.numeroResolucionLicencia || "");
-                  setModalAprobar(true);
-                }}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold text-xs shrink-0 self-start sm:self-auto shadow-2xs cursor-pointer"
-              >
-                Registrar Licencia Aprobada
-              </button>
-            )}
+            <span className="font-mono font-bold text-slate-900 text-sm">
+              {statsChecklist.porcentajeGlobal}% completado
+            </span>
           </div>
-        )}
 
-        {/* BARRA DE ROLES Y VISIBILIDAD */}
-      <div className="mt-4 pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
-        <div className="flex items-center space-x-2">
-          <span className="font-semibold text-slate-700">Responsable de gestión:</span>
-          <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200 font-medium">
-            Ingeniería (Gestor Directo)
-          </span>
-          <span className="text-slate-300">|</span>
-          <span className="font-semibold text-slate-700">Visibilidad y Control:</span>
-          <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 font-medium">
-            Analista Documental & Administrador
-          </span>
+          <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden border border-slate-200/80">
+            <div
+              className={`h-full transition-all duration-300 rounded-full ${
+                statsChecklist.porcentajeGlobal === 100
+                  ? "bg-emerald-500"
+                  : statsChecklist.porcentajeGlobal > 50
+                  ? "bg-blue-600"
+                  : "bg-amber-500"
+              }`}
+              style={{ width: `${statsChecklist.porcentajeGlobal}%` }}
+            />
+          </div>
         </div>
-
-        {!estaBloqueadaPorFaseAvanzada && (
-          <div className="flex items-center space-x-2">
-            <button
-              type="button"
-              id="btn-nueva-nota-licencia"
-              onClick={() => {
-                setFormTituloNota("");
-                setFormDescNota("");
-                setModalNota(true);
-              }}
-              className="text-xs font-semibold text-slate-700 hover:text-slate-900 flex items-center space-x-1 hover:underline cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5 text-slate-500" />
-              <span>Registrar Novedad / Nota</span>
-            </button>
-          </div>
-        )}
       </div>
-    </div>
 
-    {/* COMPONENTE TRASLADADO: F5-01 PRESUPUESTO OFICIAL Y APU DETALLADO */}
-    {(() => {
-      const tieneDocF5_01 = Boolean(
-        requisitoPresupuesto?.documentoAsociado?.versionActual ||
-        (requisitoPresupuesto?.documentoAsociado?.versiones && requisitoPresupuesto.documentoAsociado.versiones.length > 0)
-      );
-
-      const estadoF5_01 = requisitoPresupuesto?.estado === "aceptado"
-        ? "aceptado"
-        : requisitoPresupuesto?.estado === "con_observaciones"
-        ? "con_observaciones"
-        : tieneDocF5_01
-        ? (requisitoPresupuesto?.estado || "recibido_revision")
-        : (requisitoPresupuesto?.estado === "recibido_revision" ? "recibido_revision" : "pendiente_carga");
-
-      return (
-        <div
-          id="card-f5-01-presupuesto"
-          className="p-5 bg-white rounded-2xl border border-slate-200/90 shadow-xs hover:border-slate-300 transition-colors"
-        >
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div className="flex items-start space-x-3.5">
-              <div
-                className={`p-3 rounded-xl ${
-                  estadoF5_01 === "aceptado"
-                    ? "bg-emerald-100 text-emerald-700"
-                    : estadoF5_01 === "recibido_revision"
-                    ? "bg-blue-100 text-blue-700"
-                    : "bg-slate-100 text-slate-700"
-                }`}
-              >
-                <FileSpreadsheet className="w-6 h-6" />
-              </div>
-              <div>
-                <div className="flex items-center space-x-2">
-                  <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
-                    F5-01
-                  </span>
-                  <h4 className="text-sm font-bold text-slate-900">
-                    Presupuesto Oficial y APU Detallado
-                  </h4>
-                  <span className="text-[10px] px-2 py-0.5 bg-slate-100 text-slate-600 rounded-md font-semibold">
-                    Obligatorio
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1 max-w-2xl leading-relaxed">
-                  Análisis de Precios Unitarios regionalizado Cundinamarca y presupuesto oficial de obra desglosado para el subsidio de vivienda rural.
-                </p>
-                <div className="mt-1.5 flex items-center gap-1.5">
-                  <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    <FileSpreadsheet className="w-3 h-3 text-emerald-600" />
-                    <span>Formatos admitidos: Excel (.xlsx, .xls) y PDF (.pdf)</span>
-                  </span>
-                </div>
-
-                {requisitoPresupuesto?.documentoAsociado?.versionActual && (
-                  <div className="text-[11px] text-slate-600 mt-2 flex flex-wrap items-center gap-2 font-mono">
-                    <span className="font-bold text-slate-700">
-                      v{requisitoPresupuesto.documentoAsociado.versionActual.versionNumero}
-                    </span>
-                    <span>•</span>
-                    <span>{requisitoPresupuesto.documentoAsociado.versionActual.nombreArchivoOriginal}</span>
-                    <span>•</span>
-                    <span className="text-slate-400">
-                      Subido: {requisitoPresupuesto.documentoAsociado.versionActual.subidoEn?.split("T")[0]}
-                    </span>
-                  </div>
-                )}
-              </div>
+      {/* ========================================================================= */}
+      {/* 3. SECCIÓN UNIFICADA INLINE: DATOS DE RADICACIÓN Y RESOLUCIÓN (SIN MODAL) */}
+      {/* ========================================================================= */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-2 bg-blue-50 text-blue-700 rounded-xl">
+              <Landmark className="w-5 h-5" />
             </div>
-
-            <div className="flex flex-wrap items-center gap-2 self-end md:self-center">
-              {/* Estado del Requisito */}
-              <span
-                className={`px-3 py-1 rounded-full text-xs font-bold border ${
-                  estadoF5_01 === "aceptado"
-                    ? "bg-emerald-50 text-emerald-700 border-emerald-300"
-                    : estadoF5_01 === "recibido_revision"
-                    ? "bg-blue-50 text-blue-700 border-blue-300"
-                    : estadoF5_01 === "con_observaciones"
-                    ? "bg-amber-50 text-amber-700 border-amber-300"
-                    : "bg-slate-100 text-slate-600 border-slate-300"
-                }`}
-              >
-                {estadoF5_01 === "aceptado"
-                  ? "Aceptado"
-                  : estadoF5_01 === "recibido_revision"
-                  ? "Cargado / En Revisión"
-                  : estadoF5_01 === "con_observaciones"
-                  ? "Con Observaciones"
-                  : "Pendiente por Cargar"}
-              </span>
-
-              {/* Ver en Visor Interno */}
-              {requisitoPresupuesto?.documentoAsociado?.versionActual && (
-                <button
-                  type="button"
-                  id="btn-ver-presupuesto-f5"
-                  onClick={() => {
-                    const ver = requisitoPresupuesto.documentoAsociado!.versionActual!;
-                    onAbrirVisor({
-                      titulo: "Presupuesto Oficial y APU Detallado (F5-01)",
-                      nombreArchivo: ver.nombreArchivoOriginal,
-                      mimeType: ver.mimeType,
-                      sha256Hash: ver.sha256Hash,
-                      tamanoBytes: ver.tamanoBytes,
-                      subidoPor: ver.subidoPorNombre,
-                      subidoEn: ver.subidoEn,
-                      archivoDataUrl: ver.archivoDataUrl
-                    });
-                  }}
-                  className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
-                  title="Abrir en Visor"
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  <span>Ver Archivo</span>
-                </button>
-              )}
-
-              {/* Subir Documento (Ingeniería, Supervisor, Administrador) */}
-              {!estaBloqueadaPorFaseAvanzada && onSubirDocPresupuesto && requisitoPresupuesto && (
-                <button
-                  type="button"
-                  id="btn-cargar-presupuesto-f5"
-                  onClick={() => onSubirDocPresupuesto(requisitoPresupuesto.id)}
-                  className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
-                >
-                  <UploadCloud className="w-3.5 h-3.5" />
-                  <span>{tieneDocF5_01 ? "Actualizar APU" : "Cargar APU"}</span>
-                </button>
-              )}
-
-              {/* Revisar Documento (Supervisor / Administrador) */}
-              {!estaBloqueadaPorFaseAvanzada &&
-                onRevisarDocPresupuesto &&
-                requisitoPresupuesto &&
-                estadoF5_01 !== "aceptado" &&
-                (currentUser.rol === "supervisor" || currentUser.rol === "administrador") && (
-                  <button
-                    type="button"
-                    id="btn-revisar-presupuesto-f5"
-                    onClick={() => onRevisarDocPresupuesto(requisitoPresupuesto)}
-                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition-colors shadow-xs cursor-pointer"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>Revisar y Decidir</span>
-                  </button>
-                )}
-            </div>
-          </div>
-        </div>
-      );
-    })()}
-
-      {/* TARJETA DE RESUMEN DE RADICACIÓN Y RESOLUCIÓN */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        {/* BLOQUE 1: DATOS DE RADICACIÓN INICIAL */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
-                <Landmark className="w-4 h-4 text-blue-600" />
-                <span>Radicación Municipal</span>
-              </span>
-              {tramite.numeroRadicadoInicial ? (
-                <span className="text-2xs font-semibold px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200">
-                  Radicado
-                </span>
-              ) : (
+            <div>
+              <h4 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                <span>Datos Oficiales de Radicación y Licencia Municipal</span>
                 <span className="text-2xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
-                  Pendiente
+                  Gestión en la misma pantalla
                 </span>
-              )}
-            </div>
-
-            <div className="mt-4 space-y-2.5">
-              <div>
-                <span className="text-2xs font-medium text-slate-400 block">Entidad Competente</span>
-                <span className="text-xs font-semibold text-slate-900 block truncate" title={tramite.entidadMunicipal}>
-                  {tramite.entidadMunicipal}
-                </span>
-              </div>
-
-              <div>
-                <span className="text-2xs font-medium text-slate-400 block">Número de Radicado</span>
-                <span className="text-xs font-mono font-bold text-slate-900 block">
-                  {tramite.numeroRadicadoInicial || "Sin radicar aún"}
-                </span>
-              </div>
-
-              <div>
-                <span className="text-2xs font-medium text-slate-400 block">Fecha de Radicación</span>
-                <span className="text-xs text-slate-700 flex items-center space-x-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  <span>
-                    {tramite.fechaRadicacionInicial
-                      ? new Date(tramite.fechaRadicacionInicial).toLocaleDateString("es-CO", {
-                          year: "numeric",
-                          month: "long",
-                          day: "numeric"
-                        })
-                      : "No registrada"}
-                  </span>
-                </span>
-              </div>
-
-              {tramite.soporteRadicacionInicial && (
-                <div className="pt-2">
-                  <span className="text-2xs font-medium text-slate-400 block mb-1">Comprobante de Radicación</span>
-                  <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 border border-slate-200">
-                    <span className="text-xs text-slate-700 truncate max-w-[170px]" title={tramite.soporteRadicacionInicial.nombreArchivo}>
-                      {tramite.soporteRadicacionInicial.nombreArchivo}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => abrirSoporte(tramite.soporteRadicacionInicial, "Radicación Inicial de Licencia")}
-                      className="text-2xs font-semibold text-blue-700 hover:text-blue-900 flex items-center space-x-1 px-2 py-1 bg-white border border-blue-200 rounded-md hover:bg-blue-50 cursor-pointer"
-                    >
-                      <Eye className="w-3 h-3" />
-                      <span>Ver</span>
-                    </button>
-                  </div>
-                </div>
-              )}
+              </h4>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Edición y guardado directo de radicación, fechas, número de resolución y actas sin ventanas intermedias.
+              </p>
             </div>
           </div>
-
-          {puedeOperar && (
-            <div className="mt-4 pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                id="btn-modal-radicar"
-                onClick={() => {
-                  setFormEntidad(tramite.entidadMunicipal || "Secretaría de Planeación Municipal");
-                  setFormNumRadicado(tramite.numeroRadicadoInicial || "");
-                  setModalRadicar(true);
-                }}
-                className="w-full py-2 px-3 bg-blue-50 hover:bg-blue-100 text-blue-800 rounded-xl text-xs font-semibold border border-blue-200 transition-colors flex items-center justify-center space-x-1.5 cursor-pointer"
-              >
-                <FileText className="w-3.5 h-3.5" />
-                <span>
-                  {tramite.numeroRadicadoInicial ? "Actualizar Datos de Radicación" : "Registrar Radicación Inicial"}
-                </span>
-              </button>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => setSeccionRadicacionAbierta((prev) => !prev)}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
+            title="Colapsar o expandir panel de radicación"
+          >
+            {seccionRadicacionAbierta ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+          </button>
         </div>
 
-        {/* BLOQUE 2: ESTADO DE REQUERIMIENTOS Y RONDAS DE SUBSANACIÓN */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
-                <RotateCcw className="w-4 h-4 text-amber-600" />
-                <span>Subsanación y Correcciones</span>
-              </span>
-              <span className="text-2xs font-semibold px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200">
-                {rondas.length} {rondas.length === 1 ? "Ronda" : "Rondas"}
-              </span>
-            </div>
-
-            <div className="mt-4 space-y-2.5 text-xs text-slate-700">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500">Rondas registradas:</span>
-                <span className="font-semibold text-slate-900">{rondas.length}</span>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500">Estado de requerimientos:</span>
-                {estado === "con_observaciones" ? (
-                  <span className="font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
-                    Pendiente Subsanar
-                  </span>
-                ) : estado === "aprobada" ? (
-                  <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                    Aprobado / Sin pendientes
-                  </span>
-                ) : estado === "radicado_en_revision" ? (
-                  <span className="font-medium text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
-                    En estudio por la entidad
-                  </span>
-                ) : (
-                  <span className="text-slate-400">Sin observaciones</span>
-                )}
-              </div>
-
-              {ultimaRonda && (
-                <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-900 text-2xs uppercase">
-                      Última Ronda (#{ultimaRonda.numeroRonda})
-                    </span>
-                    <span className="text-2xs text-slate-500">
-                      {new Date(ultimaRonda.fechaObservaciones).toLocaleDateString("es-CO")}
-                    </span>
-                  </div>
-                  <p className="text-2xs text-slate-600 line-clamp-2 leading-relaxed">
-                    {ultimaRonda.detalleObservaciones}
-                  </p>
-                  {ultimaRonda.fechaRadicacionSubsanacion ? (
-                    <div className="text-2xs text-emerald-700 flex items-center space-x-1 font-medium pt-1">
-                      <Check className="w-3 h-3" />
-                      <span>Subsanada el {new Date(ultimaRonda.fechaRadicacionSubsanacion).toLocaleDateString("es-CO")}</span>
-                    </div>
-                  ) : (
-                    <div className="text-2xs text-amber-700 flex items-center space-x-1 font-medium pt-1">
-                      <Clock className="w-3 h-3" />
-                      <span>Pendiente radicar subsanación técnica</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {puedeOperar && (
-            <div className="mt-4 pt-3 border-t border-slate-100 flex flex-col gap-2">
-              {rondaPendienteSubsanar ? (
-                <button
-                  type="button"
-                  id="btn-subsanar-ronda"
-                  onClick={() => {
-                    setFormNumRadSub("");
-                    setFormDetalleSub("");
-                    setArchivoSub(null);
-                    setModalSubsanar(rondaPendienteSubsanar);
-                  }}
-                  className="w-full py-2 px-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-semibold shadow-2xs transition-colors flex items-center justify-center space-x-1.5 cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Radicar Subsanación de Ronda #{rondaPendienteSubsanar.numeroRonda}</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  id="btn-registrar-observaciones"
-                  onClick={() => {
-                    setFormNumActaObs("");
-                    setFormDetalleObs("");
-                    setArchivoObs(null);
-                    setModalObservaciones(true);
-                  }}
-                  className="w-full py-2 px-3 bg-slate-50 hover:bg-slate-100 text-slate-800 rounded-xl text-xs font-semibold border border-slate-200 transition-colors flex items-center justify-center space-x-1.5 cursor-pointer"
-                >
-                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Registrar Acta de Observaciones</span>
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* BLOQUE 3: LICENCIA DE CONSTRUCCIÓN APROBADA (ACTO ADMINISTRATIVO FINAL) */}
-        <div
-          className={`border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all ${
-            estado === "aprobada"
-              ? "bg-emerald-50/70 border-emerald-300 ring-1 ring-emerald-200"
-              : "bg-white border-slate-200"
-          }`}
-        >
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
-                <ShieldCheck
-                  className={`w-4 h-4 ${estado === "aprobada" ? "text-emerald-600" : "text-slate-400"}`}
-                />
-                <span>Licencia Oficial Expedida</span>
-              </span>
-              {estado === "aprobada" ? (
-                <span className="text-2xs font-bold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center space-x-1">
-                  <Check className="w-3 h-3" />
-                  <span>Aprobada</span>
-                </span>
-              ) : (
-                <span className="text-2xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500">
-                  En proceso
-                </span>
-              )}
-            </div>
-
-            <div className="mt-4 space-y-2.5">
-              {estado === "aprobada" ? (
-                <>
-                  <div>
-                    <span className="text-2xs font-medium text-slate-500 block">Resolución de Licencia</span>
-                    <span className="text-sm font-bold text-emerald-950 font-mono block">
-                      {tramite.numeroResolucionLicencia || "Sin número registrado"}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <span className="text-2xs font-medium text-slate-500 block">Fecha Expedición</span>
-                      <span className="text-slate-800 font-medium">
-                        {tramite.fechaExpedicionLicencia
-                          ? new Date(tramite.fechaExpedicionLicencia).toLocaleDateString("es-CO")
-                          : "N/A"}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-2xs font-medium text-slate-500 block">Vigencia</span>
-                      <span className="text-slate-800 font-medium">{tramite.vigenciaMeses || 24} meses</span>
-                    </div>
-                  </div>
-
-                  {/* CAMBIO 8: Lista de documentos de soporte oficial de licencia (multi-documento) */}
-                  {(() => {
-                    const docsList = (tramite.soporteLicenciaAprobadaDocs && tramite.soporteLicenciaAprobadaDocs.length > 0)
-                      ? tramite.soporteLicenciaAprobadaDocs
-                      : (tramite.soporteLicenciaAprobada ? [tramite.soporteLicenciaAprobada] : []);
-
-                    if (docsList.length === 0) return null;
-
-                    return (
-                      <div className="pt-2">
-                        <span className="text-2xs font-medium text-slate-500 block mb-1">
-                          Documentos Oficiales Aprobados ({docsList.length})
-                        </span>
-                        <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                          {docsList.map((doc, idx) => (
-                            <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-white border border-emerald-200">
-                              <span className="text-xs text-slate-800 font-medium truncate max-w-[160px]" title={doc.nombreArchivo}>
-                                {doc.nombreArchivo}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => abrirSoporte(doc, `Licencia de Construcción Aprobada - Doc ${idx + 1}`)}
-                                className="text-2xs font-semibold text-emerald-800 hover:text-emerald-950 flex items-center space-x-1 px-2.5 py-1 bg-emerald-100 hover:bg-emerald-200 rounded-md border border-emerald-300 cursor-pointer shrink-0"
-                              >
-                                <Eye className="w-3 h-3" />
-                                <span>Ver</span>
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </>
-              ) : (
-                <div className="py-6 text-center text-slate-400">
-                  <Building2 className="w-8 h-8 mx-auto text-slate-300 stroke-[1.5]" />
-                  <p className="text-xs text-slate-500 mt-2 font-medium">
-                    Aún no se ha registrado la resolución de aprobación de la Licencia.
-                  </p>
-                  <p className="text-2xs text-slate-400 mt-0.5">
-                    Una vez la entidad emita el acto favorable, regístrelo para habilitar el avance a Fase 6.
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {puedeOperar && (
-            <div className="mt-4 pt-3 border-t border-slate-100 space-y-2">
-              <button
-                type="button"
-                id="btn-modal-aprobar-licencia"
-                onClick={() => {
-                  setFormNumResolucion(tramite.numeroResolucionLicencia || "");
-                  setModalAprobar(true);
-                }}
-                className={`w-full py-2 px-3 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center space-x-1.5 cursor-pointer ${
-                  estado === "aprobada"
-                    ? "bg-white hover:bg-slate-50 text-emerald-900 border border-emerald-300 shadow-2xs"
-                    : "bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs"
-                }`}
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>
-                  {estado === "aprobada" ? "Actualizar Resolución de Licencia" : "Registrar Licencia Aprobada"}
-                </span>
-              </button>
-
-              {estado === "aprobada" && puedeAvanzarFase && (
-                <button
-                  type="button"
-                  id="btn-bloque-avanzar-fase-6"
-                  onClick={handleAvanzarFase6}
-                  disabled={cargandoAccion}
-                  className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center space-x-1.5 cursor-pointer active:scale-98"
-                >
-                  {cargandoAccion ? <Clock className="w-3.5 h-3.5 animate-spin" /> : <ArrowRight className="w-3.5 h-3.5" />}
-                  <span>Avanzar a Fase 6 (Ejecución de Obra)</span>
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ========================================================================= */}
-      {/* SECCIÓN OFICIAL: DOCUMENTACIÓN TÉCNICA DE RADICACIÓN EN PLANEACIÓN        */}
-      {/* ========================================================================= */}
-      {(() => {
-        const docsPlaneacionList: DocumentoRadicacionPlaneacion[] =
-          tramite.documentosPlaneacion && tramite.documentosPlaneacion.length > 0
-            ? tramite.documentosPlaneacion
-            : [
-                {
-                  id: `doc-plan-fun-${expediente.id}`,
-                  tipo: "fun",
-                  nombre: "Formulario Único Nacional (FUN)",
-                  descripcion: "Formulario Único Nacional para la solicitud de licencia de construcción debidamente diligenciado y firmado con sello de radicación.",
-                  esObligatorio: true
-                },
-                {
-                  id: `doc-plan-mem-est-${expediente.id}`,
-                  tipo: "memorial_estructural",
-                  nombre: "Memorial de Responsabilidad — Diseñador Estructural",
-                  descripcion: "Declaración juramentada y memorial de cumplimiento NSR-10 suscrito por el ingeniero civil/estructural con matrícula.",
-                  esObligatorio: true
-                },
-                {
-                  id: `doc-plan-mem-arq-${expediente.id}`,
-                  tipo: "memorial_arquitectonico",
-                  nombre: "Memorial de Responsabilidad — Diseñador Arquitectónico",
-                  descripcion: "Memorial y certificación del arquitecto proyectista con matrícula profesional vigente y fotocopia del documento.",
-                  esObligatorio: true
-                },
-                {
-                  id: `doc-plan-mem-geo-${expediente.id}`,
-                  tipo: "memorial_geotecnia",
-                  nombre: "Memorial de Responsabilidad — Geotecnista / Suelos",
-                  descripcion: "Memorial de responsabilidad técnica suscrito por el ingeniero geotecnista responsable del estudio de suelos.",
-                  esObligatorio: true
-                },
-                {
-                  id: `doc-plan-mem-int-${expediente.id}`,
-                  tipo: "memorial_interventor",
-                  nombre: "Memorial de Responsabilidad — Interventoría / Constructor",
-                  descripcion: "Memorial y compromiso de dirección técnica de obra o interventoría según requerimiento de la entidad municipal.",
-                  esObligatorio: false
-                },
-                {
-                  id: `doc-plan-memorias-${expediente.id}`,
-                  tipo: "memorias_calculo",
-                  nombre: "Memorias de Cálculo y Cantidades de Obra",
-                  descripcion: "Memorias técnicas de cálculo estructural, análisis de cargas y cantidades de obra (Formatos admitidos: Excel .xlsx, .xls o PDF .pdf).",
-                  esObligatorio: false
-                }
-              ];
-
-        const totalCargados = docsPlaneacionList.filter((d) => !!d.soporte).length;
-        const totalObligatorios = docsPlaneacionList.filter((d) => d.esObligatorio).length;
-        const obligatoriosCargados = docsPlaneacionList.filter((d) => d.esObligatorio && !!d.soporte).length;
-
-        return (
-          <div id="seccion-documentacion-planeacion" className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-slate-100 gap-3">
+        {seccionRadicacionAbierta && (
+          <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* SUB-BLOQUE A: RADICACIÓN INICIAL MUNICIPAL */}
+            <div className="p-4 rounded-xl bg-slate-50/70 border border-slate-200 flex flex-col justify-between">
               <div>
-                <div className="flex items-center space-x-2.5">
-                  <div className="p-2 bg-indigo-50 text-indigo-700 rounded-xl">
-                    <Building2 className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-base text-slate-900 flex items-center gap-2">
-                      <span>Documentación Técnica de Radicación en Planeación / Curaduría</span>
-                      <span className="text-2xs font-semibold px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200">
-                        Oficial
-                      </span>
-                    </h4>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      Formulario Único Nacional (FUN), Memoriales de Responsabilidad Profesional y anexos técnicos oficiales para radicación territorial.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="text-xs font-semibold px-3 py-1 bg-slate-50 border border-slate-200 rounded-xl text-slate-700">
-                  <span className="text-slate-400 font-normal">Avance Radicación: </span>
-                  <span className="font-bold text-indigo-900">{totalCargados} de {docsPlaneacionList.length}</span>
-                  <span className="text-[10px] text-slate-500 ml-1.5 font-medium">({obligatoriosCargados}/{totalObligatorios} obligatorios)</span>
-                </div>
-
-                {puedeOperar && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNuevoDocNombre("");
-                      setNuevoDocDesc("");
-                      setNuevoDocTipo("otro");
-                      setNuevoDocObligatorio(false);
-                      setArchivoDocPlaneacion(null);
-                      setObsDocPlaneacion("");
-                      setModalNuevoDocPlaneacion(true);
-                    }}
-                    className="text-xs font-semibold px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-xl flex items-center space-x-1.5 transition-colors cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Agregar Documento Complementario</span>
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {docsPlaneacionList.map((doc) => {
-                const tieneSoporte = !!doc.soporte;
-                const esExcelOpcional = doc.tipo === "memorias_calculo";
-
-                return (
-                  <div
-                    key={doc.id}
-                    className={`p-4 rounded-xl border flex flex-col justify-between transition-all ${
-                      tieneSoporte
-                        ? "bg-emerald-50/30 border-emerald-200"
-                        : doc.esObligatorio
-                        ? "bg-white border-slate-200 hover:border-indigo-300"
-                        : "bg-slate-50/50 border-slate-200 hover:border-slate-300"
+                <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-200/80">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center space-x-1.5">
+                    <Building2 className="w-4 h-4 text-blue-600" />
+                    <span>Radicación Inicial ante Entidad Territorial</span>
+                  </span>
+                  <span
+                    className={`text-2xs font-bold px-2 py-0.5 rounded-md ${
+                      tramite.numeroRadicadoInicial
+                        ? "bg-blue-100 text-blue-800 border border-blue-200"
+                        : "bg-amber-100 text-amber-800 border border-amber-200"
                     }`}
                   >
+                    {tramite.numeroRadicadoInicial ? "Radicado Formal" : "Pendiente Radicar"}
+                  </span>
+                </div>
+
+                <form onSubmit={handleGuardarRadicacionInline} className="space-y-3">
+                  <div>
+                    <label className="block text-2xs font-bold text-slate-600 mb-1">
+                      Entidad Competente (Curaduría o Secretaría de Planeación) *
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!puedeOperar}
+                      value={formEntidad}
+                      onChange={(e) => setFormEntidad(e.target.value)}
+                      placeholder="Ej: Curaduría Urbana No. 1 o Secretaría de Planeación"
+                      className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden disabled:bg-slate-100"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <div className="flex items-start justify-between gap-2 mb-1.5">
-                        <div className="flex items-center space-x-1.5">
-                          <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md ${
-                            doc.esObligatorio
-                              ? "bg-rose-50 text-rose-700 border border-rose-200"
-                              : "bg-slate-100 text-slate-600 border border-slate-200"
-                          }`}>
-                            {doc.esObligatorio ? "Obligatorio" : "Complementario"}
-                          </span>
-                          {esExcelOpcional && (
-                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 flex items-center gap-1 border border-emerald-200">
-                              <FileSpreadsheet className="w-3 h-3" />
-                              <span>Excel / PDF</span>
-                            </span>
-                          )}
-                        </div>
-
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
-                          tieneSoporte
-                            ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                            : "bg-amber-50 text-amber-700 border border-amber-200"
-                        }`}>
-                          {tieneSoporte ? "Cargado" : "Pendiente"}
-                        </span>
-                      </div>
-
-                      <h5 className="font-bold text-xs text-slate-900 leading-snug mb-1">
-                        {doc.nombre}
-                      </h5>
-
-                      <p className="text-[11px] text-slate-500 leading-relaxed line-clamp-2 mb-3">
-                        {doc.descripcion}
-                      </p>
-
-                      {tieneSoporte && doc.soporte && (
-                        <div className="p-2.5 bg-white rounded-lg border border-slate-200 mb-3 space-y-1 text-xs">
-                          <div className="flex items-center justify-between">
-                            <span className="font-mono text-[11px] text-slate-800 truncate max-w-[180px]" title={doc.soporte.nombreArchivo}>
-                              {doc.soporte.nombreArchivo}
-                            </span>
-                            <span className="text-[10px] text-slate-400">
-                              {doc.soporte.tamanoBytes ? `${Math.round(doc.soporte.tamanoBytes / 1024)} KB` : "Documento"}
-                            </span>
-                          </div>
-                          {doc.fechaCarga && (
-                            <div className="text-[10px] text-slate-400 flex items-center gap-1">
-                              <span>Cargado: {doc.fechaCarga.split("T")[0]}</span>
-                              {doc.cargadoPorNombre && <span>• {doc.cargadoPorNombre}</span>}
-                            </div>
-                          )}
-                        </div>
-                      )}
+                      <label className="block text-2xs font-bold text-slate-600 mb-1">
+                        Número de Radicado Oficial *
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!puedeOperar}
+                        value={formNumRadicado}
+                        onChange={(e) => setFormNumRadicado(e.target.value)}
+                        placeholder="Ej: RAD-2026-FOS-0482"
+                        className="w-full text-xs font-mono font-bold px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden disabled:bg-slate-100"
+                      />
                     </div>
+                    <div>
+                      <label className="block text-2xs font-bold text-slate-600 mb-1">
+                        Fecha de Radicación *
+                      </label>
+                      <input
+                        type="date"
+                        disabled={!puedeOperar}
+                        value={formFechaRad}
+                        onChange={(e) => setFormFechaRad(e.target.value)}
+                        className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden disabled:bg-slate-100"
+                      />
+                    </div>
+                  </div>
 
-                    <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2 mt-auto">
-                      {tieneSoporte ? (
-                        <>
+                  {/* SOPORTE DEL RADICADO */}
+                  <div className="pt-1">
+                    <label className="block text-2xs font-bold text-slate-600 mb-1">
+                      Comprobante de Radicación / FUN Sellado (PDF)
+                    </label>
+                    {tramite.soporteRadicacionInicial ? (
+                      <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs">
+                        <span
+                          className="truncate max-w-[200px] font-mono text-slate-700"
+                          title={tramite.soporteRadicacionInicial.nombreArchivo}
+                        >
+                          {tramite.soporteRadicacionInicial.nombreArchivo}
+                        </span>
+                        <div className="flex items-center space-x-1.5 shrink-0">
                           <button
                             type="button"
                             onClick={() =>
-                              onAbrirVisor({
-                                titulo: doc.nombre,
-                                nombreArchivo: doc.soporte!.nombreArchivo,
-                                mimeType: doc.soporte!.mimeType || "application/pdf",
-                                tamanoBytes: doc.soporte!.tamanoBytes,
-                                sha256Hash: doc.soporte!.sha256Hash,
-                                subidoPor: doc.cargadoPorNombre,
-                                subidoEn: doc.fechaCarga,
-                                archivoDataUrl: doc.soporte!.archivoDataUrl
-                              })
+                              abrirSoporte(
+                                tramite.soporteRadicacionInicial,
+                                "Comprobante de Radicación Municipal"
+                              )
                             }
-                            className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-semibold flex items-center space-x-1 transition-colors cursor-pointer"
+                            className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-2xs font-bold border border-blue-200 hover:bg-blue-100 cursor-pointer flex items-center space-x-1"
                           >
-                            <Eye className="w-3.5 h-3.5" />
-                            <span>Ver Documento</span>
+                            <Eye className="w-3 h-3" />
+                            <span>Ver</span>
                           </button>
-
                           {puedeOperar && (
-                            <div className="flex items-center space-x-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setArchivoDocPlaneacion(null);
-                                  setObsDocPlaneacion(doc.observaciones || "");
-                                  setModalCargarDocPlaneacion(doc);
+                            <label className="px-2 py-1 bg-slate-100 text-slate-700 rounded-md text-2xs font-bold border border-slate-200 hover:bg-slate-200 cursor-pointer flex items-center space-x-1">
+                              <span>Reemplazar</span>
+                              <input
+                                type="file"
+                                accept=".pdf,application/pdf"
+                                className="hidden"
+                                onChange={(e) => {
+                                  if (e.target.files?.[0]) {
+                                    handleCargarComprobanteRadicacion(e.target.files[0]);
+                                  }
                                 }}
-                                className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer"
-                              >
-                                Reemplazar
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setModalEliminarDocPlaneacion(doc)}
-                                className="text-xs text-rose-600 hover:text-rose-800 hover:underline cursor-pointer flex items-center"
-                                title="Desvincular documento"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
+                              />
+                            </label>
                           )}
-                        </>
-                      ) : (
-                        puedeOperar && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setArchivoDocPlaneacion(null);
-                              setObsDocPlaneacion("");
-                              setModalCargarDocPlaneacion(doc);
-                            }}
-                            className="w-full py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
-                          >
-                            <UploadCloud className="w-3.5 h-3.5" />
-                            <span>{esExcelOpcional ? "Cargar Memorias (.xlsx/.pdf)" : "Cargar PDF"}</span>
-                          </button>
-                        )
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* SECCIÓN DETALLADA: HISTORIAL DE RONDAS DE SUBSANACIÓN (FLUJO FLEXIBLE SIN LÍMITE) */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-          <div>
-            <h4 className="font-bold text-base text-slate-900 flex items-center space-x-2">
-              <RotateCcw className="w-5 h-5 text-indigo-600" />
-              <span>Flujo de Subsanaciones y Observaciones Técnicas</span>
-            </h4>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Rondas de requerimientos formuladas por la entidad y subsanaciones radicadas por el equipo de Ingeniería.
-            </p>
-          </div>
-          {puedeOperar && (
-            <button
-              type="button"
-              onClick={() => {
-                setFormNumActaObs("");
-                setFormDetalleObs("");
-                setArchivoObs(null);
-                setModalObservaciones(true);
-              }}
-              className="text-xs font-semibold px-3 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 rounded-xl flex items-center space-x-1.5 cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5 text-slate-500" />
-              <span>Nueva Ronda de Observaciones</span>
-            </button>
-          )}
-        </div>
-
-        {rondas.length === 0 ? (
-          <div className="py-8 text-center text-slate-400">
-            <CheckCircle2 className="w-8 h-8 mx-auto text-slate-300 stroke-[1.5]" />
-            <p className="text-xs font-medium text-slate-600 mt-2">
-              No se han registrado requerimientos u observaciones de la entidad municipal hasta el momento.
-            </p>
-            <p className="text-2xs text-slate-400 mt-0.5">
-              Si Planeación o la Curaduría expide un acta de observaciones, agréguela aquí para iniciar la ronda de subsanación.
-            </p>
-          </div>
-        ) : (
-          <div className="mt-4 space-y-4">
-            {rondas.map((ronda, idx) => (
-              <div
-                key={ronda.id || idx}
-                className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 hover:bg-slate-50 transition-colors"
-              >
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-slate-200/70">
-                  <div className="flex items-center space-x-2.5">
-                    <span className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-800 font-bold text-xs flex items-center justify-center">
-                      {ronda.numeroRonda}
-                    </span>
-                    <h5 className="font-bold text-sm text-slate-900">
-                      Ronda de Requerimientos #{ronda.numeroRonda}
-                    </h5>
-                    {ronda.numeroActaObservaciones && (
-                      <span className="text-2xs font-mono px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700">
-                        Acta: {ronda.numeroActaObservaciones}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="flex items-center space-x-2 text-xs">
-                    {ronda.fechaRadicacionSubsanacion ? (
-                      <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 font-medium">
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Subsanada</span>
-                      </span>
+                        </div>
+                      </div>
                     ) : (
-                      <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-md bg-amber-50 text-amber-800 border border-amber-200 font-medium">
-                        <Clock className="w-3.5 h-3.5" />
-                        <span>Pendiente Radicación</span>
-                      </span>
+                      puedeOperar && (
+                        <label className="flex items-center justify-center p-2 rounded-lg border border-dashed border-blue-300 bg-blue-50/50 hover:bg-blue-100 text-blue-700 text-xs font-semibold cursor-pointer transition-colors">
+                          <UploadCloud className="w-4 h-4 mr-1.5" />
+                          <span>Adjuntar Comprobante de Radicación (PDF)</span>
+                          <input
+                            type="file"
+                            accept=".pdf,application/pdf"
+                            className="hidden"
+                            onChange={(e) => {
+                              if (e.target.files?.[0]) {
+                                handleCargarComprobanteRadicacion(e.target.files[0]);
+                              }
+                            }}
+                          />
+                        </label>
+                      )
                     )}
                   </div>
+
+                  {puedeOperar && (
+                    <div className="pt-2 flex justify-end">
+                      <button
+                        type="submit"
+                        disabled={guardandoRadicacion}
+                        className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-2xs transition-colors cursor-pointer flex items-center space-x-1.5"
+                      >
+                        {guardandoRadicacion ? (
+                          <Clock className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Check className="w-3.5 h-3.5" />
+                        )}
+                        <span>Guardar Radicado Municipal</span>
+                      </button>
+                    </div>
+                  )}
+                </form>
+              </div>
+            </div>
+
+            {/* SUB-BLOQUE B: LICENCIA OFICIAL APROBADA / EXPEDIDA */}
+            <div
+              className={`p-4 rounded-xl border flex flex-col justify-between ${
+                estado === "aprobada"
+                  ? "bg-emerald-50/60 border-emerald-300 ring-1 ring-emerald-200"
+                  : "bg-slate-50/70 border-slate-200"
+              }`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-200/80">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center space-x-1.5">
+                    <ShieldCheck
+                      className={`w-4 h-4 ${
+                        estado === "aprobada" ? "text-emerald-600" : "text-slate-400"
+                      }`}
+                    />
+                    <span>Resolución y Acto Aprobatorio de Licencia</span>
+                  </span>
+                  <span
+                    className={`text-2xs font-bold px-2 py-0.5 rounded-md ${
+                      estado === "aprobada"
+                        ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                        : "bg-slate-100 text-slate-600 border border-slate-200"
+                    }`}
+                  >
+                    {estado === "aprobada" ? "Licencia Expedida" : "En Espera de Acto"}
+                  </span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3 text-xs">
-                  {/* Requerimiento de la Entidad */}
-                  <div className="p-3 bg-white border border-slate-200 rounded-lg space-y-2">
-                    <span className="text-2xs font-bold uppercase tracking-wider text-amber-800 flex items-center space-x-1">
-                      <AlertTriangle className="w-3 h-3 text-amber-600" />
-                      <span>Requerimiento de Planeación / Curaduría</span>
-                    </span>
-                    <p className="text-slate-700 leading-relaxed">
-                      {ronda.detalleObservaciones}
-                    </p>
-                    <div className="pt-1 text-2xs text-slate-400 flex flex-wrap items-center gap-3">
-                      <span>Notificado: {new Date(ronda.fechaObservaciones).toLocaleDateString("es-CO")}</span>
-                      {ronda.fechaLimiteSubsanacion && (
-                        <span>Límite: {new Date(ronda.fechaLimiteSubsanacion).toLocaleDateString("es-CO")}</span>
-                      )}
+                <form onSubmit={handleGuardarResolucionInline} className="space-y-3">
+                  <div>
+                    <label className="block text-2xs font-bold text-slate-600 mb-1">
+                      Número de Resolución Oficial de Licencia *
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!puedeOperar}
+                      value={formNumResolucion}
+                      onChange={(e) => setFormNumResolucion(e.target.value)}
+                      placeholder="Ej: RES-LC-2026-089"
+                      className="w-full text-xs font-mono font-bold px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-hidden disabled:bg-slate-100"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="block text-2xs font-bold text-slate-600 mb-1">
+                        Fecha Expedición *
+                      </label>
+                      <input
+                        type="date"
+                        disabled={!puedeOperar}
+                        value={formFechaExpedicion}
+                        onChange={(e) => setFormFechaExpedicion(e.target.value)}
+                        className="w-full text-xs px-2.5 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-hidden disabled:bg-slate-100"
+                      />
                     </div>
-                    {ronda.soporteObservaciones && (
-                      <div className="pt-1">
-                        <button
-                          type="button"
-                          onClick={() => abrirSoporte(ronda.soporteObservaciones, `Acta Observaciones Ronda ${ronda.numeroRonda}`)}
-                          className="text-2xs text-blue-700 hover:text-blue-900 font-semibold flex items-center space-x-1 hover:underline cursor-pointer"
-                        >
-                          <FileText className="w-3 h-3" />
-                          <span>Ver Acta en PDF ({ronda.soporteObservaciones.nombreArchivo})</span>
-                        </button>
+                    <div>
+                      <label className="block text-2xs font-bold text-slate-600 mb-1">
+                        Fecha Ejecutoria
+                      </label>
+                      <input
+                        type="date"
+                        disabled={!puedeOperar}
+                        value={formFechaEjecutoria}
+                        onChange={(e) => setFormFechaEjecutoria(e.target.value)}
+                        className="w-full text-xs px-2.5 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-hidden disabled:bg-slate-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-2xs font-bold text-slate-600 mb-1">
+                        Vigencia (Meses)
+                      </label>
+                      <input
+                        type="number"
+                        min="6"
+                        max="60"
+                        disabled={!puedeOperar}
+                        value={formVigenciaMeses}
+                        onChange={(e) => setFormVigenciaMeses(Number(e.target.value))}
+                        className="w-full text-xs px-2.5 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-hidden disabled:bg-slate-100"
+                      />
+                    </div>
+                  </div>
+
+                  {/* SOPORTES OFICIALES MULTI-DOCUMENTO */}
+                  <div className="pt-1">
+                    <label className="block text-2xs font-bold text-slate-600 mb-1">
+                      Documentos Oficiales Expedidos (Resolución, Planos Sellados)
+                    </label>
+
+                    {soportesLicenciaList.length > 0 && (
+                      <div className="space-y-1 mb-2 max-h-24 overflow-y-auto pr-1">
+                        {soportesLicenciaList.map((doc, idx) => (
+                          <div
+                            key={idx}
+                            className="flex items-center justify-between p-1.5 rounded-lg bg-white border border-emerald-200 text-xs"
+                          >
+                            <span
+                              className="truncate max-w-[200px] text-slate-800 text-2xs font-medium"
+                              title={doc.nombreArchivo}
+                            >
+                              {doc.nombreArchivo}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                abrirSoporte(doc, `Licencia Aprobada - Doc ${idx + 1}`)
+                              }
+                              className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded text-2xs font-bold hover:bg-emerald-100 cursor-pointer flex items-center space-x-1"
+                            >
+                              <Eye className="w-3 h-3" />
+                              <span>Ver</span>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {puedeOperar && (
+                      <div className="space-y-2">
+                        <label className="flex items-center justify-center p-2 rounded-lg border border-dashed border-emerald-300 bg-emerald-50/50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold cursor-pointer transition-colors">
+                          <Upload className="w-4 h-4 mr-1.5" />
+                          <span>
+                            {soportesLicenciaList.length > 0
+                              ? "+ Agregar Otros Documentos Oficiales"
+                              : "Cargar Documentos de Licencia (PDF)"}
+                          </span>
+                          <input
+                            type="file"
+                            multiple
+                            accept=".pdf,application/pdf"
+                            className="hidden"
+                            onChange={(e) => {
+                              if (e.target.files && e.target.files.length > 0) {
+                                setArchivosAprobarNuevos((prev) => [
+                                  ...prev,
+                                  ...Array.from(e.target.files!)
+                                ]);
+                                e.target.value = "";
+                              }
+                            }}
+                          />
+                        </label>
+
+                        {archivosAprobarNuevos.length > 0 && (
+                          <div className="p-2 bg-emerald-100/60 rounded-lg text-2xs text-emerald-900 flex items-center justify-between">
+                            <span>
+                              {archivosAprobarNuevos.length} archivo(s) nuevo(s) listo(s) para registrar
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setArchivosAprobarNuevos([])}
+                              className="text-emerald-700 hover:text-emerald-900 font-bold"
+                            >
+                              Limpiar
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
 
-                  {/* Respuesta / Subsanación de Ingeniería */}
-                  <div className="p-3 bg-white border border-slate-200 rounded-lg space-y-2">
-                    <span className="text-2xs font-bold uppercase tracking-wider text-emerald-800 flex items-center space-x-1">
-                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                      <span>Respuesta Radicada por Ingeniería</span>
-                    </span>
+                  {puedeOperar && (
+                    <div className="pt-2 flex justify-end">
+                      <button
+                        type="submit"
+                        disabled={guardandoResolucion}
+                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-2xs transition-colors cursor-pointer flex items-center space-x-1.5"
+                      >
+                        {guardandoResolucion ? (
+                          <Clock className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                        )}
+                        <span>Guardar y Aprobar Licencia</span>
+                      </button>
+                    </div>
+                  )}
+                </form>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
-                    {ronda.fechaRadicacionSubsanacion ? (
-                      <>
-                        <p className="text-slate-700 leading-relaxed">
-                          {ronda.detalleRespuestaSubsanacion}
-                        </p>
-                        <div className="pt-1 text-2xs text-slate-400 flex flex-wrap items-center gap-3">
-                          <span className="font-mono font-semibold text-slate-700">
-                            Radicado: {ronda.numeroRadicadoSubsanacion}
+      {/* ========================================================================= */}
+      {/* 4. CHECKLIST PRINCIPAL DE LOS 15 DOCUMENTOS OFICIALES DE FASE 5 (VISTA ÚNICA) */}
+      {/* ========================================================================= */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-slate-100 gap-3">
+          <div>
+            <h4 className="font-bold text-base text-slate-900 flex items-center space-x-2">
+              <Layers className="w-5 h-5 text-indigo-600" />
+              <span>Checklist de los 15 Documentos Exigidos para Licenciamiento</span>
+            </h4>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Carga directa en una sola pantalla sin modales de paso a paso. Haga clic en los botones de carga para vincular cada archivo oficial.
+            </p>
+          </div>
+
+          <div className="flex items-center space-x-2 text-xs">
+            <span className="font-semibold text-slate-600">Estado global:</span>
+            {statsChecklist.todosObligatoriosListos ? (
+              <span className="px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 font-bold border border-emerald-300 flex items-center space-x-1">
+                <Check className="w-3.5 h-3.5" />
+                <span>100% Obligatorios Listos</span>
+              </span>
+            ) : (
+              <span className="px-2.5 py-1 rounded-md bg-amber-100 text-amber-800 font-bold border border-amber-300 flex items-center space-x-1">
+                <Clock className="w-3.5 h-3.5" />
+                <span>Pendientes por Cargar</span>
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* TABLA CHECKLIST DE ALTA DENSIDAD */}
+        <div className="mt-4 divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden">
+          {lista15Documentos.map((doc) => {
+            const num = String(doc.itemNumero || 0).padStart(2, "0");
+            const esItem12 = doc.itemNumero === 12 || doc.requiereDobleArchivo;
+            const esItem14 = doc.itemNumero === 14 || doc.soportaArchivoPesado;
+
+            // Estados para Item 12 (Doble archivo)
+            const tieneExcel12 = !!doc.soporteExcel;
+            const tienePdf12 = !!doc.soportePdf || (!doc.soporteExcel && !!doc.soporte);
+            const item12Completo = tieneExcel12 && tienePdf12;
+
+            // Estado para documentos estándar
+            const estaCargado = esItem12 ? item12Completo : !!doc.soporte;
+            const estaSubiendo =
+              subiendoDocKey === `${doc.itemNumero}-main` ||
+              subiendoDocKey === `${doc.itemNumero}-excel` ||
+              subiendoDocKey === `${doc.itemNumero}-pdf`;
+
+            return (
+              <div
+                key={doc.id || doc.itemNumero}
+                className={`p-4 transition-colors ${
+                  estaCargado
+                    ? "bg-emerald-50/20 hover:bg-emerald-50/40"
+                    : "bg-white hover:bg-slate-50/80"
+                }`}
+              >
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                  {/* COLUMNA 1: IDENTIFICACIÓN Y NOMBRE */}
+                  <div className="flex items-start space-x-3.5 flex-1 min-w-0">
+                    <div
+                      className={`w-9 h-9 rounded-xl flex items-center justify-center font-mono font-bold text-xs shrink-0 ${
+                        estaCargado
+                          ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                          : "bg-slate-100 text-slate-700 border border-slate-200"
+                      }`}
+                    >
+                      {num}
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2 mb-0.5">
+                        <h5 className="font-bold text-sm text-slate-900 leading-snug">
+                          {doc.nombre}
+                        </h5>
+                        <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200">
+                          Obligatorio
+                        </span>
+                        {esItem12 && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" />
+                            <span>Requiere 2 Archivos (Excel + PDF)</span>
                           </span>
-                          <span>
-                            Fecha: {new Date(ronda.fechaRadicacionSubsanacion).toLocaleDateString("es-CO")}
+                        )}
+                        {esItem14 && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 flex items-center gap-1">
+                            <Layers className="w-3 h-3" />
+                            <span>Archivos Pesados &gt;80 págs</span>
                           </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-slate-500 leading-relaxed max-w-3xl">
+                        {doc.descripcion}
+                      </p>
+
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-2xs text-slate-400">
+                        <span className="font-medium text-slate-500">
+                          Formatos admitidos: {doc.formatosPermitidos}
+                        </span>
+
+                        {/* DETALLE DE ARCHIVO ESTÁNDAR CARGADO */}
+                        {!esItem12 && doc.soporte && (
+                          <>
+                            <span>•</span>
+                            <span className="font-mono text-emerald-700 font-semibold truncate max-w-[280px]">
+                              {doc.soporte.nombreArchivo}
+                            </span>
+                            <span>•</span>
+                            <span>
+                              {doc.soporte.tamanoBytes
+                                ? `${(doc.soporte.tamanoBytes / 1024).toFixed(1)} KB`
+                                : "Cargado"}
+                            </span>
+                            {doc.fechaCarga && (
+                              <>
+                                <span>•</span>
+                                <span>{doc.fechaCarga.split("T")[0]}</span>
+                              </>
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      {/* BARRA DE PROGRESO INLINE SI SE ESTÁ CARGANDO ESTE ITEM */}
+                      {estaSubiendo && (
+                        <div className="mt-2 p-2 bg-indigo-50 border border-indigo-200 rounded-lg text-xs space-y-1 max-w-md">
+                          <div className="flex items-center justify-between text-indigo-900 font-semibold text-2xs">
+                            <span className="flex items-center gap-1.5">
+                              <RefreshCw className="w-3 h-3 animate-spin text-indigo-600" />
+                              <span>Procesando y cargando archivo oficial...</span>
+                            </span>
+                            <span>{progresoCarga}%</span>
+                          </div>
+                          <div className="w-full bg-indigo-100 h-1.5 rounded-full overflow-hidden">
+                            <div
+                              className="bg-indigo-600 h-full transition-all duration-150 rounded-full"
+                              style={{ width: `${progresoCarga}%` }}
+                            />
+                          </div>
                         </div>
-                        {ronda.soporteSubsanacion && (
-                          <div className="pt-1">
+                      )}
+                    </div>
+                  </div>
+
+                  {/* COLUMNA 2: BOTONES Y ACCIONES DIRECTAS EN LA MISMA FILA */}
+                  <div className="flex flex-wrap items-center gap-2 lg:self-center shrink-0">
+                    {/* CASO ESPECIAL: ITEM 12 (MEMORIA DE CANTIDADES - DOS SLOTS LADO A LADO) */}
+                    {esItem12 ? (
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full lg:w-auto">
+                        {/* SLOT 1: ARCHIVO EXCEL (.XLSX / .XLS) */}
+                        <div
+                          className={`p-2 rounded-xl border flex items-center justify-between gap-2 text-xs ${
+                            tieneExcel12
+                              ? "bg-emerald-50 border-emerald-300"
+                              : "bg-slate-50 border-slate-200"
+                          }`}
+                        >
+                          <div className="flex items-center space-x-1.5">
+                            <FileSpreadsheet
+                              className={`w-4 h-4 ${
+                                tieneExcel12 ? "text-emerald-700" : "text-slate-400"
+                              }`}
+                            />
+                            <div>
+                              <span className="font-bold block text-slate-800 text-2xs">
+                                1. Excel (.xlsx / .xls)
+                              </span>
+                              {tieneExcel12 && (
+                                <span
+                                  className="text-[10px] font-mono text-emerald-800 truncate max-w-[120px] block"
+                                  title={doc.soporteExcel?.nombreArchivo}
+                                >
+                                  {doc.soporteExcel?.nombreArchivo}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center space-x-1 shrink-0">
+                            {tieneExcel12 ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    abrirSoporte(
+                                      doc.soporteExcel,
+                                      "Memoria de Cantidades - Versión Excel"
+                                    )
+                                  }
+                                  className="p-1 text-emerald-800 hover:text-emerald-950 hover:bg-emerald-100 rounded cursor-pointer"
+                                  title="Ver archivo Excel"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                                {puedeOperar && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        fileInputRefs.current["doc-12-excel"]?.click()
+                                      }
+                                      className="text-2xs font-bold text-indigo-700 hover:underline px-1 cursor-pointer"
+                                    >
+                                      Reemplazar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleEliminarArchivoDirecto(doc, "excel")
+                                      }
+                                      className="p-1 text-rose-600 hover:text-rose-800 rounded cursor-pointer"
+                                      title="Eliminar Excel"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </>
+                                )}
+                              </>
+                            ) : (
+                              puedeOperar && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    fileInputRefs.current["doc-12-excel"]?.click()
+                                  }
+                                  disabled={estaSubiendo}
+                                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-2xs transition-colors shadow-2xs cursor-pointer flex items-center space-x-1"
+                                >
+                                  <UploadCloud className="w-3 h-3" />
+                                  <span>Cargar Excel</span>
+                                </button>
+                              )
+                            )}
+                          </div>
+
+                          {/* INPUT OCULTO EXCEL */}
+                          <input
+                            type="file"
+                            ref={(el) => (fileInputRefs.current["doc-12-excel"] = el)}
+                            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleSubirArchivoDirecto(doc, f, "excel");
+                              e.target.value = "";
+                            }}
+                          />
+                        </div>
+
+                        {/* SLOT 2: ARCHIVO PDF (.PDF) */}
+                        <div
+                          className={`p-2 rounded-xl border flex items-center justify-between gap-2 text-xs ${
+                            tienePdf12
+                              ? "bg-rose-50 border-rose-300"
+                              : "bg-slate-50 border-slate-200"
+                          }`}
+                        >
+                          <div className="flex items-center space-x-1.5">
+                            <FileText
+                              className={`w-4 h-4 ${
+                                tienePdf12 ? "text-rose-700" : "text-slate-400"
+                              }`}
+                            />
+                            <div>
+                              <span className="font-bold block text-slate-800 text-2xs">
+                                2. PDF (.pdf)
+                              </span>
+                              {tienePdf12 && (
+                                <span
+                                  className="text-[10px] font-mono text-rose-800 truncate max-w-[120px] block"
+                                  title={
+                                    doc.soportePdf?.nombreArchivo ||
+                                    doc.soporte?.nombreArchivo
+                                  }
+                                >
+                                  {doc.soportePdf?.nombreArchivo ||
+                                    doc.soporte?.nombreArchivo}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center space-x-1 shrink-0">
+                            {tienePdf12 ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    abrirSoporte(
+                                      doc.soportePdf || doc.soporte,
+                                      "Memoria de Cantidades - Versión PDF"
+                                    )
+                                  }
+                                  className="p-1 text-rose-800 hover:text-rose-950 hover:bg-rose-100 rounded cursor-pointer"
+                                  title="Ver archivo PDF"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                                {puedeOperar && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        fileInputRefs.current["doc-12-pdf"]?.click()
+                                      }
+                                      className="text-2xs font-bold text-indigo-700 hover:underline px-1 cursor-pointer"
+                                    >
+                                      Reemplazar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleEliminarArchivoDirecto(doc, "pdf")
+                                      }
+                                      className="p-1 text-rose-600 hover:text-rose-800 rounded cursor-pointer"
+                                      title="Eliminar PDF"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </>
+                                )}
+                              </>
+                            ) : (
+                              puedeOperar && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    fileInputRefs.current["doc-12-pdf"]?.click()
+                                  }
+                                  disabled={estaSubiendo}
+                                  className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold text-2xs transition-colors shadow-2xs cursor-pointer flex items-center space-x-1"
+                                >
+                                  <UploadCloud className="w-3 h-3" />
+                                  <span>Cargar PDF</span>
+                                </button>
+                              )
+                            )}
+                          </div>
+
+                          {/* INPUT OCULTO PDF */}
+                          <input
+                            type="file"
+                            ref={(el) => (fileInputRefs.current["doc-12-pdf"] = el)}
+                            accept=".pdf,application/pdf"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleSubirArchivoDirecto(doc, f, "pdf");
+                              e.target.value = "";
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      /* CASO ESTÁNDAR: DOCUMENTO DE ARCHIVO ÚNICO (PDF O ZIP) */
+                      <div className="flex items-center space-x-2">
+                        {estaCargado ? (
+                          <>
                             <button
                               type="button"
-                              onClick={() => abrirSoporte(ronda.soporteSubsanacion, `Radicado Subsanación Ronda ${ronda.numeroRonda}`)}
-                              className="text-2xs text-blue-700 hover:text-blue-900 font-semibold flex items-center space-x-1 hover:underline cursor-pointer"
+                              onClick={() => abrirSoporte(doc.soporte, doc.nombre)}
+                              className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center space-x-1.5 shadow-2xs"
                             >
-                              <FileText className="w-3 h-3" />
-                              <span>Ver Soporte de Subsanación ({ronda.soporteSubsanacion.nombreArchivo})</span>
+                              <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Ver Documento</span>
                             </button>
-                          </div>
+
+                            {puedeOperar && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    fileInputRefs.current[`doc-${doc.itemNumero}`]?.click()
+                                  }
+                                  disabled={estaSubiendo}
+                                  className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                                >
+                                  Reemplazar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleEliminarArchivoDirecto(doc)}
+                                  className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl cursor-pointer"
+                                  title="Remover archivo"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </>
+                            )}
+                          </>
+                        ) : (
+                          puedeOperar && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                fileInputRefs.current[`doc-${doc.itemNumero}`]?.click()
+                              }
+                              disabled={estaSubiendo}
+                              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center space-x-1.5 active:scale-98 ${
+                                esItem14
+                                  ? "bg-indigo-600 hover:bg-indigo-700 text-white"
+                                  : "bg-blue-600 hover:bg-blue-700 text-white"
+                              }`}
+                            >
+                              <UploadCloud className="w-3.5 h-3.5" />
+                              <span>
+                                {esItem14
+                                  ? "Cargar Estudio de Suelos (>80 págs)"
+                                  : doc.tipo === "paquete_arquitecto" ||
+                                    doc.tipo === "paquete_constructor"
+                                  ? "Cargar Paquete (PDF/Zip)"
+                                  : "Cargar PDF Oficial"}
+                              </span>
+                            </button>
+                          )
                         )}
-                      </>
-                    ) : (
-                      <div className="py-3 text-center">
-                        <p className="text-xs text-amber-800 font-medium">
-                          Aún no se ha radicado la respuesta a estos requerimientos.
-                        </p>
-                        {puedeOperar && (
+
+                        {/* INPUT OCULTO PARA CARGA DIRECTA */}
+                        <input
+                          type="file"
+                          ref={(el) =>
+                            (fileInputRefs.current[`doc-${doc.itemNumero}`] = el)
+                          }
+                          accept={
+                            esItem14
+                              ? ".pdf,.docx,.doc,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                              : doc.tipo === "paquete_arquitecto" ||
+                                doc.tipo === "paquete_constructor"
+                              ? ".pdf,.zip,application/pdf,application/zip,application/x-zip-compressed"
+                              : ".pdf,application/pdf"
+                          }
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleSubirArchivoDirecto(doc, f);
+                            e.target.value = "";
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 5. SECCIÓN INLINE: SUBSANACIONES Y REQUERIMIENTOS TÉCNICOS                 */}
+      {/* ========================================================================= */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-2 bg-amber-50 text-amber-700 rounded-xl">
+              <RotateCcw className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                <span>Rondas de Observaciones y Subsanaciones Municipales</span>
+                <span className="text-2xs font-semibold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800">
+                  {rondas.length} {rondas.length === 1 ? "Ronda" : "Rondas"}
+                </span>
+              </h4>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Requerimientos de curaduría o planeación y respuestas radicadas por Ingeniería.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            {puedeOperar && !mostrarFormNuevaObs && (
+              <button
+                type="button"
+                onClick={() => setMostrarFormNuevaObs(true)}
+                className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Registrar Acta de Observaciones</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setSeccionSubsanacionesAbierta((prev) => !prev)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
+              title="Colapsar o expandir"
+            >
+              {seccionSubsanacionesAbierta ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+            </button>
+          </div>
+        </div>
+
+        {/* FORMULARIO INLINE PARA NUEVA OBSERVACIÓN (SIN MODAL) */}
+        {mostrarFormNuevaObs && (
+          <form
+            onSubmit={handleGuardarObservacionesInline}
+            className="mt-4 p-4 rounded-xl bg-amber-50/70 border border-amber-200 space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-xs text-amber-950 flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+                <span>Registrar Nueva Acta de Observaciones de la Entidad</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setMostrarFormNuevaObs(false)}
+                className="text-amber-800 hover:text-amber-950 text-xs font-semibold cursor-pointer"
+              >
+                ✕ Cancelar
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-2xs font-bold text-slate-700 mb-1">
+                  Número de Acta / Oficio
+                </label>
+                <input
+                  type="text"
+                  value={formNumActaObs}
+                  onChange={(e) => setFormNumActaObs(e.target.value)}
+                  placeholder="Ej: ACTA-OBS-2026-019"
+                  className="w-full text-xs font-mono px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+              <div>
+                <label className="block text-2xs font-bold text-slate-700 mb-1">
+                  Fecha de Notificación *
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={formFechaObs}
+                  onChange={(e) => setFormFechaObs(e.target.value)}
+                  className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+              <div>
+                <label className="block text-2xs font-bold text-slate-700 mb-1">
+                  Fecha Límite Subsanación
+                </label>
+                <input
+                  type="date"
+                  value={formFechaLimite}
+                  onChange={(e) => setFormFechaLimite(e.target.value)}
+                  className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-2xs font-bold text-slate-700 mb-1">
+                Detalle Puntual de Requerimientos y Ajustes Exigidos *
+              </label>
+              <textarea
+                required
+                rows={3}
+                value={formDetalleObs}
+                onChange={(e) => setFormDetalleObs(e.target.value)}
+                placeholder="Detalle de correcciones solicitadas por Planeación / Curaduría."
+                className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+              <div>
+                <input
+                  type="file"
+                  id="input-acta-obs-inline"
+                  accept=".pdf,application/pdf"
+                  onChange={(e) => setArchivoObs(e.target.files?.[0] || null)}
+                  className="hidden"
+                />
+                <label
+                  htmlFor="input-acta-obs-inline"
+                  className="text-xs font-semibold text-amber-900 bg-white border border-amber-300 rounded-lg px-3 py-1.5 cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <Paperclip className="w-3.5 h-3.5" />
+                  <span>
+                    {archivoObs ? archivoObs.name : "Adjuntar Acta Escaneada (PDF)"}
+                  </span>
+                </label>
+              </div>
+
+              <button
+                type="submit"
+                disabled={cargandoAccion}
+                className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+              >
+                {cargandoAccion ? "Guardando..." : "Guardar Acta y Abrir Ronda"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* FORMULARIO INLINE PARA RADICAR SUBSANACIÓN (SIN MODAL) */}
+        {rondaParaSubsanar && (
+          <form
+            onSubmit={handleGuardarSubsanacionInline}
+            className="mt-4 p-4 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-xs text-indigo-950 flex items-center gap-1.5">
+                <RotateCcw className="w-4 h-4 text-indigo-600" />
+                <span>
+                  Radicar Subsanación Técnica (Ronda #{rondaParaSubsanar.numeroRonda})
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setRondaParaSubsanar(null)}
+                className="text-indigo-800 hover:text-indigo-950 text-xs font-semibold cursor-pointer"
+              >
+                ✕ Cancelar
+              </button>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-white border border-indigo-100 text-xs text-slate-700">
+              <strong className="text-2xs uppercase text-slate-400 block mb-0.5">
+                Requerimiento a responder:
+              </strong>
+              <p className="line-clamp-2 text-2xs">
+                {rondaParaSubsanar.detalleObservaciones}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-2xs font-bold text-slate-700 mb-1">
+                  Número de Radicado de Subsanación *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={formNumRadSub}
+                  onChange={(e) => setFormNumRadSub(e.target.value)}
+                  placeholder="Ej: SUB-2026-FOS-0112"
+                  className="w-full text-xs font-mono font-bold px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="block text-2xs font-bold text-slate-700 mb-1">
+                  Fecha de Radicación *
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={formFechaRadSub}
+                  onChange={(e) => setFormFechaRadSub(e.target.value)}
+                  className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-2xs font-bold text-slate-700 mb-1">
+                Detalle de Ajustes Efectuados por Ingeniería *
+              </label>
+              <textarea
+                required
+                rows={2}
+                value={formDetalleSub}
+                onChange={(e) => setFormDetalleSub(e.target.value)}
+                placeholder="Explique las memorias, planos o aclaraciones anexadas a la entidad."
+                className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+              <div>
+                <input
+                  type="file"
+                  id="input-subsanacion-inline"
+                  accept=".pdf,application/pdf"
+                  onChange={(e) => setArchivoSub(e.target.files?.[0] || null)}
+                  className="hidden"
+                />
+                <label
+                  htmlFor="input-subsanacion-inline"
+                  className="text-xs font-semibold text-indigo-900 bg-white border border-indigo-300 rounded-lg px-3 py-1.5 cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <Paperclip className="w-3.5 h-3.5" />
+                  <span>
+                    {archivoSub ? archivoSub.name : "Adjuntar Soporte de Subsanación (PDF)"}
+                  </span>
+                </label>
+              </div>
+
+              <button
+                type="submit"
+                disabled={cargandoAccion}
+                className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+              >
+                {cargandoAccion ? "Guardando..." : "Radicar Subsanación"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* LISTADO DE RONDAS EXISTENTES */}
+        {seccionSubsanacionesAbierta && (
+          <div className="mt-4 space-y-3">
+            {rondas.length === 0 ? (
+              <p className="text-xs text-slate-400 py-4 text-center">
+                No hay observaciones registradas de la entidad municipal hasta el momento.
+              </p>
+            ) : (
+              rondas.map((ronda, idx) => (
+                <div
+                  key={ronda.id || idx}
+                  className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2 text-xs"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200/70">
+                    <span className="font-bold text-slate-900 flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-800 font-bold text-2xs flex items-center justify-center">
+                        {ronda.numeroRonda}
+                      </span>
+                      <span>Ronda #{ronda.numeroRonda}</span>
+                      {ronda.numeroActaObservaciones && (
+                        <span className="font-mono text-2xs text-slate-500 font-normal">
+                          (Acta: {ronda.numeroActaObservaciones})
+                        </span>
+                      )}
+                    </span>
+
+                    <div className="flex items-center space-x-2">
+                      {ronda.fechaRadicacionSubsanacion ? (
+                        <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-2xs font-bold border border-emerald-200">
+                          Subsanada el {ronda.fechaRadicacionSubsanacion.split("T")[0]}
+                        </span>
+                      ) : (
+                        puedeOperar && (
                           <button
                             type="button"
                             onClick={() => {
                               setFormNumRadSub("");
                               setFormDetalleSub("");
                               setArchivoSub(null);
-                              setModalSubsanar(ronda);
+                              setRondaParaSubsanar(ronda);
                             }}
-                            className="mt-2 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold shadow-2xs transition-colors inline-flex items-center space-x-1 cursor-pointer"
+                            className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-2xs font-bold transition-colors cursor-pointer"
                           >
-                            <RotateCcw className="w-3 h-3" />
-                            <span>Radicar Subsanación Ahora</span>
+                            Radicar Subsanación Ahora
                           </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* SECCIÓN DE BITÁCORA Y CRONOLOGÍA COMPLETA DEL TRÁMITE */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div>
-            <h4 className="font-bold text-base text-slate-900 flex items-center space-x-2">
-              <Clock className="w-4 h-4 text-slate-600" />
-              <span>Bitácora Cronológica de la Licencia de Construcción</span>
-            </h4>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Registro histórico inmutable de radicaciones, observaciones, respuestas y novedades con fecha y autor.
-            </p>
-          </div>
-          <span className="text-xs text-slate-400 font-medium">
-            {tramite.historial.length} eventos registrados
-          </span>
-        </div>
-
-        {tramite.historial.length === 0 ? (
-          <p className="text-xs text-slate-400 py-6 text-center">
-            No hay eventos registrados en la bitácora todavía.
-          </p>
-        ) : (
-          <div className="mt-4 space-y-3">
-            {tramite.historial.map((hist, idx) => (
-              <div
-                key={hist.id || idx}
-                className="flex items-start space-x-3 text-xs border-l-2 border-slate-200 pl-3 py-1 hover:border-blue-400 transition-colors"
-              >
-                <div className="flex-1">
-                  <div className="flex flex-wrap items-center justify-between gap-1">
-                    <span className="font-bold text-slate-900">{hist.titulo}</span>
-                    <span className="text-2xs text-slate-400">
-                      {new Date(hist.fecha).toLocaleString("es-CO", {
-                        year: "numeric",
-                        month: "short",
-                        day: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit"
-                      })}
-                    </span>
+                        )
+                      )}
+                    </div>
                   </div>
 
-                  {hist.descripcion && (
-                    <p className="text-slate-600 mt-1 leading-relaxed">
-                      {hist.descripcion}
-                    </p>
+                  <p className="text-slate-700 leading-relaxed text-2xs">
+                    {ronda.detalleObservaciones}
+                  </p>
+
+                  {ronda.detalleRespuestaSubsanacion && (
+                    <div className="p-2 bg-white rounded-lg border border-slate-200 text-2xs text-emerald-950">
+                      <strong>Respuesta de Ingeniería:</strong> {ronda.detalleRespuestaSubsanacion}
+                    </div>
                   )}
-
-                  <div className="mt-1.5 flex flex-wrap items-center gap-3 text-2xs text-slate-400">
-                    <span className="flex items-center space-x-1">
-                      <User className="w-3 h-3" />
-                      <span>{hist.usuarioNombre} ({hist.usuarioRol})</span>
-                    </span>
-
-                    {hist.numeroRadicado && (
-                      <span className="flex items-center space-x-1 font-mono">
-                        <Hash className="w-3 h-3" />
-                        <span>{hist.numeroRadicado}</span>
-                      </span>
-                    )}
-
-                    {hist.soporte && (
-                      <button
-                        type="button"
-                        onClick={() => abrirSoporte(hist.soporte, hist.titulo)}
-                        className="text-blue-700 hover:text-blue-900 font-semibold flex items-center space-x-1 hover:underline cursor-pointer"
-                      >
-                        <Paperclip className="w-3 h-3" />
-                        <span>Ver Soporte ({hist.soporte.nombreArchivo})</span>
-                      </button>
-                    )}
-                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         )}
       </div>
 
       {/* ========================================================================= */}
-      {/* MODAL: CONFIRMAR AVANCE FORMAL A FASE 6 */}
+      {/* 6. MODAL DE CONFIRMACIÓN: AVANZAR A FASE 6 (EJECUCIÓN DE OBRA)            */}
       {/* ========================================================================= */}
       {modalConfirmarAvanzarF6 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 overflow-y-auto">
-          <div role="dialog" aria-modal="true" aria-labelledby="f5-modal-avanzar-f6-titulo" className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150"
+          >
             <div className="p-5 bg-emerald-900 text-white flex items-center justify-between">
               <div className="flex items-center space-x-2">
                 <CheckCircle2 className="w-5 h-5 text-emerald-300" />
-                <h3 id="f5-modal-avanzar-f6-titulo" className="font-bold text-base">Avanzar a Fase 6: Ejecución de Obra</h3>
+                <h3 className="font-bold text-base">Avanzar a Fase 6: En Postulación</h3>
               </div>
               <button
                 type="button"
-                aria-label="Cerrar modal de pase a Fase 6"
                 onClick={() => setModalConfirmarAvanzarF6(false)}
                 className="text-emerald-200 hover:text-white cursor-pointer"
               >
@@ -1885,25 +2127,23 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
               <div className="p-3.5 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-900 space-y-1.5">
                 <p className="font-bold text-sm text-emerald-950 flex items-center gap-1.5">
                   <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                  Licencia de Construcción Aprobada y Verificada
+                  <span>Licencia de Construcción Verificada</span>
                 </p>
                 <p>
-                  <strong>Resolución:</strong> {tramite.numeroResolucionLicencia || "Resolución Oficial Registrada"}
+                  <strong>Resolución Oficial:</strong>{" "}
+                  {tramite.numeroResolucionLicencia || "Resolución Registrada"}
                 </p>
                 {tramite.fechaExpedicionLicencia && (
                   <p>
-                    <strong>Fecha de Expedición:</strong> {new Date(tramite.fechaExpedicionLicencia).toLocaleDateString("es-CO")}
-                  </p>
-                )}
-                {tramite.fechaEjecutoriaLicencia && (
-                  <p>
-                    <strong>Fecha de Ejecutoria:</strong> {new Date(tramite.fechaEjecutoriaLicencia).toLocaleDateString("es-CO")}
+                    <strong>Fecha Expedición:</strong>{" "}
+                    {tramite.fechaExpedicionLicencia.split("T")[0]}
                   </p>
                 )}
               </div>
 
               <p className="text-xs text-slate-600 leading-relaxed">
-                Al confirmar, el expediente pasará formalmente a la <strong>Fase 6: Ejecución de Obra</strong>. Se registrará la trazabilidad completa en la bitácora del proyecto y quedará habilitado el seguimiento de actas de inicio y avance de obra.
+                Al confirmar, el expediente pasará formalmente a la{" "}
+                <strong>Fase 6: En Postulación</strong> para vinculación ante Compensar y seguimiento de obra. Los 15 documentos de Fase 5 quedarán archivados de forma definitiva.
               </p>
 
               <div className="pt-3 flex items-center justify-end space-x-2 border-t border-slate-100">
@@ -1920,8 +2160,12 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
                   onClick={handleEjecutarAvanzarFase6}
                   className="px-4 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-xs transition-colors cursor-pointer flex items-center space-x-1.5"
                 >
-                  {cargandoAccion ? <Clock className="w-3.5 h-3.5 animate-spin" /> : <ArrowRight className="w-3.5 h-3.5" />}
-                  <span>{cargandoAccion ? "Avanzando..." : "Confirmar y Pasar a Fase 6"}</span>
+                  {cargandoAccion ? (
+                    <Clock className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  )}
+                  <span>Confirmar y Pasar a Fase 6</span>
                 </button>
               </div>
             </div>
@@ -1929,20 +2173,21 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* MODAL: REQUISITOS PENDIENTES PARA AVANZAR A FASE 6 */}
-      {/* ========================================================================= */}
+      {/* MODAL INFORMATIVO: REQUISITOS PENDIENTES PARA AVANZAR A FASE 6 */}
       {modalRequisitosPendientesF6 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 overflow-y-auto">
-          <div role="dialog" aria-modal="true" aria-labelledby="f5-modal-req-f6-titulo" className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150"
+          >
             <div className="p-5 bg-amber-900 text-white flex items-center justify-between">
               <div className="flex items-center space-x-2">
                 <AlertTriangle className="w-5 h-5 text-amber-300" />
-                <h3 id="f5-modal-req-f6-titulo" className="font-bold text-base">Requisitos para Avanzar a Fase 6</h3>
+                <h3 className="font-bold text-base">Requisitos para Avanzar a Fase 6</h3>
               </div>
               <button
                 type="button"
-                aria-label="Cerrar modal de requisitos pendientes"
                 onClick={() => setModalRequisitosPendientesF6(false)}
                 className="text-amber-200 hover:text-white cursor-pointer"
               >
@@ -1950,938 +2195,42 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
               </button>
             </div>
 
-            <div className="p-5 space-y-4">
-              <p className="text-xs text-slate-700 leading-relaxed">
-                Para trasladar el expediente a la <strong>Fase 6: Ejecución de Obra</strong>, la normativa constructiva y el flujo del CRM exigen que la <strong>Licencia de Construcción</strong> esté en estado <strong>Aprobada</strong> con su acto administrativo formal registrado.
+            <div className="p-5 space-y-4 text-xs text-slate-700">
+              <p className="leading-relaxed">
+                Para trasladar el expediente a la <strong>Fase 6: En Postulación</strong>, la normativa constructiva y el flujo del CRM exigen que la <strong>Licencia de Construcción</strong> esté en estado <strong>Aprobada</strong> con su acto administrativo y resolución formal cargada.
               </p>
 
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2 text-xs">
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-600">Estado actual del trámite:</span>
+                  <span className="text-slate-600">Estado actual:</span>
                   <span className="font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800">
                     {badge.texto}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-600">Resolución oficial de Licencia:</span>
+                  <span className="text-slate-600">Resolución de Licencia:</span>
                   <span className="font-mono text-slate-500">
                     {tramite.numeroResolucionLicencia || "Pendiente de registro"}
                   </span>
                 </div>
               </div>
 
-              <div className="bg-blue-50/70 p-3 rounded-xl border border-blue-200 text-xs text-blue-900 space-y-1">
-                <p className="font-bold flex items-center gap-1 text-blue-950">
-                  <CheckCircle2 className="w-4 h-4 text-blue-600" />
-                  ¿Cómo desbloquear el avance a Fase 6?
-                </p>
+              <div className="bg-blue-50 p-3 rounded-xl border border-blue-200 text-blue-900 space-y-1">
+                <strong className="block text-blue-950">¿Cómo habilitar el avance?</strong>
                 <p>
-                  1. Si la curaduría o planeación ya expidió la licencia, use el botón <strong>«Registrar Licencia Aprobada»</strong> para ingresar el número de resolución, fechas de ejecutoria y los documentos en PDF.
-                </p>
-                <p>
-                  2. Una vez guardado el estado Aprobada, este botón avanzará el proyecto de manera automática y habilitará la Fase 6.
+                  En la sección superior <em>«Resolución y Acto Aprobatorio de Licencia»</em> ingrese el número de resolución oficial, las fechas de ejecutoria y guarde la aprobación.
                 </p>
               </div>
 
-              <div className="pt-3 flex items-center justify-end space-x-2 border-t border-slate-100">
+              <div className="pt-3 flex items-center justify-end border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setModalRequisitosPendientesF6(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 rounded-xl hover:bg-slate-100 cursor-pointer"
+                  className="px-4 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white rounded-xl cursor-pointer"
                 >
                   Entendido
                 </button>
-                {puedeOperar && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setModalRequisitosPendientesF6(false);
-                      setFormNumResolucion(tramite.numeroResolucionLicencia || "");
-                      setModalAprobar(true);
-                    }}
-                    className="px-4 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-xs transition-colors cursor-pointer flex items-center space-x-1"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>Registrar Licencia Aprobada Ahora</span>
-                  </button>
-                )}
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 1: REGISTRAR RADICACIÓN INICIAL */}
-      {/* ========================================================================= */}
-      {modalRadicar && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 overflow-y-auto">
-          <div role="dialog" aria-modal="true" aria-labelledby="f5-modal-radicar-titulo" className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200">
-            <div className="p-5 bg-slate-900 text-white flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <Landmark className="w-5 h-5 text-blue-400" />
-                <h3 id="f5-modal-radicar-titulo" className="font-bold text-base">Registrar Radicación de Licencia</h3>
-              </div>
-              <button
-                type="button"
-                aria-label="Cerrar modal de radicación de licencia"
-                onClick={() => setModalRadicar(false)}
-                className="text-slate-400 hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleGuardarRadicacion} className="p-5 space-y-4">
-              <div>
-                <label htmlFor="f5-rad-entidad" className="block text-xs font-bold text-slate-700 mb-1">
-                  Entidad Municipal / Curaduría Urbana *
-                </label>
-                <input
-                  id="f5-rad-entidad"
-                  type="text"
-                  required
-                  value={formEntidad}
-                  onChange={(e) => setFormEntidad(e.target.value)}
-                  placeholder="Ej: Secretaría de Planeación Municipal de Choachí"
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="f5-rad-num" className="block text-xs font-bold text-slate-700 mb-1">
-                    Número de Radicado *
-                  </label>
-                  <input
-                    id="f5-rad-num"
-                    type="text"
-                    required
-                    value={formNumRadicado}
-                    onChange={(e) => setFormNumRadicado(e.target.value)}
-                    placeholder="Ej: RAD-2026-FOS-0482"
-                    className="w-full text-xs font-mono font-bold px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="f5-rad-fecha" className="block text-xs font-bold text-slate-700 mb-1">
-                    Fecha de Radicación *
-                  </label>
-                  <input
-                    id="f5-rad-fecha"
-                    type="date"
-                    required
-                    value={formFechaRad}
-                    onChange={(e) => setFormFechaRad(e.target.value)}
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="f5-rad-archivo" className="block text-xs font-bold text-slate-700 mb-1">
-                  Comprobante de Radicación / Formulario Único Nacional (PDF)
-                </label>
-                <input
-                  id="f5-rad-archivo"
-                  type="file"
-                  accept=".pdf,application/pdf,image/*"
-                  onClick={(e) => {
-                    (e.target as HTMLInputElement).value = "";
-                  }}
-                  onChange={(e) => setArchivoRad(e.target.files ? e.target.files[0] : null)}
-                  className="w-full text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                />
-                <p className="text-2xs text-slate-400 mt-1">
-                  Adjunte la copia escaneada del formulario único nacional con sello de radicación.
-                </p>
-              </div>
-
-              <div>
-                <label htmlFor="f5-rad-obs" className="block text-xs font-bold text-slate-700 mb-1">
-                  Observaciones de Radicación
-                </label>
-                <textarea
-                  id="f5-rad-obs"
-                  rows={2}
-                  value={formObsRad}
-                  onChange={(e) => setFormObsRad(e.target.value)}
-                  placeholder="Notas adicionales sobre la entrega en ventanilla, funcionarios o requisitos preliminares."
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setModalRadicar(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={cargandoAccion}
-                  className="px-4 py-2 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
-                >
-                  {cargandoAccion ? "Guardando..." : "Registrar Radicación"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 2: REGISTRAR ACTA DE OBSERVACIONES */}
-      {/* ========================================================================= */}
-      {modalObservaciones && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 overflow-y-auto">
-          <div role="dialog" aria-modal="true" aria-labelledby="f5-modal-obs-titulo" className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200">
-            <div className="p-5 bg-amber-600 text-white flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <AlertTriangle className="w-5 h-5 text-amber-200" />
-                <h3 id="f5-modal-obs-titulo" className="font-bold text-base">Registrar Acta de Observaciones</h3>
-              </div>
-              <button
-                type="button"
-                aria-label="Cerrar modal de acta de observaciones"
-                onClick={() => setModalObservaciones(false)}
-                className="text-amber-200 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleGuardarObservaciones} className="p-5 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="f5-obs-num-acta" className="block text-xs font-bold text-slate-700 mb-1">
-                    Número de Acta / Oficio
-                  </label>
-                  <input
-                    id="f5-obs-num-acta"
-                    type="text"
-                    value={formNumActaObs}
-                    onChange={(e) => setFormNumActaObs(e.target.value)}
-                    placeholder="Ej: ACTA-OBS-2026-019"
-                    className="w-full text-xs font-mono px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-amber-500"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="f5-obs-fecha" className="block text-xs font-bold text-slate-700 mb-1">
-                    Fecha de Notificación *
-                  </label>
-                  <input
-                    id="f5-obs-fecha"
-                    type="date"
-                    required
-                    value={formFechaObs}
-                    onChange={(e) => setFormFechaObs(e.target.value)}
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-amber-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="f5-obs-limite" className="block text-xs font-bold text-slate-700 mb-1">
-                  Fecha Límite para Subsanación (si aplica)
-                </label>
-                <input
-                  id="f5-obs-limite"
-                  type="date"
-                  value={formFechaLimite}
-                  onChange={(e) => setFormFechaLimite(e.target.value)}
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-amber-500"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="f5-obs-detalle" className="block text-xs font-bold text-slate-700 mb-1">
-                  Detalle de Observaciones y Requerimientos *
-                </label>
-                <textarea
-                  id="f5-obs-detalle"
-                  required
-                  rows={4}
-                  value={formDetalleObs}
-                  onChange={(e) => setFormDetalleObs(e.target.value)}
-                  placeholder="Detalle puntual de las correcciones arquitectónicas, estructurales, o documentales exigidas por la entidad."
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-amber-500"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="f5-obs-archivo" className="block text-xs font-bold text-slate-700 mb-1">
-                  Acta de Observaciones Escaneada (PDF)
-                </label>
-                <input
-                  id="f5-obs-archivo"
-                  type="file"
-                  accept=".pdf,application/pdf,image/*"
-                  onClick={(e) => {
-                    (e.target as HTMLInputElement).value = "";
-                  }}
-                  onChange={(e) => setArchivoObs(e.target.files ? e.target.files[0] : null)}
-                  className="w-full text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-50 file:text-amber-800 hover:file:bg-amber-100"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setModalObservaciones(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={cargandoAccion}
-                  className="px-4 py-2 text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
-                >
-                  {cargandoAccion ? "Guardando..." : "Registrar Observaciones"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 3: RADICAR SUBSANACIÓN */}
-      {/* ========================================================================= */}
-      {modalSubsanar && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 overflow-y-auto">
-          <div role="dialog" aria-modal="true" aria-labelledby="f5-modal-subsanar-titulo" className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200">
-            <div className="p-5 bg-indigo-700 text-white flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <RotateCcw className="w-5 h-5 text-indigo-200" />
-                <h3 id="f5-modal-subsanar-titulo" className="font-bold text-base">
-                  Radicar Subsanación (Ronda #{modalSubsanar.numeroRonda})
-                </h3>
-              </div>
-              <button
-                type="button"
-                aria-label="Cerrar modal de subsanación técnica"
-                onClick={() => setModalSubsanar(null)}
-                className="text-indigo-200 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleGuardarSubsanacion} className="p-5 space-y-4">
-              <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900">
-                <span className="font-bold block mb-0.5">Observación a subsanar:</span>
-                <p className="line-clamp-3 text-2xs leading-relaxed">{modalSubsanar.detalleObservaciones}</p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="f5-sub-num-rad" className="block text-xs font-bold text-slate-700 mb-1">
-                    Número de Radicado de Subsanación *
-                  </label>
-                  <input
-                    id="f5-sub-num-rad"
-                    type="text"
-                    required
-                    value={formNumRadSub}
-                    onChange={(e) => setFormNumRadSub(e.target.value)}
-                    placeholder="Ej: SUB-2026-FOS-0112"
-                    className="w-full text-xs font-mono font-bold px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="f5-sub-fecha" className="block text-xs font-bold text-slate-700 mb-1">
-                    Fecha de Radicación *
-                  </label>
-                  <input
-                    id="f5-sub-fecha"
-                    type="date"
-                    required
-                    value={formFechaRadSub}
-                    onChange={(e) => setFormFechaRadSub(e.target.value)}
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="f5-sub-detalle" className="block text-xs font-bold text-slate-700 mb-1">
-                  Detalle de Respuesta / Ajustes Efectuados *
-                </label>
-                <textarea
-                  id="f5-sub-detalle"
-                  required
-                  rows={3}
-                  value={formDetalleSub}
-                  onChange={(e) => setFormDetalleSub(e.target.value)}
-                  placeholder="Explique las correcciones incorporadas (ej: planos corregidos con retiro de 6m y memorias técnicas actualizadas)."
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="f5-sub-archivo" className="block text-xs font-bold text-slate-700 mb-1">
-                  Soporte de Subsanación Radicada (PDF)
-                </label>
-                <input
-                  id="f5-sub-archivo"
-                  type="file"
-                  accept=".pdf,application/pdf,image/*"
-                  onClick={(e) => {
-                    (e.target as HTMLInputElement).value = "";
-                  }}
-                  onChange={(e) => setArchivoSub(e.target.files ? e.target.files[0] : null)}
-                  className="w-full text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setModalSubsanar(null)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={cargandoAccion}
-                  className="px-4 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
-                >
-                  {cargandoAccion ? "Guardando..." : "Radicar Subsanación"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 4: REGISTRAR LICENCIA APROBADA / EXPEDIDA */}
-      {/* ========================================================================= */}
-      {modalAprobar && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 overflow-y-auto">
-          <div role="dialog" aria-modal="true" aria-labelledby="f5-modal-aprobar-titulo" className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200">
-            <div className="p-5 bg-emerald-700 text-white flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <ShieldCheck className="w-5 h-5 text-emerald-200" />
-                <h3 id="f5-modal-aprobar-titulo" className="font-bold text-base">Registrar Licencia de Construcción Aprobada</h3>
-              </div>
-              <button
-                type="button"
-                aria-label="Cerrar modal de aprobación de licencia"
-                onClick={() => setModalAprobar(false)}
-                className="text-emerald-200 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleGuardarAprobacion} className="p-5 space-y-4">
-              <div>
-                <label htmlFor="f5-aprob-resolucion" className="block text-xs font-bold text-slate-700 mb-1">
-                  Número de Resolución / Licencia *
-                </label>
-                <input
-                  id="f5-aprob-resolucion"
-                  type="text"
-                  required
-                  value={formNumResolucion}
-                  onChange={(e) => setFormNumResolucion(e.target.value)}
-                  placeholder="Ej: RES-LC-2026-089"
-                  className="w-full text-xs font-mono font-bold px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="f5-aprob-fecha-exp" className="block text-xs font-bold text-slate-700 mb-1">
-                    Fecha de Expedición *
-                  </label>
-                  <input
-                    id="f5-aprob-fecha-exp"
-                    type="date"
-                    required
-                    value={formFechaExpedicion}
-                    onChange={(e) => setFormFechaExpedicion(e.target.value)}
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="f5-aprob-fecha-ejec" className="block text-xs font-bold text-slate-700 mb-1">
-                    Fecha de Ejecutoria
-                  </label>
-                  <input
-                    id="f5-aprob-fecha-ejec"
-                    type="date"
-                    value={formFechaEjecutoria}
-                    onChange={(e) => setFormFechaEjecutoria(e.target.value)}
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="f5-aprob-vigencia" className="block text-xs font-bold text-slate-700 mb-1">
-                  Vigencia de la Licencia (Meses)
-                </label>
-                <input
-                  id="f5-aprob-vigencia"
-                  type="number"
-                  min="6"
-                  max="60"
-                  value={formVigenciaMeses}
-                  onChange={(e) => setFormVigenciaMeses(Number(e.target.value))}
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="f5-aprob-archivos" className="block text-xs font-bold text-slate-700 mb-1">
-                  Documentos Oficiales de la Licencia Expedida (Resolución, Planos Sellados, etc.) *
-                </label>
-                <div className="space-y-2">
-                  <input
-                    id="f5-aprob-archivos"
-                    type="file"
-                    multiple
-                    accept=".pdf,application/pdf,image/*"
-                    onChange={(e) => {
-                      if (e.target.files && e.target.files.length > 0) {
-                        const nuevos = Array.from(e.target.files);
-                        setArchivosAprobar((prev) => [...prev, ...nuevos]);
-                        e.target.value = "";
-                      }
-                    }}
-                    className="w-full text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-800 hover:file:bg-emerald-100 cursor-pointer"
-                  />
-                  <p className="text-[11px] text-slate-500">
-                    Puede seleccionar varios archivos a la vez o agregarlos uno a uno (Resolución, Planos Sellados, Acta de Ejecutoria).
-                  </p>
-
-                  {/* Lista de archivos seleccionados */}
-                  {archivosAprobar.length > 0 && (
-                    <div className="p-2.5 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-1.5">
-                      <div className="text-[11px] font-bold text-emerald-900">
-                        Documentos seleccionados ({archivosAprobar.length}):
-                      </div>
-                      <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
-                        {archivosAprobar.map((f, idx) => (
-                          <div
-                            key={idx}
-                            className="flex items-center justify-between p-1.5 bg-white rounded-lg border border-emerald-100 text-xs text-slate-800"
-                          >
-                            <span className="truncate max-w-[280px]" title={f.name}>
-                              {f.name}
-                            </span>
-                            <div className="flex items-center space-x-2 shrink-0">
-                              <span className="text-[10px] text-slate-400">
-                                {(f.size / 1024).toFixed(1)} KB
-                              </span>
-                              <button
-                                type="button"
-                                aria-label={`Eliminar archivo ${f.name}`}
-                                onClick={() => setArchivosAprobar((prev) => prev.filter((_, i) => i !== idx))}
-                                className="text-rose-600 hover:text-rose-800 font-bold p-0.5 rounded cursor-pointer"
-                                title="Eliminar archivo"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Archivos previos si existieran */}
-                  {archivosAprobar.length === 0 && (tramite.soporteLicenciaAprobadaDocs || tramite.soporteLicenciaAprobada) && (
-                    <div className="text-[11px] text-emerald-700 bg-emerald-50 p-2 rounded-lg border border-emerald-200">
-                      Archivos cargados previamente:{" "}
-                      {(tramite.soporteLicenciaAprobadaDocs?.map((d) => d.nombreArchivo).join(", ")) ||
-                        tramite.soporteLicenciaAprobada?.nombreArchivo}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="f5-aprob-obs" className="block text-xs font-bold text-slate-700 mb-1">
-                  Observaciones Finales / Condiciones Urbanísticas
-                </label>
-                <textarea
-                  id="f5-aprob-obs"
-                  rows={2}
-                  value={formObsFinales}
-                  onChange={(e) => setFormObsFinales(e.target.value)}
-                  placeholder="Modalidad de obra nueva, área autorizada m², compromisos adicionales de cesión o retiros."
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setModalAprobar(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={cargandoAccion}
-                  className="px-4 py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
-                >
-                  {cargandoAccion ? "Guardando..." : "Confirmar Aprobación"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 5: REGISTRAR NOVEDAD EN HISTORIAL */}
-      {/* ========================================================================= */}
-      {modalNota && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 overflow-y-auto">
-          <div role="dialog" aria-modal="true" aria-labelledby="f5-modal-nota-titulo" className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200">
-            <div className="p-5 bg-slate-900 text-white flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <Plus className="w-5 h-5 text-blue-400" />
-                <h3 id="f5-modal-nota-titulo" className="font-bold text-base">Registrar Novedad de Trámite</h3>
-              </div>
-              <button
-                type="button"
-                aria-label="Cerrar modal de registro de nota"
-                onClick={() => setModalNota(false)}
-                className="text-slate-400 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleGuardarNota} className="p-5 space-y-4">
-              <div>
-                <label htmlFor="f5-nota-titulo" className="block text-xs font-bold text-slate-700 mb-1">
-                  Título de la Novedad *
-                </label>
-                <input
-                  id="f5-nota-titulo"
-                  type="text"
-                  required
-                  value={formTituloNota}
-                  onChange={(e) => setFormTituloNota(e.target.value)}
-                  placeholder="Ej: Llamada de seguimiento con el arquitecto revisor"
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="f5-nota-desc" className="block text-xs font-bold text-slate-700 mb-1">
-                  Descripción Detallada *
-                </label>
-                <textarea
-                  id="f5-nota-desc"
-                  required
-                  rows={4}
-                  value={formDescNota}
-                  onChange={(e) => setFormDescNota(e.target.value)}
-                  placeholder="Describa el compromiso, llamada o avance en la curaduría / planeación."
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setModalNota(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={cargandoAccion}
-                  className="px-4 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
-                >
-                  {cargandoAccion ? "Guardando..." : "Guardar Novedad"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 6: CARGAR / ACTUALIZAR DOCUMENTO TÉCNICO DE PLANEACIÓN             */}
-      {/* ========================================================================= */}
-      {modalCargarDocPlaneacion && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
-          <div role="dialog" aria-modal="true" aria-labelledby="f5-modal-docplan-titulo" className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
-            <div className="p-5 bg-indigo-900 text-white flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Building2 className="w-5 h-5 text-indigo-300" />
-                <h3 id="f5-modal-docplan-titulo" className="font-bold text-sm truncate max-w-sm">
-                  {modalCargarDocPlaneacion.soporte ? "Actualizar Documento:" : "Cargar Documento:"} {modalCargarDocPlaneacion.nombre}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setModalCargarDocPlaneacion(null);
-                  setArchivoDocPlaneacion(null);
-                  setObsDocPlaneacion("");
-                }}
-                className="text-indigo-200 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleGuardarDocPlaneacion} className="p-5 space-y-4">
-              <p className="text-xs text-slate-600 bg-indigo-50/60 p-3 rounded-xl border border-indigo-100">
-                {modalCargarDocPlaneacion.descripcion || "Documentación oficial exigida por Planeación Municipal o Curaduría para trámite de licencia."}
-              </p>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Seleccione el Archivo *
-                </label>
-                <div className="border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/30 rounded-xl p-5 text-center cursor-pointer transition-colors">
-                  <input
-                    type="file"
-                    id="input-archivo-planeacion"
-                    accept={
-                      modalCargarDocPlaneacion.tipo === "memorias_calculo"
-                        ? ".pdf,.xlsx,.xls,.csv,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
-                        : ".pdf,application/pdf"
-                    }
-                    onClick={(e) => {
-                      (e.target as HTMLInputElement).value = "";
-                    }}
-                    onChange={(e) => setArchivoDocPlaneacion(e.target.files ? e.target.files[0] : null)}
-                    className="hidden"
-                  />
-                  <label htmlFor="input-archivo-planeacion" className="cursor-pointer block space-y-2">
-                    <div className="w-10 h-10 mx-auto rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center">
-                      <UploadCloud className="w-5 h-5" />
-                    </div>
-                    {archivoDocPlaneacion ? (
-                      <div className="text-xs font-bold text-indigo-900">
-                        {archivoDocPlaneacion.name} ({(archivoDocPlaneacion.size / 1024).toFixed(1)} KB)
-                      </div>
-                    ) : (
-                      <>
-                        <span className="text-xs font-bold text-indigo-700 hover:underline block">
-                          Haga clic aquí para seleccionar el archivo oficial
-                        </span>
-                        <span className="text-[10px] text-slate-400 block">
-                          {modalCargarDocPlaneacion.tipo === "memorias_calculo"
-                            ? "Formatos válidos: Excel (.xlsx, .xls) o PDF (.pdf) hasta 25 MB"
-                            : "Formato oficial: Documento PDF firmado (.pdf) hasta 25 MB"}
-                        </span>
-                      </>
-                    )}
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Observaciones Técnicas o Matrícula Profesional
-                </label>
-                <textarea
-                  rows={2}
-                  value={obsDocPlaneacion}
-                  onChange={(e) => setObsDocPlaneacion(e.target.value)}
-                  placeholder="Ej: Radicado con firma digital y matrícula profesional vigente No. 25202-00000 COPNIA."
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setModalCargarDocPlaneacion(null);
-                    setArchivoDocPlaneacion(null);
-                    setObsDocPlaneacion("");
-                  }}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={cargandoAccion || !archivoDocPlaneacion}
-                  className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
-                >
-                  {cargandoAccion ? "Guardando..." : "Confirmar Carga de Documento"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 7: AGREGAR DOCUMENTO COMPLEMENTARIO DE RADICACIÓN                   */}
-      {/* ========================================================================= */}
-      {modalNuevoDocPlaneacion && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
-          <div role="dialog" aria-modal="true" className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
-            <div className="p-5 bg-indigo-900 text-white flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Plus className="w-5 h-5 text-indigo-300" />
-                <h3 className="font-bold text-sm">
-                  Agregar Documento Complementario de Radicación
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setModalNuevoDocPlaneacion(false);
-                  setArchivoDocPlaneacion(null);
-                }}
-                className="text-indigo-200 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCrearNuevoDocPlaneacion} className="p-5 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Nombre del Documento Técnico *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={nuevoDocNombre}
-                  onChange={(e) => setNuevoDocNombre(e.target.value)}
-                  placeholder="Ej: Certificado de Estratificación / Certificación de Uso de Suelo"
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Tipo de Documento
-                  </label>
-                  <select
-                    value={nuevoDocTipo}
-                    onChange={(e) => setNuevoDocTipo(e.target.value as TipoDocumentoRadicacionPlaneacion)}
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-white"
-                  >
-                    <option value="otro">Documento Complementario General</option>
-                    <option value="planos_radicacion">Plano Oficial de Radicación</option>
-                    <option value="memorias_calculo">Memorias de Cálculo / Cantidades</option>
-                    <option value="memorial_interventor">Memorial de Constructor / Interventor</option>
-                    <option value="fun">Formulario Oficial Adicional</option>
-                  </select>
-                </div>
-
-                <div className="flex items-center pt-5">
-                  <label className="flex items-center space-x-2 text-xs font-semibold text-slate-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={nuevoDocObligatorio}
-                      onChange={(e) => setNuevoDocObligatorio(e.target.checked)}
-                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
-                    />
-                    <span>¿Es de carácter obligatorio?</span>
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Descripción o Finalidad
-                </label>
-                <input
-                  type="text"
-                  value={nuevoDocDesc}
-                  onChange={(e) => setNuevoDocDesc(e.target.value)}
-                  placeholder="Breve aclaración del propósito del documento ante la entidad."
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Archivo Digital (PDF o Excel) *
-                </label>
-                <input
-                  type="file"
-                  required
-                  accept=".pdf,.xlsx,.xls,application/pdf"
-                  onChange={(e) => setArchivoDocPlaneacion(e.target.files ? e.target.files[0] : null)}
-                  className="w-full text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setModalNuevoDocPlaneacion(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={cargandoAccion || !nuevoDocNombre.trim() || !archivoDocPlaneacion}
-                  className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
-                >
-                  {cargandoAccion ? "Creando..." : "Guardar y Vincular Documento"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 8: CONFIRMAR DESVINCULAR DOCUMENTO DE PLANEACIÓN                    */}
-      {/* ========================================================================= */}
-      {modalEliminarDocPlaneacion && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div role="dialog" aria-modal="true" className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
-            <div className="flex items-center space-x-3 text-rose-600 mb-3">
-              <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center shrink-0">
-                <Trash2 className="w-5 h-5 text-rose-600" />
-              </div>
-              <div>
-                <h4 className="font-bold text-slate-900 text-sm">¿Desvincular soporte?</h4>
-                <p className="text-xs text-slate-500 truncate max-w-[200px]">{modalEliminarDocPlaneacion.nombre}</p>
-              </div>
-            </div>
-
-            <p className="text-xs text-slate-600 mb-4 leading-relaxed">
-              El archivo cargado para <strong className="text-slate-800">{modalEliminarDocPlaneacion.nombre}</strong> será removido y el requisito volverá a estar pendiente de carga.
-            </p>
-
-            <div className="flex items-center justify-end space-x-2">
-              <button
-                type="button"
-                onClick={() => setModalEliminarDocPlaneacion(null)}
-                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                disabled={cargandoAccion}
-                onClick={handleEliminarDocPlaneacion}
-                className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white transition-all shadow-sm cursor-pointer disabled:opacity-50"
-              >
-                {cargandoAccion ? "Desvinculando..." : "Sí, Desvincular"}
-              </button>
             </div>
           </div>
         </div>

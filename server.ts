@@ -51,6 +51,7 @@ import {
   RondaSubsanacionLicencia,
   TramiteLicenciaConstruccion,
   DocumentoRadicacionPlaneacion,
+  PLANTILLA_DOCUMENTOS_FASE_5,
   EstadoPostulacion,
   SoporteDocumentoPostulacion,
   RondaSubsanacionPostulacion,
@@ -917,58 +918,47 @@ export async function createApp(): Promise<express.Express> {
       };
     }
 
-    // Asegurar lista de documentos de radicación en planeación inicializada
+    // Asegurar lista de documentos de radicación en planeación inicializada con los 15 documentos oficiales
     if (!exp.tramiteLicencia.documentosPlaneacion) {
       exp.tramiteLicencia.documentosPlaneacion = [];
     }
 
-    // Plantilla inicial de los documentos requeridos si aún está vacía
-    if (exp.tramiteLicencia.documentosPlaneacion.length === 0) {
-      exp.tramiteLicencia.documentosPlaneacion = [
-        {
-          id: `doc-plan-fun-${exp.id}`,
-          tipo: "fun",
-          nombre: "Formulario Único Nacional (FUN)",
-          descripcion: "Formulario Único Nacional para la solicitud de licencia de construcción debidamente diligenciado y firmado con sello de radicación.",
-          esObligatorio: true
-        },
-        {
-          id: `doc-plan-mem-est-${exp.id}`,
-          tipo: "memorial_estructural",
-          nombre: "Memorial de Responsabilidad — Diseñador Estructural",
-          descripcion: "Declaración juramentada y memorial de cumplimiento NSR-10 suscrito por el ingeniero civil/estructural con matrícula profesional.",
-          esObligatorio: true
-        },
-        {
-          id: `doc-plan-mem-arq-${exp.id}`,
-          tipo: "memorial_arquitectonico",
-          nombre: "Memorial de Responsabilidad — Diseñador Arquitectónico",
-          descripcion: "Memorial y certificación del arquitecto proyectista con matrícula profesional vigente y fotocopia del documento.",
-          esObligatorio: true
-        },
-        {
-          id: `doc-plan-mem-geo-${exp.id}`,
-          tipo: "memorial_geotecnia",
-          nombre: "Memorial de Responsabilidad — Geotecnista / Suelos",
-          descripcion: "Memorial de responsabilidad técnica suscrito por el ingeniero geotecnista responsable del estudio de suelos.",
-          esObligatorio: true
-        },
-        {
-          id: `doc-plan-mem-int-${exp.id}`,
-          tipo: "memorial_interventor",
-          nombre: "Memorial de Responsabilidad — Interventoría / Constructor",
-          descripcion: "Memorial y compromiso de dirección técnica de obra o interventoría según requerimiento de la entidad municipal.",
-          esObligatorio: false
-        },
-        {
-          id: `doc-plan-memorias-${exp.id}`,
-          tipo: "memorias_calculo",
-          nombre: "Memorias de Cálculo y Cantidades de Obra",
-          descripcion: "Memorias técnicas de cálculo estructural, análisis de cargas y cantidades de obra (Formatos PDF o Excel .xlsx).",
-          esObligatorio: false
-        }
-      ];
-    }
+    const docsActuales = exp.tramiteLicencia.documentosPlaneacion;
+    const docsNuevos: DocumentoRadicacionPlaneacion[] = PLANTILLA_DOCUMENTOS_FASE_5.map((plantilla) => {
+      const existente = docsActuales.find(
+        (d) => d.itemNumero === plantilla.itemNumero || d.tipo === plantilla.tipo
+      );
+      if (existente) {
+        return {
+          ...existente,
+          itemNumero: plantilla.itemNumero,
+          tipo: plantilla.tipo,
+          nombre: existente.nombre || plantilla.nombre,
+          descripcion: existente.descripcion || plantilla.descripcion,
+          formatosPermitidos: plantilla.formatosPermitidos,
+          esObligatorio: plantilla.esObligatorio,
+          requiereDobleArchivo: plantilla.requiereDobleArchivo,
+          soportaArchivoPesado: plantilla.soportaArchivoPesado
+        };
+      }
+      return {
+        id: `doc-fase5-${plantilla.itemNumero}-${exp.id}`,
+        itemNumero: plantilla.itemNumero,
+        tipo: plantilla.tipo,
+        nombre: plantilla.nombre,
+        descripcion: plantilla.descripcion,
+        formatosPermitidos: plantilla.formatosPermitidos,
+        esObligatorio: plantilla.esObligatorio,
+        requiereDobleArchivo: plantilla.requiereDobleArchivo,
+        soportaArchivoPesado: plantilla.soportaArchivoPesado
+      };
+    });
+
+    const docsAdicionales = docsActuales.filter(
+      (d) => !PLANTILLA_DOCUMENTOS_FASE_5.some((p) => p.itemNumero === d.itemNumero || p.tipo === d.tipo)
+    );
+
+    exp.tramiteLicencia.documentosPlaneacion = [...docsNuevos, ...docsAdicionales];
   }
 
   // Helper para inicializar Fase 6: En Postulación (Compensar e Indicación a Obra)
@@ -6885,8 +6875,14 @@ export async function createApp(): Promise<express.Express> {
       }
 
       if (documentosSoporte.length === 0) {
-        res.status(400).json({ error: "Debe adjuntar al menos un documento de soporte oficial de la Licencia de Construcción expedida." });
-        return;
+        if (exp.tramiteLicencia!.soporteLicenciaAprobadaDocs && exp.tramiteLicencia!.soporteLicenciaAprobadaDocs.length > 0) {
+          documentosSoporte = exp.tramiteLicencia!.soporteLicenciaAprobadaDocs;
+        } else if (exp.tramiteLicencia!.soporteLicenciaAprobada) {
+          documentosSoporte = [exp.tramiteLicencia!.soporteLicenciaAprobada];
+        } else {
+          res.status(400).json({ error: "Debe adjuntar al menos un documento de soporte oficial de la Licencia de Construcción expedida." });
+          return;
+        }
       }
 
       const soportePrincipal = documentosSoporte[0];
@@ -6948,6 +6944,7 @@ export async function createApp(): Promise<express.Express> {
 
         const {
           idDoc,
+          itemNumero,
           tipo,
           nombre,
           descripcion,
@@ -6957,7 +6954,8 @@ export async function createApp(): Promise<express.Express> {
           tamanoBytes,
           archivoDataUrl,
           sha256Hash,
-          observaciones
+          observaciones,
+          slotTipo
         } = req.body;
 
         if (!nombreArchivo) {
@@ -6982,33 +6980,76 @@ export async function createApp(): Promise<express.Express> {
         }
 
         const docs = exp.tramiteLicencia!.documentosPlaneacion;
-        const indexExistente = docs.findIndex((d) => (idDoc && d.id === idDoc) || (tipo && d.tipo === tipo));
+        const indexExistente = docs.findIndex(
+          (d) => (idDoc && d.id === idDoc) || (itemNumero && d.itemNumero === Number(itemNumero)) || (tipo && d.tipo === tipo)
+        );
 
         let docActualizado: DocumentoRadicacionPlaneacion;
 
         if (indexExistente >= 0) {
+          const docPrevio = docs[indexExistente];
+          let soporteExcel = docPrevio.soporteExcel;
+          let soportePdf = docPrevio.soportePdf;
+          let soporteGeneral = docPrevio.soporte;
+
+          if (slotTipo === "excel") {
+            soporteExcel = soporte;
+            if (soportePdf) {
+              soporteGeneral = soportePdf;
+            } else {
+              soporteGeneral = undefined;
+            }
+          } else if (slotTipo === "pdf") {
+            soportePdf = soporte;
+            if (soporteExcel) {
+              soporteGeneral = soporte;
+            } else {
+              soporteGeneral = undefined;
+            }
+          } else {
+            soporteGeneral = soporte;
+          }
+
           docActualizado = {
-            ...docs[indexExistente],
-            nombre: nombre || docs[indexExistente].nombre,
-            descripcion: descripcion || docs[indexExistente].descripcion,
-            tipo: tipo || docs[indexExistente].tipo,
-            esObligatorio: esObligatorio !== undefined ? esObligatorio : docs[indexExistente].esObligatorio,
-            soporte,
+            ...docPrevio,
+            itemNumero: itemNumero ? Number(itemNumero) : docPrevio.itemNumero,
+            nombre: nombre || docPrevio.nombre,
+            descripcion: descripcion || docPrevio.descripcion,
+            tipo: tipo || docPrevio.tipo,
+            esObligatorio: esObligatorio !== undefined ? esObligatorio : docPrevio.esObligatorio,
+            soporte: soporteGeneral,
+            soporteExcel,
+            soportePdf,
             fechaCarga: new Date().toISOString(),
             cargadoPorId: req.user!.id,
             cargadoPorNombre: req.user!.nombreCompleto,
             cargadoPorRol: req.user!.rol,
-            observaciones: observaciones || docs[indexExistente].observaciones
+            observaciones: observaciones || docPrevio.observaciones
           };
           docs[indexExistente] = docActualizado;
         } else {
+          let soporteExcel: SoporteDocumentoLicencia | undefined = undefined;
+          let soportePdf: SoporteDocumentoLicencia | undefined = undefined;
+          let soporteGeneral: SoporteDocumentoLicencia | undefined = undefined;
+
+          if (slotTipo === "excel") {
+            soporteExcel = soporte;
+          } else if (slotTipo === "pdf") {
+            soportePdf = soporte;
+          } else {
+            soporteGeneral = soporte;
+          }
+
           docActualizado = {
             id: idDoc || `doc-plan-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            itemNumero: itemNumero ? Number(itemNumero) : undefined,
             tipo: tipo || "otro",
             nombre: nombre || "Documento Técnico de Radicación",
             descripcion: descripcion || "Documentación técnica oficial de radicación ante Planeación / Curaduría.",
             esObligatorio: esObligatorio !== undefined ? esObligatorio : false,
-            soporte,
+            soporte: soporteGeneral,
+            soporteExcel,
+            soportePdf,
             fechaCarga: new Date().toISOString(),
             cargadoPorId: req.user!.id,
             cargadoPorNombre: req.user!.nombreCompleto,
@@ -7028,7 +7069,7 @@ export async function createApp(): Promise<express.Express> {
           usuarioNombre: req.user!.nombreCompleto,
           usuarioRol: req.user!.rol,
           tipoEvento: "nota_gestion",
-          titulo: `Documento Técnico Cargado: ${docActualizado.nombre}`,
+          titulo: `Documento Técnico Cargado: ${docActualizado.nombre}${slotTipo ? ` [Slot ${slotTipo.toUpperCase()}]` : ""}`,
           descripcion: `Cargado por ${req.user!.nombreCompleto} (${req.user!.rol}). Archivo: ${nombreArchivo}. ${observaciones || ""}`.trim(),
           soporte,
           estadoResultante: exp.tramiteLicencia!.estadoActual
@@ -7077,7 +7118,7 @@ export async function createApp(): Promise<express.Express> {
 
         const docId = req.params.docId;
         const docs = exp.tramiteLicencia?.documentosPlaneacion || [];
-        const index = docs.findIndex((d) => d.id === docId);
+        const index = docs.findIndex((d) => d.id === docId || (d.itemNumero && `doc-fase5-${d.itemNumero}-${exp.id}` === docId));
 
         if (index === -1) {
           res.status(404).json({ error: "Documento técnico no encontrado." });
@@ -7085,16 +7126,23 @@ export async function createApp(): Promise<express.Express> {
         }
 
         const docRemovido = docs[index];
-        // En lugar de borrar la fila si es obligatoria, se limpia el soporte para permitir recarga
-        if (docRemovido.esObligatorio) {
-          docs[index] = {
-            ...docRemovido,
-            soporte: undefined,
-            fechaCarga: undefined,
-            observaciones: undefined
-          };
+        const slot = (req.query.slot as string) || (req.body && req.body.slot);
+
+        if (slot === "excel") {
+          docRemovido.soporteExcel = undefined;
+          docRemovido.soporte = undefined;
+        } else if (slot === "pdf") {
+          docRemovido.soportePdf = undefined;
+          docRemovido.soporte = undefined;
         } else {
-          docs.splice(index, 1);
+          docRemovido.soporte = undefined;
+          docRemovido.soporteExcel = undefined;
+          docRemovido.soportePdf = undefined;
+          docRemovido.fechaCarga = undefined;
+          docRemovido.observaciones = undefined;
+          if (!docRemovido.esObligatorio && !docRemovido.itemNumero) {
+            docs.splice(index, 1);
+          }
         }
 
         exp.tramiteLicencia!.actualizadoEn = new Date().toISOString();
@@ -7107,7 +7155,7 @@ export async function createApp(): Promise<express.Express> {
           usuarioNombre: req.user!.nombreCompleto,
           usuarioRol: req.user!.rol,
           tipoEvento: "nota_gestion",
-          titulo: `Documento Técnico Removido: ${docRemovido.nombre}`,
+          titulo: `Documento Técnico Removido: ${docRemovido.nombre}${slot ? ` [Slot ${slot.toUpperCase()}]` : ""}`,
           descripcion: `Documento removido/reseteado por ${req.user!.nombreCompleto} (${req.user!.rol}).`,
           estadoResultante: exp.tramiteLicencia!.estadoActual
         };
@@ -7127,6 +7175,7 @@ export async function createApp(): Promise<express.Express> {
       }
     }
   );
+
 
   // 15.2.5 Agregar nota al historial del trámite de Licencia
   app.post(

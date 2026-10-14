@@ -394,28 +394,181 @@ export interface SoporteDocumentoLicencia {
 }
 
 export type TipoDocumentoRadicacionPlaneacion =
-  | "fun" // Formulario Único Nacional
-  | "memorial_estructural" // Memorial de Responsabilidad - Diseñador Estructural
-  | "memorial_arquitectonico" // Memorial de Responsabilidad - Diseñador Arquitectónico
-  | "memorial_geotecnia" // Memorial de Responsabilidad - Geotecnista / Suelos
-  | "memorial_interventor" // Memorial de Responsabilidad - Interventor / Constructor
-  | "planos_radicacion" // Planos impresos/oficiales de radicación
-  | "memorias_calculo" // Memorias de cálculo y cantidades (.pdf, .xlsx)
-  | "otro"; // Otros documentos complementarios
+  | "solicitud_licencia"
+  | "certificado_tradicion"
+  | "fun"
+  | "poder"
+  | "certificacion_redes"
+  | "memorial_arquitectonico"
+  | "memorial_estructural"
+  | "memorial_elementos_no_estructurales"
+  | "paquete_arquitecto"
+  | "paquete_constructor"
+  | "memoria_calculo_estructural"
+  | "memoria_cantidades"
+  | "anexo_1_investigacion_minima"
+  | "anexo_2_estudio_suelos"
+  | "anexo_3_cargas_vientos"
+  | "memorial_geotecnia"
+  | "memorial_interventor"
+  | "planos_radicacion"
+  | "memorias_calculo"
+  | "otro";
 
 export interface DocumentoRadicacionPlaneacion {
   id: string;
-  tipo: TipoDocumentoRadicacionPlaneacion;
+  itemNumero?: number; // 1 a 15 según lista oficial
+  tipo: TipoDocumentoRadicacionPlaneacion | string;
   nombre: string;
   descripcion?: string;
+  formatosPermitidos?: string;
   esObligatorio: boolean;
+  requiereDobleArchivo?: boolean; // Para item 12: Memoria de Cantidades (Excel + PDF)
+  soportaArchivoPesado?: boolean; // Para item 14: Estudio de Suelos (>80 págs)
   soporte?: SoporteDocumentoLicencia;
+  // Campos específicos para Memoria de Cantidades (2 archivos requeridos)
+  soporteExcel?: SoporteDocumentoLicencia;
+  soportePdf?: SoporteDocumentoLicencia;
   fechaCarga?: string;
   cargadoPorId?: string;
   cargadoPorNombre?: string;
   cargadoPorRol?: string;
   observaciones?: string;
 }
+
+export const PLANTILLA_DOCUMENTOS_FASE_5: {
+  itemNumero: number;
+  tipo: TipoDocumentoRadicacionPlaneacion;
+  nombre: string;
+  descripcion: string;
+  formatosPermitidos: string;
+  esObligatorio: boolean;
+  requiereDobleArchivo?: boolean;
+  soportaArchivoPesado?: boolean;
+}[] = [
+  {
+    itemNumero: 1,
+    tipo: "solicitud_licencia",
+    nombre: "1. Solicitud de Licencia de Construcción",
+    descripcion: "Formato oficial de solicitud formal de radicación de licencia de construcción ante la curaduría o secretaría de planeación.",
+    formatosPermitidos: "PDF (.pdf)",
+    esObligatorio: true
+  },
+  {
+    itemNumero: 2,
+    tipo: "certificado_tradicion",
+    nombre: "2. Certificado de Tradición y Libertad Actualizado",
+    descripcion: "Certificado de matrícula inmobiliaria con vigencia reciente (no mayor a 30 días) para acreditar propiedad o titularidad.",
+    formatosPermitidos: "PDF (.pdf)",
+    esObligatorio: true
+  },
+  {
+    itemNumero: 3,
+    tipo: "fun",
+    nombre: "3. Formulario Único Nacional - FUN",
+    descripcion: "Formulario Único Nacional para la solicitud de licencias urbanísticas, debidamente diligenciado y firmado con sello de radicación.",
+    formatosPermitidos: "PDF (.pdf)",
+    esObligatorio: true
+  },
+  {
+    itemNumero: 4,
+    tipo: "poder",
+    nombre: "4. Poder",
+    descripcion: "Poder especial autenticado mediante el cual el propietario autoriza la tramitación de la licencia de construcción.",
+    formatosPermitidos: "PDF (.pdf)",
+    esObligatorio: true
+  },
+  {
+    itemNumero: 5,
+    tipo: "certificacion_redes",
+    nombre: "5. Certificación de No Afectación a Redes Eléctricas",
+    descripcion: "Certificación oficial expedida por el operador de energía eléctrica constatando distancia reglamentaria y no invasión de servidumbres.",
+    formatosPermitidos: "PDF (.pdf)",
+    esObligatorio: true
+  },
+  {
+    itemNumero: 6,
+    tipo: "memorial_arquitectonico",
+    nombre: "6. Memorial de Responsabilidad por el Diseño Arquitectónico",
+    descripcion: "Declaración juramentada y certificación suscrita por el arquitecto proyectista con matrícula profesional vigente.",
+    formatosPermitidos: "PDF (.pdf)",
+    esObligatorio: true
+  },
+  {
+    itemNumero: 7,
+    tipo: "memorial_estructural",
+    nombre: "7. Memorial de Responsabilidad por el Diseño Estructural",
+    descripcion: "Declaración juramentada y memorial de cumplimiento NSR-10 suscrito por el ingeniero civil estructural matriculado.",
+    formatosPermitidos: "PDF (.pdf)",
+    esObligatorio: true
+  },
+  {
+    itemNumero: 8,
+    tipo: "memorial_elementos_no_estructurales",
+    nombre: "8. Memorial de Responsabilidad de Elementos No Estructurales",
+    descripcion: "Memorial y certificación del diseño y anclaje de elementos no estructurales conforme al Título K de la norma NSR-10.",
+    formatosPermitidos: "PDF (.pdf)",
+    esObligatorio: true
+  },
+  {
+    itemNumero: 9,
+    tipo: "paquete_arquitecto",
+    nombre: "9. Paquete Arquitecto Diseñador",
+    descripcion: "Dossier con cédula, tarjeta profesional, vigencia COPNIA y soportes habilitantes del arquitecto proyectista.",
+    formatosPermitidos: "PDF (.pdf) o ZIP (.zip)",
+    esObligatorio: true
+  },
+  {
+    itemNumero: 10,
+    tipo: "paquete_constructor",
+    nombre: "10. Paquete Constructor Responsable",
+    descripcion: "Dossier con cédula, tarjeta profesional, certificado de vigencia y acreditación de experiencia del constructor o director de obra.",
+    formatosPermitidos: "PDF (.pdf) o ZIP (.zip)",
+    esObligatorio: true
+  },
+  {
+    itemNumero: 11,
+    tipo: "memoria_calculo_estructural",
+    nombre: "11. Memoria de Cálculo Estructural",
+    descripcion: "Memoria técnica completa de cálculo y modelado estructural conforme a la Norma Colombiana de Sismo Resistencia NSR-10.",
+    formatosPermitidos: "PDF (.pdf)",
+    esObligatorio: true
+  },
+  {
+    itemNumero: 12,
+    tipo: "memoria_cantidades",
+    nombre: "12. Memoria de Cantidades",
+    descripcion: "Presupuesto oficial y desglose detallado de cantidades de obra. Requiere 2 archivos obligatorios: versión Excel (.xls/.xlsx) y versión PDF (.pdf).",
+    formatosPermitidos: "Excel (.xls/.xlsx) y PDF (.pdf) [2 Archivos Requeridos]",
+    esObligatorio: true,
+    requiereDobleArchivo: true
+  },
+  {
+    itemNumero: 13,
+    tipo: "anexo_1_investigacion_minima",
+    nombre: "13. Anexo 1 - Investigación Mínima",
+    descripcion: "Informe geotécnico preliminar e investigación mínima de campo para vivienda unifamiliar según NSR-10 Título H.",
+    formatosPermitidos: "PDF (.pdf)",
+    esObligatorio: true
+  },
+  {
+    itemNumero: 14,
+    tipo: "anexo_2_estudio_suelos",
+    nombre: "14. Anexo 2 - Estudio de Suelos",
+    descripcion: "Estudio geotécnico completo con perforaciones, sondeos de campo y ensayos de laboratorio (soporte para archivos extensos >80 págs).",
+    formatosPermitidos: "PDF (.pdf) o DOC (.docx/.doc)",
+    esObligatorio: true,
+    soportaArchivoPesado: true
+  },
+  {
+    itemNumero: 15,
+    tipo: "anexo_3_cargas_vientos",
+    nombre: "15. Anexo 3 - Informe Técnico de Cargas y Vientos",
+    descripcion: "Informe de solicitaciones y análisis de cargas vivas, muertas, sísmicas y de viento aplicables al predio rural.",
+    formatosPermitidos: "PDF (.pdf)",
+    esObligatorio: true
+  }
+];
 
 export interface RegistroHistorialLicencia {
   id: string;
