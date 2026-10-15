@@ -73,7 +73,7 @@ import {
   ConfiguracionSistema
 } from "./src/types";
 import { CATALOGO_MUNICIPIOS } from "./src/data/municipios";
-import { normalizarTextoNombre, construirNombreCompleto } from "./src/utils/normalizacion";
+import { normalizarTextoNombre, construirNombreCompleto, descomponerNombreCompleto } from "./src/utils/normalizacion";
 import { generarCasosEjemploParaCadaFase } from "./src/server/seedCasosEjemplo";
 
 interface AuthRequest extends Request {
@@ -507,14 +507,19 @@ export async function createApp(): Promise<express.Express> {
     const comData = row.comercial || {};
     const respData = row.responsable || {};
 
+    const nombresPartes = postData.nombres ? String(postData.nombres).trim().split(" ").filter(Boolean) : [];
+    const primerNombre = postData.primer_nombre || nombresPartes[0] || "Titular";
+    const segundoNombre = postData.segundo_nombre || (nombresPartes.length > 1 ? nombresPartes.slice(1).join(" ") : undefined);
+
     const postulante: Persona = {
       id: postData.id || `per-${row.id}`,
       tipoIdentificacion: postData.tipo_identificacion || "CC",
       numeroIdentificacion: postData.numero_identificacion || "00000000",
-      primerNombre: postData.nombres ? String(postData.nombres).split(" ")[0] : (postData.primer_nombre || "Titular"),
+      primerNombre,
+      segundoNombre,
       primerApellido: postData.primer_apellido || "Registrado en DB",
       segundoApellido: postData.segundo_apellido || undefined,
-      nombres: postData.nombres || `${postData.primer_apellido || 'Titular'}`,
+      nombres: postData.nombres || `${primerNombre}${segundoNombre ? " " + segundoNombre : ""} ${postData.primer_apellido || 'Titular'}`.trim(),
       telefonoPrincipal: postData.telefono_principal || "",
       correo: postData.correo || undefined
     };
@@ -2404,7 +2409,21 @@ export async function createApp(): Promise<express.Express> {
             if (index !== -1) {
               // 1.1 Sincronizar campos actualizados directamente desde Supabase
               const iExistente = mockDb.interesados[index];
-              if (row.nombre_contacto) iExistente.nombreContacto = row.nombre_contacto;
+              if (row.nombre_contacto) {
+                iExistente.nombreContacto = row.nombre_contacto;
+                // Reparar si los campos estaban mezclados o si primerApellido fue sustituido por el segundo nombre
+                const partesNombre = descomponerNombreCompleto(row.nombre_contacto);
+                if (
+                  !iExistente.primerApellido ||
+                  iExistente.primerApellido === iExistente.segundoNombre ||
+                  (partesNombre.segundoNombre && iExistente.primerApellido === partesNombre.segundoNombre && partesNombre.primerApellido !== iExistente.primerApellido)
+                ) {
+                  iExistente.primerNombre = partesNombre.primerNombre;
+                  iExistente.segundoNombre = partesNombre.segundoNombre || undefined;
+                  iExistente.primerApellido = partesNombre.primerApellido;
+                  iExistente.segundoApellido = partesNombre.segundoApellido || undefined;
+                }
+              }
               if (row.numero_identificacion || row.cedula) {
                 iExistente.numeroIdentificacion = row.numero_identificacion || row.cedula;
                 iExistente.cedula = iExistente.numeroIdentificacion;
@@ -2427,16 +2446,16 @@ export async function createApp(): Promise<express.Express> {
               const fechaRegMs = new Date(row.creado_en).getTime();
               const fechaCaducidad = new Date(fechaRegMs + 45 * 24 * 60 * 60 * 1000).toISOString();
               const cedulaRow = row.numero_identificacion || row.cedula || undefined;
+              const partesNombre = descomponerNombreCompleto(row.nombre_contacto);
               mockDb.interesados.unshift({
                 id: row.id,
                 tipoIdentificacion: row.tipo_identificacion || "CC",
                 numeroIdentificacion: cedulaRow,
                 cedula: cedulaRow,
-                primerNombre: row.nombre_contacto ? String(row.nombre_contacto).split(" ")[0] : "",
-                primerApellido:
-                  row.nombre_contacto && String(row.nombre_contacto).split(" ").length > 1
-                    ? String(row.nombre_contacto).split(" ")[1]
-                    : "",
+                primerNombre: partesNombre.primerNombre,
+                segundoNombre: partesNombre.segundoNombre || undefined,
+                primerApellido: partesNombre.primerApellido,
+                segundoApellido: partesNombre.segundoApellido || undefined,
                 nombreContacto: row.nombre_contacto || "Sin Nombre",
                 telefono: row.telefono || "",
                 telefonoSecundario: row.telefono_secundario || undefined,
@@ -2577,15 +2596,21 @@ export async function createApp(): Promise<express.Express> {
     const cedulaLimpia = String(numeroIdentificacion || cedula || "").trim() || undefined;
     const telSecLimpio = telefonoSecundario ? String(telefonoSecundario).trim() : undefined;
 
+    const partesDescomp = descomponerNombreCompleto(nombreFinal);
+    const pNom = primerNombre ? normalizarTextoNombre(primerNombre) : (partesDescomp.primerNombre || undefined);
+    const sNom = segundoNombre ? normalizarTextoNombre(segundoNombre) : (partesDescomp.segundoNombre || undefined);
+    const pAp = primerApellido ? normalizarTextoNombre(primerApellido) : (partesDescomp.primerApellido || undefined);
+    const sAp = segundoApellido ? normalizarTextoNombre(segundoApellido) : (partesDescomp.segundoApellido || undefined);
+
     const nuevo: typeof mockDb.interesados[0] = {
       id: `int-${Date.now()}`,
       tipoIdentificacion: tipoIdentificacion || "CC",
       numeroIdentificacion: cedulaLimpia,
       cedula: cedulaLimpia,
-      primerNombre: primerNombre ? normalizarTextoNombre(primerNombre) : undefined,
-      segundoNombre: segundoNombre ? normalizarTextoNombre(segundoNombre) : undefined,
-      primerApellido: primerApellido ? normalizarTextoNombre(primerApellido) : undefined,
-      segundoApellido: segundoApellido ? normalizarTextoNombre(segundoApellido) : undefined,
+      primerNombre: pNom,
+      segundoNombre: sNom,
+      primerApellido: pAp,
+      segundoApellido: sAp,
       nombreContacto: nombreFinal,
       telefono: String(telefono).trim(),
       telefonoSecundario: telSecLimpio,
@@ -3016,11 +3041,11 @@ export async function createApp(): Promise<express.Express> {
       id: `req-f1-03-${nuevoExpId}-${personaId}`,
       expedienteId: nuevoExpId,
       codigoRequisito: "F1-03",
-      nombre: `Cédula del Postulante: ${nombres} ${primerApellido}`,
+      nombre: `Cédula del Postulante: ${nombreCompleto}`,
       descripcion: "Documento de identidad legible del postulante principal.",
       fase: 1,
       personaId,
-      personaNombre: `${nombres} ${primerApellido}`,
+      personaNombre: nombreCompleto,
       estado: "pendiente_carga",
       esObligatorio: true,
       esAdicional: false

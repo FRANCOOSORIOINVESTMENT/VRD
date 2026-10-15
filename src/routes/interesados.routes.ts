@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { supabase } from "../config/supabase";
 import { mockDb } from "../server/mockDb";
 import { Interesado, ContactoApoyo } from "../types";
+import { descomponerNombreCompleto } from "../utils/normalizacion";
 
 const router = Router();
 
@@ -61,10 +62,13 @@ router.get("/", async (_req: Request, res: Response): Promise<void> => {
         const fechaCreacionMs = new Date(row.creado_en).getTime();
         const fechaCaducidad = new Date(fechaCreacionMs + 45 * 24 * 60 * 60 * 1000).toISOString();
 
+        const partesNombre = descomponerNombreCompleto(row.nombre_contacto);
         return {
           id: row.id,
-          primerNombre: row.nombre_contacto ? String(row.nombre_contacto).split(" ")[0] : "",
-          primerApellido: row.nombre_contacto && String(row.nombre_contacto).split(" ").length > 1 ? String(row.nombre_contacto).split(" ")[1] : "",
+          primerNombre: partesNombre.primerNombre,
+          segundoNombre: partesNombre.segundoNombre || undefined,
+          primerApellido: partesNombre.primerApellido,
+          segundoApellido: partesNombre.segundoApellido || undefined,
           nombreContacto: row.nombre_contacto || "Sin Nombre Registrado",
           telefono: row.telefono || "",
           tieneWhatsapp: Boolean(row.tiene_whatsapp),

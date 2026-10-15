@@ -76,7 +76,7 @@ import { ModuloInformes } from "./components/ModuloInformes";
 import { ModalCambioPassword } from "./components/ModalCambioPassword";
 import { FichaTecnicaImprimible } from "./components/FichaTecnicaImprimible";
 import { CATALOGO_MUNICIPIOS } from "./data/municipios";
-import { normalizarTextoNombre, construirNombreCompleto } from "./utils/normalizacion";
+import { normalizarTextoNombre, construirNombreCompleto, descomponerNombreCompleto } from "./utils/normalizacion";
 import { formatearRol, formatearNombreUsuario } from "./utils/formatoRoles";
 import { convertirImagenAPdf } from "./utils/imageToPdf";
 
@@ -1378,11 +1378,29 @@ export default function App() {
 
   // Abrir modal de conversión con datos precargados
   const handleAbrirConversion = async (item: Interesado) => {
-    const partes = (item.nombreContacto || "").trim().split(" ");
-    const primerNombre = item.primerNombre || partes[0] || "";
-    const segundoNombre = item.segundoNombre || (partes.length > 2 ? partes.slice(1, partes.length - 1).join(" ") : "");
-    const primerApellido = item.primerApellido || (partes.length > 1 ? partes[partes.length - 1] : "");
-    const segundoApellido = item.segundoApellido || "";
+    // Descomposición canónica según el estándar de nombres oficial colombiano
+    const partesDescompuestas = descomponerNombreCompleto(item.nombreContacto);
+
+    let primerNombre = item.primerNombre?.trim() || "";
+    let segundoNombre = item.segundoNombre?.trim() || "";
+    let primerApellido = item.primerApellido?.trim() || "";
+    let segundoApellido = item.segundoApellido?.trim() || "";
+
+    // Detección de corrupción previa: si primerApellido coincide exactamente con el segundo nombre
+    // o coincide con partesDescompuestas.segundoNombre mientras partesDescompuestas tiene un primerApellido real diferente
+    const apellidoContaminadoConSegundoNombre =
+      Boolean(
+        (primerApellido && segundoNombre && primerApellido.toUpperCase() === segundoNombre.toUpperCase()) ||
+        (primerApellido && partesDescompuestas.segundoNombre && primerApellido.toUpperCase() === partesDescompuestas.segundoNombre.toUpperCase() && partesDescompuestas.primerApellido && primerApellido.toUpperCase() !== partesDescompuestas.primerApellido.toUpperCase())
+      );
+
+    if (!primerNombre || !primerApellido || apellidoContaminadoConSegundoNombre) {
+      primerNombre = partesDescompuestas.primerNombre || primerNombre;
+      segundoNombre = partesDescompuestas.segundoNombre || segundoNombre;
+      primerApellido = partesDescompuestas.primerApellido || primerApellido;
+      segundoApellido = partesDescompuestas.segundoApellido || segundoApellido;
+    }
+
     const nombres = [primerNombre, segundoNombre].filter(Boolean).join(" ");
 
     setFormConvertir({

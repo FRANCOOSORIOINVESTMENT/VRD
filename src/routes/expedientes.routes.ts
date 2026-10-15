@@ -64,14 +64,19 @@ router.get("/", async (_req: Request, res: Response): Promise<void> => {
         const comData = row.comercial || {};
         const respData = row.responsable || {};
 
+        const nombresPartes = postData.nombres ? String(postData.nombres).trim().split(" ").filter(Boolean) : [];
+        const primerNombre = postData.primer_nombre || nombresPartes[0] || "";
+        const segundoNombre = postData.segundo_nombre || (nombresPartes.length > 1 ? nombresPartes.slice(1).join(" ") : undefined);
+
         const postulante: Persona = {
           id: postData.id || `per-${row.id}`,
           tipoIdentificacion: postData.tipo_identificacion || "CC",
           numeroIdentificacion: postData.numero_identificacion || "00000000",
-          primerNombre: postData.nombres ? String(postData.nombres).split(" ")[0] : "",
+          primerNombre,
+          segundoNombre,
           primerApellido: postData.primer_apellido || "",
           segundoApellido: postData.segundo_apellido || undefined,
-          nombres: postData.nombres || `${postData.primer_apellido || ''}`,
+          nombres: postData.nombres || `${primerNombre}${segundoNombre ? " " + segundoNombre : ""} ${postData.primer_apellido || ''}`.trim(),
           telefonoPrincipal: postData.telefono_principal,
           correo: postData.correo
         };

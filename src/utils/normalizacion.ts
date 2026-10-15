@@ -41,3 +41,57 @@ export function coincideBusquedaTexto(textoOriginal: string | null | undefined, 
   if (!textoOriginal) return false;
   return normalizarTextoNombre(textoOriginal).includes(normalizarTextoNombre(terminoBusqueda));
 }
+
+export interface PartesNombre {
+  primerNombre: string;
+  segundoNombre: string;
+  primerApellido: string;
+  segundoApellido: string;
+}
+
+/**
+ * Descompone un nombre completo en sus 4 componentes oficiales:
+ * Primer Nombre, Segundo Nombre (opcional), Primer Apellido, Segundo Apellido (opcional).
+ * En la convención colombiana/latinoamericana:
+ * - 4 palabras (ej: "JUAN CARLOS PEREZ GOMEZ"):
+ *   primerNombre: JUAN, segundoNombre: CARLOS, primerApellido: PEREZ, segundoApellido: GOMEZ
+ * - 3 palabras (ej: "MARTA ROJAS GOMEZ"):
+ *   primerNombre: MARTA, segundoNombre: "", primerApellido: ROJAS, segundoApellido: GOMEZ
+ * - 2 palabras (ej: "CARLOS MENDOZA"):
+ *   primerNombre: CARLOS, segundoNombre: "", primerApellido: MENDOZA, segundoApellido: ""
+ * - 1 palabra (ej: "CARLOS"):
+ *   primerNombre: CARLOS, segundoNombre: "", primerApellido: "", segundoApellido: ""
+ */
+export function descomponerNombreCompleto(nombreCompleto?: string | null): PartesNombre {
+  if (!nombreCompleto || !nombreCompleto.trim()) {
+    return { primerNombre: "", segundoNombre: "", primerApellido: "", segundoApellido: "" };
+  }
+
+  const palabras = normalizarTextoNombre(nombreCompleto).split(" ").filter(Boolean);
+
+  if (palabras.length === 0) {
+    return { primerNombre: "", segundoNombre: "", primerApellido: "", segundoApellido: "" };
+  }
+  if (palabras.length === 1) {
+    return { primerNombre: palabras[0], segundoNombre: "", primerApellido: "", segundoApellido: "" };
+  }
+  if (palabras.length === 2) {
+    return { primerNombre: palabras[0], segundoNombre: "", primerApellido: palabras[1], segundoApellido: "" };
+  }
+  if (palabras.length === 3) {
+    // 1 nombre + 2 apellidos (estándar común en identificación colombiana)
+    return { primerNombre: palabras[0], segundoNombre: "", primerApellido: palabras[1], segundoApellido: palabras[2] };
+  }
+  if (palabras.length === 4) {
+    // 2 nombres + 2 apellidos
+    return { primerNombre: palabras[0], segundoNombre: palabras[1], primerApellido: palabras[2], segundoApellido: palabras[3] };
+  }
+
+  // 5 o más palabras (nombres o apellidos compuestos)
+  return {
+    primerNombre: palabras[0],
+    segundoNombre: palabras.slice(1, palabras.length - 2).join(" "),
+    primerApellido: palabras[palabras.length - 2],
+    segundoApellido: palabras[palabras.length - 1]
+  };
+}
