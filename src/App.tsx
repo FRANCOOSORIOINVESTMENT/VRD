@@ -685,14 +685,10 @@ export default function App() {
       try {
         data = await res.json();
       } catch {
-        setAuthError("No se pudo conectar con el endpoint de autenticación. Verifique que las funciones serverless de Vercel estén desplegadas.");
+        setAuthError("No se pudo conectar con el servidor. Verifique la conexión con el servicio web en Render.");
         return;
       }
       if (!res.ok) {
-        if (data.message?.includes("Protected by Vercel") || data.error?.message === "Protected deployment") {
-          setAuthError("El despliegue está bloqueado por 'Vercel Authentication'. Desactive 'Deployment Protection' en Settings > Deployment Protection en el panel de Vercel.");
-          return;
-        }
         const errorMsg = typeof data.error === "string"
           ? data.error
           : (data.error?.message || data.message || "Error al iniciar sesión.");
@@ -965,11 +961,11 @@ export default function App() {
         setFormNuevoRequisito({
           nombre: "",
           descripcion: "",
-          esObligatorio: true,
-          fase: 2
+          esObligatorio: false,
+          fase: 1
         });
         setArchivoAdjuntoNuevoReq(null);
-        mostrarToast("Documento / Requisito agregado exitosamente al hogar.");
+        mostrarToast(data.mensaje || `Archivo adicional "${formNuevoRequisito.nombre}" registrado y cargado exitosamente en Fase ${formNuevoRequisito.fase}.`);
         await cargarDetalleExpediente(detalleExp.expediente.id);
         await cargarExpedientes();
       } else {
@@ -1386,19 +1382,21 @@ export default function App() {
     let primerApellido = item.primerApellido?.trim() || "";
     let segundoApellido = item.segundoApellido?.trim() || "";
 
-    // Detección de corrupción previa: si primerApellido coincide exactamente con el segundo nombre
-    // o coincide con partesDescompuestas.segundoNombre mientras partesDescompuestas tiene un primerApellido real diferente
-    const apellidoContaminadoConSegundoNombre =
-      Boolean(
-        (primerApellido && segundoNombre && primerApellido.toUpperCase() === segundoNombre.toUpperCase()) ||
-        (primerApellido && partesDescompuestas.segundoNombre && primerApellido.toUpperCase() === partesDescompuestas.segundoNombre.toUpperCase() && partesDescompuestas.primerApellido && primerApellido.toUpperCase() !== partesDescompuestas.primerApellido.toUpperCase())
-      );
+    // Detección de corrupción previa: si el segundo nombre sustituyó al primer apellido
+    // (ej. 'EMMA' en primerApellido cuando el nombre es 'ROSA EMMA HERNANDEZ VELASQUEZ')
+    // o si faltan los apellidos desglosados
+    const necesitaSanacion =
+      !primerNombre ||
+      !primerApellido ||
+      (partesDescompuestas.segundoNombre && primerApellido.toUpperCase() === partesDescompuestas.segundoNombre.toUpperCase()) ||
+      (segundoNombre && primerApellido.toUpperCase() === segundoNombre.toUpperCase()) ||
+      (partesDescompuestas.primerApellido && primerApellido.toUpperCase() !== partesDescompuestas.primerApellido.toUpperCase() && partesDescompuestas.segundoNombre);
 
-    if (!primerNombre || !primerApellido || apellidoContaminadoConSegundoNombre) {
-      primerNombre = partesDescompuestas.primerNombre || primerNombre;
-      segundoNombre = partesDescompuestas.segundoNombre || segundoNombre;
-      primerApellido = partesDescompuestas.primerApellido || primerApellido;
-      segundoApellido = partesDescompuestas.segundoApellido || segundoApellido;
+    if (necesitaSanacion && (partesDescompuestas.primerNombre || partesDescompuestas.primerApellido)) {
+      primerNombre = partesDescompuestas.primerNombre;
+      segundoNombre = partesDescompuestas.segundoNombre || "";
+      primerApellido = partesDescompuestas.primerApellido;
+      segundoApellido = partesDescompuestas.segundoApellido || "";
     }
 
     const nombres = [primerNombre, segundoNombre].filter(Boolean).join(" ");
@@ -4305,7 +4303,7 @@ export default function App() {
                   if (!esFase1) return false;
                   if (r.codigoRequisito === "F1-04" || r.nombre?.toLowerCase().includes("fotogr")) return false;
                   if (r.codigoRequisito === "F1-03" && r.personaId && titularId && r.personaId !== titularId) return false;
-                  return ["F1-01", "F1-02", "F1-03"].includes(r.codigoRequisito);
+                  return ["F1-01", "F1-02", "F1-03"].includes(r.codigoRequisito) || Boolean(r.codigoRequisito?.includes("ADICIONAL"));
                 }
                 return r.fase === tabRequisitos;
               });
@@ -4318,7 +4316,7 @@ export default function App() {
                 if (!esFase1) return false;
                 if (r.codigoRequisito === "F1-04" || r.nombre?.toLowerCase().includes("fotogr")) return false;
                 if (r.codigoRequisito === "F1-03" && r.personaId && titularId && r.personaId !== titularId) return false;
-                return ["F1-01", "F1-02", "F1-03"].includes(r.codigoRequisito);
+                return ["F1-01", "F1-02", "F1-03"].includes(r.codigoRequisito) || Boolean(r.codigoRequisito?.includes("ADICIONAL"));
               });
               const reqsFase1Obligatorios = reqsFase1.filter((r) => r.esObligatorio);
               const faltanSubirFase1 = reqsFase1Obligatorios.filter((r) => r.estado === "pendiente_carga" && !r.documentoAsociado);
@@ -4447,6 +4445,40 @@ export default function App() {
                       );
                     })}
                   </div>
+
+                  {/* BARRA SUPERIOR DE ACCIONES DE FASE: BOTÓN AÑADIR ARCHIVO ADICIONAL */}
+                  {!esSalidaDefinitiva && (
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5 p-3.5 bg-blue-50/60 border border-blue-200/70 rounded-xl">
+                      <div className="flex items-center space-x-2 text-xs">
+                        <span className="font-bold text-slate-800">
+                          Fase {tabRequisitos}: {fasesConfig.find((f) => f.num === tabRequisitos)?.label || "Gestión de Fase"}
+                        </span>
+                        <span className="text-slate-400">•</span>
+                        <span className="text-slate-500 font-medium">
+                          {tabRequisitos <= detalleExp.expediente.faseActual ? "Fase activa / habilitada para carga documental" : "Fase proyectada"}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFormNuevoRequisito({
+                            nombre: "",
+                            descripcion: "",
+                            esObligatorio: false,
+                            fase: tabRequisitos
+                          });
+                          setArchivoAdjuntoNuevoReq(null);
+                          setErrorNuevoRequisito(null);
+                          setModalNuevoRequisito(true);
+                        }}
+                        className="inline-flex items-center justify-center space-x-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow-xs transition-colors cursor-pointer shrink-0"
+                        title={`Añadir un archivo o requisito adicional a la Fase ${tabRequisitos}`}
+                      >
+                        <PlusCircle className="w-3.5 h-3.5" />
+                        <span>+ Añadir archivo adicional a Fase {tabRequisitos}</span>
+                      </button>
+                    </div>
+                  )}
 
                   {/* CONTENIDO PESTAÑA 1: VIABILIDAD PREDIAL */}
                   {tabRequisitos === 1 && (
@@ -5595,6 +5627,89 @@ export default function App() {
                           )}
                         </div>
                       )}
+                    </div>
+                  )}
+                  {/* SECCIÓN DE ARCHIVOS ADICIONALES PARA FASES 3, 4, 5, 6, 7 */}
+                  {tabRequisitos >= 3 && detalleExp.requisitos.filter((r) => r.fase === tabRequisitos && Boolean(r.codigoRequisito?.includes("ADICIONAL"))).length > 0 && (
+                    <div className="mt-6 pt-5 border-t border-slate-200">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center space-x-2">
+                          <FileText className="w-4 h-4 text-blue-600" />
+                          <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                            Archivos Adicionales Incorporados a Fase {tabRequisitos} ({detalleExp.requisitos.filter((r) => r.fase === tabRequisitos && Boolean(r.codigoRequisito?.includes("ADICIONAL"))).length})
+                          </h4>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {detalleExp.requisitos
+                          .filter((r) => r.fase === tabRequisitos && Boolean(r.codigoRequisito?.includes("ADICIONAL")))
+                          .map((req) => (
+                            <div key={req.id} className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center space-x-1.5 mb-1">
+                                  <span className="font-mono text-[10px] font-bold text-blue-700 bg-blue-100/60 px-1.5 py-0.5 rounded">
+                                    {req.codigoRequisito}
+                                  </span>
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${req.documentoAsociado ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
+                                    {req.documentoAsociado ? "Cargado" : "Pendiente de archivo"}
+                                  </span>
+                                </div>
+                                <h5 className="font-bold text-xs text-slate-900 truncate" title={req.nombre}>{req.nombre}</h5>
+                                {req.descripcion && <p className="text-[11px] text-slate-500 line-clamp-1 mt-0.5">{req.descripcion}</p>}
+                                {req.documentoAsociado?.versionActual && (
+                                  <p className="text-[10px] text-slate-400 font-mono mt-1 truncate">
+                                    {req.documentoAsociado.versionActual.nombreArchivoOriginal}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="flex items-center space-x-1 shrink-0">
+                                {req.documentoAsociado?.versionActual && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setDocVisorData({
+                                          titulo: req.nombre,
+                                          nombreArchivo: req.documentoAsociado!.versionActual!.nombreArchivoOriginal,
+                                          mimeType: req.documentoAsociado!.versionActual!.mimeType,
+                                          sha256Hash: req.documentoAsociado!.versionActual!.sha256Hash,
+                                          tamanoBytes: req.documentoAsociado!.versionActual!.tamanoBytes,
+                                          subidoPor: req.documentoAsociado!.versionActual!.subidoPorNombre,
+                                          subidoEn: req.documentoAsociado!.versionActual!.subidoEn,
+                                          versionNumero: req.documentoAsociado!.versionActual!.versionNumero,
+                                          categoria: `Fase ${req.fase} Adicional`,
+                                          url: req.documentoAsociado!.versionActual!.archivoDataUrl
+                                        });
+                                      }}
+                                      className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg cursor-pointer transition-colors"
+                                      title="Visualizar documento"
+                                    >
+                                      <Eye className="w-4 h-4" />
+                                    </button>
+                                    <a
+                                      href={obtenerUrlConAntiCache(req.documentoAsociado.versionActual.archivoDataUrl)}
+                                      download={req.documentoAsociado.versionActual.nombreArchivoOriginal}
+                                      className="p-1.5 text-slate-600 hover:bg-slate-200 rounded-lg cursor-pointer transition-colors"
+                                      title="Descargar documento"
+                                    >
+                                      <Download className="w-4 h-4" />
+                                    </a>
+                                  </>
+                                )}
+                                {!esSalidaDefinitiva && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAbrirModalSubir(req)}
+                                    className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg cursor-pointer transition-colors"
+                                    title={req.documentoAsociado ? "Reemplazar archivo" : "Cargar archivo"}
+                                  >
+                                    <Upload className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -7082,24 +7197,24 @@ export default function App() {
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-base font-bold text-slate-900">
-                Agregar Documento al Hogar (Fase 2)
+                Añadir Archivo Adicional (Fase {formNuevoRequisito.fase})
               </h3>
               <button
                 type="button"
                 onClick={() => setModalNuevoRequisito(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
             <p className="text-xs text-slate-500 mb-4">
-              Defina el nombre y las especificaciones del documento que el hogar debe aportar en esta fase.
+              Asigne un nombre oficial al archivo en el sistema y adjunte el documento correspondiente para vincularlo a la Fase {formNuevoRequisito.fase}.
             </p>
 
             <form onSubmit={handleCrearRequisito} className="space-y-4 text-xs">
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  Nombre del Documento Requerido *
+                  Nombre del Archivo / Documento en el Sistema *
                 </label>
                 <input
                   type="text"
@@ -7108,8 +7223,8 @@ export default function App() {
                   onChange={(e) =>
                     setFormNuevoRequisito({ ...formNuevoRequisito, nombre: e.target.value })
                   }
-                  placeholder="ej: Certificado de Ingresos / Sisbén IV / Declaración Juramentada..."
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500"
+                  placeholder="ej: Certificado Extraordinario, Poder Notarial, Plano Complementario, Paz y Salvo..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
 
@@ -7215,10 +7330,10 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={guardandoRequisito}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white rounded-lg font-bold shadow-sm flex items-center space-x-1.5 cursor-pointer"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg font-bold shadow-xs flex items-center space-x-1.5 cursor-pointer transition-colors"
                 >
                   {guardandoRequisito && <Loader2 className="w-4 h-4 animate-spin" />}
-                  <span>{guardandoRequisito ? "Guardando..." : "Guardar Documento Requerido"}</span>
+                  <span>{guardandoRequisito ? "Guardando y cargando..." : "Guardar y Cargar Archivo Adicional"}</span>
                 </button>
               </div>
             </form>

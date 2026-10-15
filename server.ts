@@ -73,7 +73,14 @@ import {
   ConfiguracionSistema
 } from "./src/types";
 import { CATALOGO_MUNICIPIOS } from "./src/data/municipios";
-import { normalizarTextoNombre, construirNombreCompleto, descomponerNombreCompleto } from "./src/utils/normalizacion";
+import {
+  normalizarTextoNombre,
+  construirNombreCompleto,
+  descomponerNombreCompleto,
+  codificarNombresMetadata,
+  decodificarNombresMetadata,
+  limpiarTextoMetadata
+} from "./src/utils/normalizacion";
 import { generarCasosEjemploParaCadaFase } from "./src/server/seedCasosEjemplo";
 
 interface AuthRequest extends Request {
@@ -88,7 +95,7 @@ interface AuthRequest extends Request {
 export async function createApp(): Promise<express.Express> {
   const app = express();
 
-  // Middleware CORS para despliegues serverless (Vercel, Cloud Run, etc.)
+  // Middleware CORS para Render y clientes frontend
   app.use((req: Request, res: Response, next: NextFunction) => {
     res.header("Access-Control-Allow-Origin", (req.headers.origin as string) || "*");
     res.header("Access-Control-Allow-Credentials", "true");
@@ -497,6 +504,12 @@ export async function createApp(): Promise<express.Express> {
 
     // 4. Limpiar cualquier anomalía o requisito huérfano
     limpiarRequisitosHuerfanosExpediente(exp);
+  }
+
+  // Validador universal de formato UUID v4 de PostgreSQL
+  function esUuidValido(val?: string | null): boolean {
+    if (!val || typeof val !== "string") return false;
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim());
   }
 
   // Mapeador robusto de filas de Supabase a modelo canónico de Expediente
@@ -1318,6 +1331,27 @@ export async function createApp(): Promise<express.Express> {
   async function sincronizarExpedienteEnSupabase(exp: Expediente) {
     if (!supabaseAdmin) return;
     try {
+      // Resolver UUIDs válidos de usuarios para no causar errores de tipo UUID en PostgreSQL
+      let respUuid: string | null = null;
+      if (exp.responsableGeneralId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.responsableGeneralId)) {
+        respUuid = exp.responsableGeneralId;
+      } else if (exp.responsableGeneralId) {
+        const p = mockDb.perfiles.find((u) => u.id === exp.responsableGeneralId || u.username === exp.responsableGeneralId || u.rol === exp.responsableGeneralRol);
+        if (p && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(p.id)) {
+          respUuid = p.id;
+        }
+      }
+
+      let asistUuid: string | null = null;
+      if (exp.asistenteAsignadoId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.asistenteAsignadoId)) {
+        asistUuid = exp.asistenteAsignadoId;
+      } else if (exp.asistenteAsignadoId) {
+        const p = mockDb.perfiles.find((u) => u.id === exp.asistenteAsignadoId || u.username === exp.asistenteAsignadoId || u.rol === "asistente");
+        if (p && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(p.id)) {
+          asistUuid = p.id;
+        }
+      }
+
       const payload: Record<string, any> = {
         fase_actual: exp.faseActual,
         estado_general: exp.estadoGeneral,
@@ -1338,41 +1372,168 @@ export async function createApp(): Promise<express.Express> {
         actualizado_en: new Date().toISOString()
       };
 
-      const { data: updated, error } = await supabaseAdmin
-        .from("expedientes")
-        .update(payload)
-        .eq("codigo_visible", exp.codigoVisible)
-        .select("id");
+      if (respUuid) payload.responsable_general_id = respUuid;
+      if (asistUuid) payload.asistente_asignado_id = asistUuid;
 
-      if (error) {
-        console.error(`[SUPABASE]: Error actualizando expediente ${exp.codigoVisible} por código:`, error.message);
-        if (exp.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
-          await supabaseAdmin
-            .from("expedientes")
-            .update(payload)
-            .eq("id", exp.id);
-        }
-      } else if (updated && updated.length > 0) {
-        (exp as any)._persistidoEnSupabase = true;
-        console.log(`[SUPABASE]: Expediente ${exp.codigoVisible} sincronizado en PostgreSQL (Fase ${exp.faseActual}).`);
-      } else {
-        // Si no se encontró por código visible, intentar por UUID
-        if (exp.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
-          const { data: updatedById } = await supabaseAdmin
-            .from("expedientes")
-            .update(payload)
-            .eq("id", exp.id)
-            .select("id");
-          if (updatedById && updatedById.length > 0) {
-            (exp as any)._persistidoEnSupabase = true;
-            console.log(`[SUPABASE]: Expediente ${exp.codigoVisible} (${exp.id}) sincronizado por UUID.`);
+      let updatedCount = 0;
+      // 1. Actualizar por código visible
+      if (exp.codigoVisible) {
+        const { data: updatedByCod } = await supabaseAdmin
+          .from("expedientes")
+          .update(payload)
+          .eq("codigo_visible", exp.codigoVisible)
+          .select("id");
+        if (updatedByCod && updatedByCod.length > 0) {
+          updatedCount += updatedByCod.length;
+          if (!exp.id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
+            exp.id = updatedByCod[0].id;
           }
         }
+      }
+
+      // 2. Actualizar por UUID oficial
+      if (exp.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
+        const { data: updatedById } = await supabaseAdmin
+          .from("expedientes")
+          .update(payload)
+          .eq("id", exp.id)
+          .select("id");
+        if (updatedById && updatedById.length > 0) {
+          updatedCount += updatedById.length;
+        }
+      }
+
+      if (updatedCount > 0) {
+        (exp as any)._persistidoEnSupabase = true;
+        console.log(`[SUPABASE]: Expediente ${exp.codigoVisible} (${exp.id}) sincronizado en PostgreSQL (Fase ${exp.faseActual}).`);
       }
     } catch (e: any) {
       console.error("[SUPABASE]: Excepción sincronizando expediente:", e?.message);
     }
   }
+
+  /**
+   * Sincronización maestra e hidratación completa desde Supabase hacia la memoria del servidor.
+   * Carga perfiles, interesados, expedientes con integrantes/predio/postulante y documentos.
+   */
+  async function sincronizarTodoDesdeSupabase(): Promise<{
+    ok: boolean;
+    expedientesCount: number;
+    interesadosCount: number;
+  }> {
+    if (!supabaseAdmin) {
+      return { ok: false, expedientesCount: mockDb.expedientes.length, interesadosCount: mockDb.interesados.length };
+    }
+
+    try {
+      // 1. Sincronizar perfiles
+      await sincronizarPerfilesDesdeSupabase().catch(() => {});
+
+      // 2. Sincronizar interesados desde Supabase
+      const { data: dbInteresados, error: intErr } = await supabaseAdmin
+        .from("interesados")
+        .select(`*, contactos_apoyo(*)`)
+        .order("creado_en", { ascending: false });
+
+      if (!intErr && Array.isArray(dbInteresados)) {
+        mockDb.interesados = dbInteresados.map((row: any) => {
+          const partesNombre = decodificarNombresMetadata(row.resumen_necesidad) || descomponerNombreCompleto(row.nombre_contacto);
+          const fechaRegMs = new Date(row.creado_en || Date.now()).getTime();
+          const fechaCaducidad = new Date(fechaRegMs + 45 * 24 * 60 * 60 * 1000).toISOString();
+          const cedulaRow = row.numero_identificacion || row.cedula || undefined;
+          return {
+            id: row.id,
+            tipoIdentificacion: (row.tipo_identificacion as TipoIdentificacion) || "CC",
+            numeroIdentificacion: cedulaRow,
+            cedula: cedulaRow,
+            primerNombre: partesNombre.primerNombre,
+            segundoNombre: partesNombre.segundoNombre || undefined,
+            primerApellido: partesNombre.primerApellido,
+            segundoApellido: partesNombre.segundoApellido || undefined,
+            nombreContacto: row.nombre_contacto || "Sin Nombre",
+            telefono: row.telefono || "",
+            telefonoSecundario: row.telefono_secundario || undefined,
+            tieneWhatsappSecundario: Boolean(row.tiene_whatsapp_secundario),
+            tieneWhatsapp: Boolean(row.tiene_whatsapp),
+            correo: row.correo || undefined,
+            departamentoCodigo: row.departamento_codigo || "25",
+            municipioCodigo: row.municipio_codigo || "25151",
+            vereda: row.vereda || "Rural",
+            origenContacto: row.origen_contacto || "Llamada",
+            resumenNecesidad: limpiarTextoMetadata(row.resumen_necesidad),
+            comercialAsignadoId: row.comercial_asignado_id || "757ef367-c0bd-480a-b294-d5fef041f39c",
+            estadoComercial: row.estado_comercial || "nuevo_contacto",
+            convertidoAExpedienteId: row.convertido_a_expediente_id || undefined,
+            creadoEn: row.creado_en,
+            fechaCaducidad,
+            diasExtension: 0,
+            contactosApoyo: Array.isArray(row.contactos_apoyo)
+              ? row.contactos_apoyo.map((c: any) => ({
+                  id: c.id,
+                  interesadoId: c.interesado_id || row.id,
+                  nombreCompleto: c.nombre_completo,
+                  telefono: c.telefono,
+                  parentesco: c.parentesco || "Familiar",
+                  tieneWhatsapp: Boolean(c.tiene_whatsapp)
+                }))
+              : []
+          };
+        });
+        console.log(`[SUPABASE]: ${mockDb.interesados.length} interesados sincronizados oficialmente.`);
+      }
+
+      // 3. Sincronizar expedientes desde Supabase
+      const { data: dbExpedientes, error: expErr } = await supabaseAdmin
+        .from("expedientes")
+        .select(`
+          *,
+          postulante:personas!expedientes_postulante_id_fkey(*),
+          predio:predios!expedientes_predio_vivienda_id_fkey(*),
+          hogar:hogares!expedientes_hogar_id_fkey(
+            id,
+            observaciones,
+            integrantes:integrantes_hogar(
+              id,
+              parentesco,
+              es_postulante_principal,
+              persona:personas(*)
+            )
+          ),
+          comercial:perfiles_usuario!expedientes_comercial_origen_id_fkey(id, nombre_completo, username, rol),
+          responsable:perfiles_usuario!expedientes_responsable_general_id_fkey(id, nombre_completo, username, rol)
+        `)
+        .order("creado_en", { ascending: false });
+
+      if (!expErr && Array.isArray(dbExpedientes)) {
+        mockDb.expedientes = dbExpedientes.map((row: any) => {
+          const exp = mapearFilaSupabaseAExpediente(row);
+          (exp as any)._persistidoEnSupabase = true;
+          inicializarRequisitosFase1(exp);
+          if (exp.faseActual >= 2) inicializarRequisitosFase2(exp);
+          if (exp.faseActual >= 4) inicializarFase4(exp);
+          if (exp.faseActual >= 5) inicializarFase5Licencia(exp);
+          if (exp.faseActual >= 6) inicializarFase6Postulacion(exp);
+          if (exp.faseActual >= 7) inicializarFase7(exp);
+          return exp;
+        });
+        console.log(`[SUPABASE]: ${mockDb.expedientes.length} expedientes sincronizados oficialmente.`);
+      }
+
+      return {
+        ok: true,
+        expedientesCount: mockDb.expedientes.length,
+        interesadosCount: mockDb.interesados.length
+      };
+    } catch (e: any) {
+      console.error("[SUPABASE]: Excepción en sincronizarTodoDesdeSupabase:", e?.message);
+      return { ok: false, expedientesCount: mockDb.expedientes.length, interesadosCount: mockDb.interesados.length };
+    }
+  }
+
+  // Hidratación completa automática al inicio del servidor
+  sincronizarTodoDesdeSupabase().catch((err) =>
+    console.error("[SUPABASE]: Fallo sincronización completa inicial:", err?.message)
+  );
 
   /**
    * Procesa la Salida Definitiva / Retiro de un Hogar:
@@ -1519,6 +1680,11 @@ export async function createApp(): Promise<express.Express> {
   // RUTAS DE LA API (HITO 1)
   // ==========================================
 
+  // 0. HEALTHCHECK PARA RENDER
+  app.get("/health", (req: Request, res: Response) => {
+    res.status(200).json({ status: "healthy", timestamp: new Date().toISOString() });
+  });
+
   // 0. ESTADO DEL SISTEMA (MODO DE OPERACIÓN Y SUPABASE)
   app.get("/api/system/status", async (req: Request, res: Response) => {
     const isSupabase = process.env.APP_MODE === "supabase" || Boolean(process.env.SUPABASE_URL);
@@ -1554,126 +1720,13 @@ export async function createApp(): Promise<express.Express> {
     try {
       let supabaseOk = false;
 
-      // 1. Sincronización de perfiles
-      if (supabaseAdmin) {
-        await sincronizarPerfilesDesdeSupabase().catch((e) =>
-          console.warn("[SYNC]: Error sincronizando perfiles:", e?.message)
-        );
-      }
-
-      // 2. Sincronizar hacia Supabase cualquier cambio local pendiente
+      // 1. Sincronización e hidratación integral desde Supabase (perfiles, interesados, expedientes)
       if (supabaseAdmin) {
         try {
-          await Promise.allSettled(
-            mockDb.expedientes.map((exp) => sincronizarExpedienteEnSupabase(exp))
-          );
-          supabaseOk = true;
+          const syncRes = await sincronizarTodoDesdeSupabase();
+          supabaseOk = syncRes.ok;
         } catch (e: any) {
-          console.warn("[SYNC]: Error sincronizando hacia Supabase:", e?.message);
-        }
-      }
-
-      // 3. Hidratación fresca desde Supabase hacia la memoria del servidor
-      if (supabaseAdmin) {
-        try {
-          const { data: dbRows, error: sbErr } = await supabaseAdmin
-            .from("expedientes")
-            .select(`
-              *,
-              postulante:personas!expedientes_postulante_id_fkey(*),
-              predio:predios!expedientes_predio_vivienda_id_fkey(*),
-              hogar:hogares!expedientes_hogar_id_fkey(
-                id,
-                observaciones,
-                integrantes:integrantes_hogar(
-                  id,
-                  parentesco,
-                  es_postulante_principal,
-                  persona:personas(*)
-                )
-              ),
-              comercial:perfiles_usuario!expedientes_comercial_origen_id_fkey(id, nombre_completo, username, rol),
-              responsable:perfiles_usuario!expedientes_responsable_general_id_fkey(id, nombre_completo, username, rol)
-            `)
-            .order("creado_en", { ascending: false });
-
-          if (!sbErr && Array.isArray(dbRows)) {
-            const idsEnDb = new Set(dbRows.map((r: any) => r.id));
-            const codigosEnDb = new Set(dbRows.map((r: any) => r.codigo_visible).filter(Boolean));
-
-            for (const row of dbRows) {
-              const index = mockDb.expedientes.findIndex(
-                (e) => e.id === row.id || (row.codigo_visible && e.codigoVisible === row.codigo_visible)
-              );
-              if (index !== -1) {
-                const expExistente = mockDb.expedientes[index];
-                if (row.fase_actual) expExistente.faseActual = Number(row.fase_actual);
-                if (row.estado_general) expExistente.estadoGeneral = row.estado_general;
-                if (row.actualizado_en) expExistente.actualizadoEn = row.actualizado_en;
-                if (row.validacion_compensar) expExistente.validacionCompensar = row.validacion_compensar;
-                if (row.gestion_fase4) {
-                  inicializarFase4(expExistente);
-                  expExistente.gestionFase4 = {
-                    interventoria: {
-                      ...(row.gestion_fase4.interventoria || {}),
-                      ...(expExistente.gestionFase4?.interventoria || {})
-                    },
-                    arquitectura: {
-                      ...(row.gestion_fase4.arquitectura || {}),
-                      ...(expExistente.gestionFase4?.arquitectura || {})
-                    },
-                    estudioSuelos: {
-                      ...(row.gestion_fase4.estudioSuelos || {}),
-                      ...(expExistente.gestionFase4?.estudioSuelos || {})
-                    },
-                    informeVisitaFrancoOsorio: expExistente.gestionFase4?.informeVisitaFrancoOsorio || row.gestion_fase4.informeVisitaFrancoOsorio,
-                    actualizadoEn: expExistente.gestionFase4?.actualizadoEn || row.gestion_fase4.actualizadoEn || new Date().toISOString()
-                  };
-                }
-                if (row.tramite_licencia) expExistente.tramiteLicencia = row.tramite_licencia;
-                if (row.postulacion_subsidio) expExistente.postulacionSubsidio = row.postulacion_subsidio;
-                if (row.gestion_fase7) expExistente.gestionFase7 = row.gestion_fase7;
-                if (row.bloqueado_por_revision !== undefined) expExistente.bloqueadoPorRevision = Boolean(row.bloqueado_por_revision);
-                if (expExistente.validacionCompensar?.estadoActual === "aprobado" && expExistente.faseActual < 4) {
-                  expExistente.faseActual = 4;
-                  expExistente.bloqueadoPorRevision = false;
-                }
-                if (row.postulante) {
-                  if (row.postulante.telefono_principal) expExistente.postulante.telefonoPrincipal = row.postulante.telefono_principal;
-                  if (row.postulante.correo) expExistente.postulante.correo = row.postulante.correo;
-                  if (row.postulante.nombres) expExistente.postulante.nombres = row.postulante.nombres;
-                  if (row.postulante.primer_apellido) expExistente.postulante.primerApellido = row.postulante.primer_apellido;
-                }
-                if (row.predio) {
-                  if (row.predio.vereda) expExistente.predioVivienda.vereda = row.predio.vereda;
-                  if (row.predio.nombre_o_direccion) expExistente.predioVivienda.nombreODireccion = row.predio.nombre_o_direccion;
-                }
-              } else {
-                const nuevoExp = mapearFilaSupabaseAExpediente(row);
-                inicializarRequisitosFase1(nuevoExp);
-                if (nuevoExp.faseActual >= 2) inicializarRequisitosFase2(nuevoExp);
-                if (nuevoExp.faseActual >= 4) inicializarFase4(nuevoExp);
-                if (nuevoExp.faseActual >= 5) inicializarFase5Licencia(nuevoExp);
-                if (nuevoExp.faseActual >= 6) inicializarFase6Postulacion(nuevoExp);
-                if (nuevoExp.faseActual >= 7) inicializarFase7(nuevoExp);
-                mockDb.expedientes.unshift(nuevoExp);
-              }
-            }
-
-            // Sincronizar eliminaciones: Si Supabase retornó los registros de la base de datos,
-            // purgar de la memoria viva aquellos expedientes que fueron eliminados de Supabase
-            mockDb.expedientes = mockDb.expedientes.filter((e) => {
-              if (!e) return false;
-              const esUuid = Boolean(e.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(e.id));
-              const vinoDeDb = Boolean((e as any)._persistidoEnSupabase);
-              if (esUuid || vinoDeDb) {
-                return idsEnDb.has(e.id) || (e.codigoVisible && codigosEnDb.has(e.codigoVisible));
-              }
-              return Boolean(e.id || e.codigoVisible);
-            });
-          }
-        } catch (dbErr: any) {
-          console.error("[SYNC]: Error consultando expedientes en Supabase:", dbErr?.message);
+          console.warn("[SYNC]: Error en sincronizarTodoDesdeSupabase:", e?.message);
         }
       }
 
@@ -2269,7 +2322,8 @@ export async function createApp(): Promise<express.Express> {
             if (index !== -1) {
               // 1.1 Si ya existe, sincronizar campos actualizados desde la base de datos
               const expExistente = mockDb.expedientes[index];
-              if (row.fase_actual) expExistente.faseActual = Number(row.fase_actual);
+              const dbFase = Number(row.fase_actual);
+              if (dbFase) expExistente.faseActual = Math.max(expExistente.faseActual || 1, dbFase);
               if (row.estado_general) expExistente.estadoGeneral = row.estado_general;
               if (row.actualizado_en) expExistente.actualizadoEn = row.actualizado_en;
               if (row.validacion_compensar) expExistente.validacionCompensar = row.validacion_compensar;
@@ -2411,8 +2465,7 @@ export async function createApp(): Promise<express.Express> {
               const iExistente = mockDb.interesados[index];
               if (row.nombre_contacto) {
                 iExistente.nombreContacto = row.nombre_contacto;
-                // Reparar si los campos estaban mezclados o si primerApellido fue sustituido por el segundo nombre
-                const partesNombre = descomponerNombreCompleto(row.nombre_contacto);
+                const partesNombre = decodificarNombresMetadata(row.resumen_necesidad) || descomponerNombreCompleto(row.nombre_contacto);
                 if (
                   !iExistente.primerApellido ||
                   iExistente.primerApellido === iExistente.segundoNombre ||
@@ -2438,7 +2491,7 @@ export async function createApp(): Promise<express.Express> {
               if (row.municipio_codigo) iExistente.municipioCodigo = row.municipio_codigo;
               if (row.vereda) iExistente.vereda = row.vereda;
               if (row.origen_contacto) iExistente.origenContacto = row.origen_contacto;
-              if (row.resumen_necesidad !== undefined) iExistente.resumenNecesidad = row.resumen_necesidad || "";
+              if (row.resumen_necesidad !== undefined) iExistente.resumenNecesidad = limpiarTextoMetadata(row.resumen_necesidad);
               if (row.estado_comercial) iExistente.estadoComercial = row.estado_comercial;
               if (row.convertido_a_expediente_id) iExistente.convertidoAExpedienteId = row.convertido_a_expediente_id;
             } else {
@@ -2446,7 +2499,7 @@ export async function createApp(): Promise<express.Express> {
               const fechaRegMs = new Date(row.creado_en).getTime();
               const fechaCaducidad = new Date(fechaRegMs + 45 * 24 * 60 * 60 * 1000).toISOString();
               const cedulaRow = row.numero_identificacion || row.cedula || undefined;
-              const partesNombre = descomponerNombreCompleto(row.nombre_contacto);
+              const partesNombre = decodificarNombresMetadata(row.resumen_necesidad) || descomponerNombreCompleto(row.nombre_contacto);
               mockDb.interesados.unshift({
                 id: row.id,
                 tipoIdentificacion: row.tipo_identificacion || "CC",
@@ -2466,7 +2519,7 @@ export async function createApp(): Promise<express.Express> {
                 municipioCodigo: row.municipio_codigo || "25899",
                 vereda: row.vereda || "Rural",
                 origenContacto: row.origen_contacto || "Llamada",
-                resumenNecesidad: row.resumen_necesidad || "",
+                resumenNecesidad: limpiarTextoMetadata(row.resumen_necesidad),
                 comercialAsignadoId: row.comercial_asignado_id || "usr-comercial-01",
                 estadoComercial: row.estado_comercial || "nuevo_contacto",
                 convertidoAExpedienteId: row.convertido_a_expediente_id || undefined,
@@ -2559,7 +2612,7 @@ export async function createApp(): Promise<express.Express> {
     res.json(resultado);
   });
 
-  app.post("/api/interesados", requireAuth(["comercial"]), (req: AuthRequest, res: Response) => {
+  app.post("/api/interesados", requireAuth(["comercial"]), async (req: AuthRequest, res: Response) => {
     const {
       primerNombre,
       segundoNombre,
@@ -2652,79 +2705,88 @@ export async function createApp(): Promise<express.Express> {
 
     // PERSISTENCIA DIRECTA EN SUPABASE (Base de datos PostgreSQL en vivo)
     if (supabaseAdmin) {
-      (async () => {
-        try {
-          // Resolver el UUID del comercial en Supabase
-          const { data: usuarioDb } = await supabaseAdmin
-            .from("perfiles_usuario")
+      try {
+        // Resolver el UUID del comercial en Supabase
+        const { data: usuarioDb } = await supabaseAdmin
+          .from("perfiles_usuario")
+          .select("id")
+          .eq("username", req.user!.username)
+          .maybeSingle();
+
+        const comercialId = usuarioDb?.id || req.user!.id;
+        if (comercialId) {
+          const metaTag = codificarNombresMetadata({
+            primerNombre: pNom,
+            segundoNombre: sNom,
+            primerApellido: pAp,
+            segundoApellido: sAp
+          });
+          const resumenPersistencia = nuevo.resumenNecesidad
+            ? `${nuevo.resumenNecesidad} ${metaTag}`
+            : metaTag;
+
+          const baseRow: any = {
+            nombre_contacto: nuevo.nombreContacto,
+            telefono: nuevo.telefono,
+            tiene_whatsapp: nuevo.tieneWhatsapp,
+            correo: nuevo.correo || null,
+            departamento_codigo: nuevo.departamentoCodigo,
+            municipio_codigo: nuevo.municipioCodigo,
+            vereda: nuevo.vereda || null,
+            origen_contacto: nuevo.origenContacto,
+            resumen_necesidad: resumenPersistencia,
+            comercial_asignado_id: comercialId,
+            estado_comercial: nuevo.estadoComercial
+          };
+
+          // Intentar inserción con campos extendidos (cédula y segundo teléfono)
+          let insertedId: string | null = null;
+          const fullRow = {
+            ...baseRow,
+            ...(nuevo.numeroIdentificacion ? { numero_identificacion: nuevo.numeroIdentificacion } : {}),
+            ...(nuevo.tipoIdentificacion ? { tipo_identificacion: nuevo.tipoIdentificacion } : {}),
+            ...(nuevo.telefonoSecundario ? { telefono_secundario: nuevo.telefonoSecundario } : {})
+          };
+
+          const { data: inserted, error: sbError } = await supabaseAdmin
+            .from("interesados")
+            .insert([fullRow])
             .select("id")
-            .eq("username", req.user!.username)
             .maybeSingle();
 
-          const comercialId = usuarioDb?.id;
-          if (comercialId) {
-            const baseRow: any = {
-              nombre_contacto: nuevo.nombreContacto,
-              telefono: nuevo.telefono,
-              tiene_whatsapp: nuevo.tieneWhatsapp,
-              correo: nuevo.correo || null,
-              departamento_codigo: nuevo.departamentoCodigo,
-              municipio_codigo: nuevo.municipioCodigo,
-              vereda: nuevo.vereda || null,
-              origen_contacto: nuevo.origenContacto,
-              resumen_necesidad: nuevo.resumenNecesidad || null,
-              comercial_asignado_id: comercialId,
-              estado_comercial: nuevo.estadoComercial
-            };
-
-            // Intentar inserción con campos extendidos (cédula y segundo teléfono)
-            let insertedId: string | null = null;
-            const fullRow = {
-              ...baseRow,
-              ...(nuevo.numeroIdentificacion ? { numero_identificacion: nuevo.numeroIdentificacion } : {}),
-              ...(nuevo.tipoIdentificacion ? { tipo_identificacion: nuevo.tipoIdentificacion } : {}),
-              ...(nuevo.telefonoSecundario ? { telefono_secundario: nuevo.telefonoSecundario } : {})
-            };
-
-            const { data: inserted, error: sbError } = await supabaseAdmin
+          if (!sbError && inserted?.id) {
+            insertedId = inserted.id;
+          } else if (sbError) {
+            // Fallback si las columnas opcionales no existen en el esquema remoto
+            const { data: retryInserted, error: retryError } = await supabaseAdmin
               .from("interesados")
-              .insert([fullRow])
+              .insert([baseRow])
               .select("id")
               .maybeSingle();
-
-            if (!sbError && inserted?.id) {
-              insertedId = inserted.id;
-            } else if (sbError) {
-              // Fallback si las columnas opcionales no existen en el esquema remoto
-              const { data: retryInserted, error: retryError } = await supabaseAdmin
-                .from("interesados")
-                .insert([baseRow])
-                .select("id")
-                .maybeSingle();
-              if (!retryError && retryInserted?.id) {
-                insertedId = retryInserted.id;
-              } else if (retryError) {
-                console.error("[SUPABASE]: Error al insertar interesado en Supabase:", retryError.message);
-              }
-            }
-
-            if (insertedId) {
-              console.log(`[SUPABASE]: Hogar de captación persistido exitosamente en Supabase (UUID: ${insertedId})`);
-              if (nuevo.resumenNecesidad) {
-                await supabaseAdmin.from("notas_conversaciones").insert([{
-                  interesado_id: insertedId,
-                  autor_id: comercialId,
-                  persona_contactada: nuevo.nombreContacto,
-                  canal: nuevo.origenContacto || "contacto_inicial",
-                  contenido: `Detalles de captación inicial: ${nuevo.resumenNecesidad}`
-                }]);
-              }
+            if (!retryError && retryInserted?.id) {
+              insertedId = retryInserted.id;
+            } else if (retryError) {
+              console.error("[SUPABASE]: Error al insertar interesado en Supabase:", retryError.message);
             }
           }
-        } catch (err: any) {
-          console.error("[SUPABASE]: Excepción al guardar en Supabase:", err?.message);
+
+          if (insertedId) {
+            nuevo.id = insertedId;
+            console.log(`[SUPABASE]: Hogar de captación persistido exitosamente en Supabase (UUID: ${insertedId})`);
+            if (nuevo.resumenNecesidad) {
+              await supabaseAdmin.from("notas_conversaciones").insert([{
+                interesado_id: insertedId,
+                autor_id: comercialId,
+                persona_contactada: nuevo.nombreContacto,
+                canal: nuevo.origenContacto || "contacto_inicial",
+                contenido: `Detalles de captación inicial: ${nuevo.resumenNecesidad}`
+              }]).catch(() => {});
+            }
+          }
         }
-      })();
+      } catch (err: any) {
+        console.error("[SUPABASE]: Excepción al guardar en Supabase:", err?.message);
+      }
     }
 
     res.status(201).json(nuevo);
@@ -3154,6 +3216,9 @@ export async function createApp(): Promise<express.Express> {
             console.log(`[SUPABASE]: Expediente creado en Supabase con UUID ${expDb.id} (Código: ${nuevoExp.codigoVisible})`);
             // Sincronizar el id del expediente creado con el UUID oficial de Supabase
             nuevoExp.id = expDb.id;
+            (nuevoExp as any)._persistidoEnSupabase = true;
+            interesado.convertidoAExpedienteId = expDb.id;
+            interesado.estadoComercial = "convertido_a_expediente";
             // Sincronizar requisitosCaso en memoria con el nuevo UUID oficial de Supabase
             mockDb.requisitosCaso.forEach((r) => {
               if (r.expedienteId === nuevoExpId) {
@@ -3168,7 +3233,7 @@ export async function createApp(): Promise<express.Express> {
                 estado_comercial: "convertido_a_expediente",
                 convertido_a_expediente_id: expDb.id
               })
-              .eq("telefono", interesado.telefono);
+              .or(`id.eq.${interesado.id},telefono.eq.${interesado.telefono}`);
 
             // 6. Insertar los 3 requisitos de Fase 1
             const { data: plantillas } = await supabaseAdmin
@@ -3860,6 +3925,165 @@ export async function createApp(): Promise<express.Express> {
         });
       }
     }
+  );
+
+  // 7.1 AGREGAR ARCHIVO O REQUISITO ADICIONAL EN CUALQUIER FASE OPERATIVA (1 a 7)
+  const handleCrearRequisitoAdicional = async (req: AuthRequest, res: Response) => {
+    try {
+      let exp = mockDb.expedientes.find(
+        (e) =>
+          e.id === req.params.id ||
+          e.codigoVisible === req.params.id ||
+          e.codigoVisible?.toUpperCase() === req.params.id?.toUpperCase()
+      );
+
+      if (!exp && supabaseAdmin) {
+        const { data: row } = await supabaseAdmin
+          .from("expedientes")
+          .select(`
+            *,
+            postulante:personas!expedientes_postulante_id_fkey(*),
+            predio:predios!expedientes_predio_vivienda_id_fkey(*),
+            hogar:hogares!expedientes_hogar_id_fkey(
+              id,
+              observaciones,
+              integrantes:integrantes_hogar(
+                id,
+                parentesco,
+                es_postulante_principal,
+                persona:personas(*)
+              )
+            ),
+            comercial:perfiles_usuario!expedientes_comercial_origen_id_fkey(id, nombre_completo, username, rol),
+            responsable:perfiles_usuario!expedientes_responsable_general_id_fkey(id, nombre_completo, username, rol)
+          `)
+          .or(`id.eq.${req.params.id},codigo_visible.eq.${req.params.id}`)
+          .maybeSingle();
+
+        if (row) {
+          exp = mapearFilaSupabaseAExpediente(row);
+          mockDb.expedientes.unshift(exp);
+        }
+      }
+
+      if (!exp) {
+        res.status(404).json({ error: "Expediente no encontrado en el sistema." });
+        return;
+      }
+
+      const nombre = String(req.body.nombre || "").trim();
+      if (!nombre) {
+        res.status(400).json({ error: "Debe ingresar el nombre descriptivo del archivo en el sistema." });
+        return;
+      }
+
+      const faseSolicitada = Math.max(1, Math.min(7, Number(req.body.fase) || exp.faseActual || 1));
+      const timestamp = Date.now();
+      const reqId = `req-adicional-${faseSolicitada}-${timestamp}`;
+      const codigoRequisito = `F${faseSolicitada}-ADICIONAL-${timestamp.toString(36).toUpperCase()}`;
+
+      const nuevoRequisito: RequisitoCaso = {
+        id: reqId,
+        expedienteId: exp.id,
+        codigoRequisito,
+        nombre,
+        descripcion: req.body.descripcion ? String(req.body.descripcion).trim() : `Documento adicional cargado para la Fase ${faseSolicitada}.`,
+        fase: faseSolicitada,
+        predioId: exp.predioVivienda?.id || `pre-${exp.id}`,
+        personaId: exp.postulante?.id || `per-${exp.id}`,
+        esObligatorio: Boolean(req.body.esObligatorio),
+        estado: req.body.archivoDataUrl ? "cargado" : "pendiente_carga",
+        creadoEn: new Date().toISOString()
+      };
+
+      // Si se incluye archivo adjunto directamente
+      if (req.body.archivoDataUrl) {
+        const docId = `doc-add-${Date.now()}`;
+        const nombreArchivo = req.body.nombreArchivo || `${nombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
+        let urlFinal = req.body.archivoDataUrl;
+        try {
+          urlFinal = await persistirArchivoEnStorage(
+            req.body.archivoDataUrl,
+            nombreArchivo,
+            `expedientes/${exp.id}/adicionales`
+          );
+        } catch (e: any) {
+          console.warn("[STORAGE]: Advertencia persistiendo en storage:", e?.message);
+        }
+
+        const docObj: Documento = {
+          id: docId,
+          expedienteId: exp.id,
+          categoria: `fase${faseSolicitada}`,
+          nombreArchivo,
+          mimeType: req.body.mimeType || "application/pdf",
+          tamanoBytes: Number(req.body.tamanoBytes) || 1048576,
+          sha256Hash: `sha256-add-${timestamp}`,
+          url: urlFinal,
+          esOficial: true,
+          versionActual: 1,
+          creadoEn: new Date().toISOString(),
+          versiones: [
+            {
+              id: `ver-${docId}-1`,
+              documentoId: docId,
+              versionNumero: 1,
+              nombreArchivo,
+              mimeType: req.body.mimeType || "application/pdf",
+              tamanoBytes: Number(req.body.tamanoBytes) || 1048576,
+              sha256Hash: `sha256-add-${timestamp}`,
+              storagePath: urlFinal,
+              subidoPorId: req.user!.id,
+              subidoPorNombre: req.user!.nombreCompleto,
+              subidoEn: new Date().toISOString()
+            }
+          ]
+        };
+        mockDb.documentos.push(docObj);
+        nuevoRequisito.documentoAsociado = docObj;
+      }
+
+      mockDb.requisitosCaso.push(nuevoRequisito);
+
+      // Si Supabase está disponible, registrar en PostgreSQL
+      if (supabaseAdmin) {
+        try {
+          let expUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id) ? exp.id : null;
+          if (!expUuid) {
+            const { data: dbExp } = await supabaseAdmin.from("expedientes").select("id").eq("codigo_visible", exp.codigoVisible).maybeSingle();
+            if (dbExp?.id) expUuid = dbExp.id;
+          }
+          if (expUuid) {
+            await supabaseAdmin.from("requisitos_caso").insert([
+              {
+                expediente_id: expUuid,
+                codigo_requisito: codigoRequisito,
+                nombre,
+                fase: faseSolicitada,
+                estado: nuevoRequisito.estado === "cargado" ? "recibido_revision" : "pendiente_cargue",
+                es_obligatorio: Boolean(req.body.esObligatorio)
+              }
+            ]).catch(() => {});
+          }
+        } catch (err: any) {
+          console.warn("[SUPABASE]: Advertencia guardando requisito adicional:", err?.message);
+        }
+      }
+
+      res.status(201).json({
+        success: true,
+        mensaje: `Archivo / requisito adicional "${nombre}" registrado exitosamente en Fase ${faseSolicitada}.`,
+        requisito: nuevoRequisito
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: `Error creando requisito adicional: ${err?.message || "Error interno."}` });
+    }
+  };
+
+  app.post(
+    ["/api/expedientes/:id/requisitos/adicional", "/api/expedientes/:id/requisitos"],
+    requireAuth(["comercial", "asistente", "supervisor", "administrador", "ingenieria", "planeacion"]),
+    handleCrearRequisitoAdicional
   );
 
   // 8. AGREGAR CÉDULA AL HOGAR (Comercial, Asistente, Administrador)
@@ -4702,7 +4926,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     ["/api/expedientes/:id/aprobar-fase1", "/api/expedientes/:id/aprobar-fase-1"],
     requireAuth(["supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -4783,7 +5007,7 @@ export async function createApp(): Promise<express.Express> {
       };
 
       // Sincronizar actualización de fase en Supabase
-      sincronizarExpedienteEnSupabase(exp);
+      await sincronizarExpedienteEnSupabase(exp);
 
       res.json({
         success: true,
@@ -4797,7 +5021,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/fase2/enviar-revision",
     requireAuth(["comercial", "asistente", "ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -4864,6 +5088,9 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      // Sincronizar bloqueo por revisión en Supabase
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({
         success: true,
         mensaje: "Expediente enviado a revisión del Supervisor Jurídico exitosamente.",
@@ -4876,7 +5103,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/fase2/aprobar",
     requireAuth(["supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -4967,7 +5194,7 @@ export async function createApp(): Promise<express.Express> {
       });
 
       // Sincronizar actualización de fase en Supabase
-      sincronizarExpedienteEnSupabase(exp);
+      await sincronizarExpedienteEnSupabase(exp);
 
       res.json({
         success: true,
@@ -10305,14 +10532,7 @@ export async function startServer(): Promise<express.Express> {
   return app;
 }
 
-// En entornos serverless (Vercel, AWS Lambda) se delega a api/index.ts; en entornos standalone se arranca el servidor HTTP
-const isServerless = Boolean(
-  process.env.VERCEL ||
-  process.env.NOW_REGION ||
-  process.env.AWS_LAMBDA_FUNCTION_NAME ||
-  process.env.NETLIFY
-);
-
-if (!isServerless && process.env.NODE_ENV !== "test") {
+// En Render y entornos Node.js estándar se inicia el servidor HTTP
+if (process.env.NODE_ENV !== "test") {
   startServer();
 }
