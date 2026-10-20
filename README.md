@@ -7,3 +7,4 @@ Sistema ERP/CRM de misión crítica integral para gestionar el ciclo de vida com
 * TypeScript
 * Tailwind CSS
 * Supabase (Backend & Storage)
+
