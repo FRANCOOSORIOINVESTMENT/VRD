@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Archivos subidos por usuarios (datos personales de beneficiarios): nunca en el repositorio
+public/uploads/
+tmp/
+.aistudio/
