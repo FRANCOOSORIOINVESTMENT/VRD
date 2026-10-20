@@ -2,17 +2,24 @@ import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
 import crypto from "crypto";
 import path from "path";
+import os from "os";
 import fs from "fs";
 import { supabase, STORAGE_BUCKET_NAME } from "../config/supabase";
 
 const router = Router();
 
 // ============================================================================
-// CONFIGURACIÓN DE MULTER Y VALIDACIONES DE ALMACENAMIENTO (HASTA 2 GB & CHUNKED UPLOAD)
+// CONFIGURACIÓN DE MULTER Y VALIDACIONES DE ALMACENAMIENTO
 // ============================================================================
 
-// Soporte oficial para archivos pesados (ej. Estudio de Suelos de más de 82 páginas, planos arquitectónicos en alta resolución)
-const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024 * 1024; // 2 Gigabytes (2 GB)
+// Subida directa: archivos de hasta 25 MB (se mantienen en memoria).
+const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+
+// Subida por bloques (documentos pesados, ej. Estudio de Suelos):
+// cada bloque pesa como máximo 10 MB y el archivo ensamblado no puede superar 500 MB.
+const MAX_CHUNK_SIZE_BYTES = 10 * 1024 * 1024;
+const MAX_TOTAL_CHUNKED_BYTES = 500 * 1024 * 1024;
+const MAX_TOTAL_CHUNKS = 200;
 
 const MIME_TYPES_PERMITIDOS = [
   "application/pdf",
@@ -22,7 +29,6 @@ const MIME_TYPES_PERMITIDOS = [
   "image/pjpeg",
   "image/png",
   "image/webp",
-  "image/svg+xml",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.ms-excel",
@@ -30,6 +36,7 @@ const MIME_TYPES_PERMITIDOS = [
   "application/vnd.ms-excel.sheet.macroEnabled.12",
   "text/csv",
   "application/csv",
+  // Algunos navegadores envían este tipo genérico; se acepta SOLO si la extensión es válida.
   "application/octet-stream"
 ];
 
@@ -47,38 +54,43 @@ const EXTENSIONES_PERMITIDAS = [
   ".csv"
 ];
 
-// Configuración de almacenamiento en disco para subida directa de archivos pesados sin saturar RAM
-const uploadsTempDir = path.join(process.cwd(), "public", "uploads", "temp_chunks");
+const MENSAJE_TIPO_NO_PERMITIDO =
+  "Tipo de archivo no permitido. Se admiten archivos PDF (.pdf), hojas de cálculo Excel (.xlsx, .xls, .csv), imágenes (.jpg, .jpeg, .png, .webp) o documentos (.doc, .docx).";
+
+function extensionPermitida(nombre: string): boolean {
+  return EXTENSIONES_PERMITIDAS.includes(path.extname(nombre || "").toLowerCase());
+}
+
+// Directorio temporal para bloques, FUERA de la carpeta pública de archivos.
+const uploadsTempDir = path.join(os.tmpdir(), "vrd_upload_chunks");
 if (!fs.existsSync(uploadsTempDir)) {
   fs.mkdirSync(uploadsTempDir, { recursive: true });
 }
 
-// Memory storage para chunks o archivos moderados
-const storage = multer.memoryStorage();
+// Directorio base de archivos persistidos localmente.
+const localUploadsDir = path.resolve(process.cwd(), "public", "uploads");
 
-const upload = multer({
-  storage,
-  limits: {
-    fileSize: MAX_FILE_SIZE_BYTES,
-    files: 1
-  },
-  fileFilter: (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const mime = (file.mimetype || "").toLowerCase();
-    const mimeValido = MIME_TYPES_PERMITIDOS.includes(mime);
-    const extValida = EXTENSIONES_PERMITIDAS.includes(ext);
-
-    // Permitir si la extensión es válida O el mimeType es válido
-    if (extValida || mimeValido) {
-      cb(null, true);
-    } else {
-      cb(
-        new Error(
-          `Tipo de archivo no permitido (${file.mimetype || ext}). Se admiten archivos PDF (.pdf), hojas de cálculo Excel (.xlsx, .xls, .csv), imágenes (.jpg, .jpeg, .png, .webp) o documentos (.docx).`
-        )
-      );
-    }
+// El archivo debe tener extensión permitida Y un MIME permitido (antes bastaba con uno de los dos).
+const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  const mime = (file.mimetype || "").toLowerCase();
+  if (extensionPermitida(file.originalname) && MIME_TYPES_PERMITIDOS.includes(mime)) {
+    cb(null, true);
+  } else {
+    cb(new Error(MENSAJE_TIPO_NO_PERMITIDO));
   }
+};
+
+const uploadSimple = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_SIZE_BYTES, files: 1 },
+  fileFilter
+});
+
+// Los bloques se envían con nombre/MIME arbitrarios (ej. "blob"), así que solo se limita el tamaño.
+// La extensión del archivo final se valida con el campo fileName al ensamblar.
+const uploadBloque = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_CHUNK_SIZE_BYTES, files: 1 }
 });
 
 // Middleware para atrapar errores de Multer
@@ -87,7 +99,7 @@ export const handleMulterErrors = (err: any, _req: Request, res: Response, next:
     if (err.code === "LIMIT_FILE_SIZE") {
       res.status(400).json({
         ok: false,
-        error: "El archivo supera el tamaño máximo permitido de 2 Gigabytes (2 GB)."
+        error: "El archivo (o bloque) supera el tamaño máximo permitido."
       });
       return;
     }
@@ -101,15 +113,41 @@ export const handleMulterErrors = (err: any, _req: Request, res: Response, next:
   next();
 };
 
+// ============================================================================
+// UTILIDADES DE SEGURIDAD PARA RUTAS Y NOMBRES
+// ============================================================================
+
 /**
  * Normaliza y sanea el nombre del archivo para rutas seguras en la nube.
  */
 function sanitizarNombreArchivo(nombre: string): string {
-  return nombre
+  const limpio = String(nombre || "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "") // Remueve acentos
     .replace(/[^a-zA-Z0-9._-]/g, "_") // Reemplaza caracteres especiales
-    .replace(/_+/g, "_");
+    .replace(/_+/g, "_")
+    .replace(/^\.+/, "_"); // Evita archivos ocultos o ".."
+  return limpio.slice(-120) || "archivo";
+}
+
+/**
+ * Sanea un identificador que se usará como segmento de ruta (expedienteId, codigoRequisito,
+ * uploadId, seccion). Solo letras, números, guion y guion bajo: impide "../" y separadores.
+ */
+function sanearSegmento(valor: unknown, porDefecto: string): string {
+  const limpio = String(valor ?? "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .slice(0, 80);
+  return limpio || porDefecto;
+}
+
+/**
+ * Garantiza que la ruta resuelta quede dentro de la carpeta base indicada.
+ */
+function rutaDentroDe(base: string, ruta: string): boolean {
+  const resuelta = path.resolve(ruta);
+  return resuelta === base || resuelta.startsWith(base + path.sep);
 }
 
 // ============================================================================
@@ -117,7 +155,7 @@ function sanitizarNombreArchivo(nombre: string): string {
 // ============================================================================
 router.post(
   "/upload",
-  upload.single("archivo"),
+  uploadSimple.single("archivo"),
   handleMulterErrors,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -130,9 +168,9 @@ router.post(
         return;
       }
 
-      // Parámetros de contexto
-      const expedienteId = String(req.body.expedienteId || req.body.expediente_id || "general").trim();
-      const codigoRequisito = String(req.body.codigoRequisito || req.body.codigo_requisito || "DOC").trim();
+      // Parámetros de contexto (saneados: se usan como parte de la ruta en disco)
+      const expedienteId = sanearSegmento(req.body.expedienteId || req.body.expediente_id, "general");
+      const codigoRequisito = sanearSegmento(req.body.codigoRequisito || req.body.codigo_requisito, "DOC");
 
       // 1. Cálculo del Hash criptográfico SHA-256 para auditoría de integridad inmutable
       const sha256Hash = crypto.createHash("sha256").update(file.buffer).digest("hex");
@@ -142,13 +180,13 @@ router.post(
       const nombreLimpio = sanitizarNombreArchivo(file.originalname);
       const storagePath = `expedientes/${expedienteId}/${codigoRequisito}_${timestamp}_${nombreLimpio}`;
 
-      // 3. Persistir primero copia local indestructible
-      const localUploadsDir = path.join(process.cwd(), "public", "uploads");
+      // 3. Persistir primero copia local
       const localFilePath = path.join(localUploadsDir, storagePath);
-      const localDir = path.dirname(localFilePath);
-      if (!fs.existsSync(localDir)) {
-        fs.mkdirSync(localDir, { recursive: true });
+      if (!rutaDentroDe(localUploadsDir, localFilePath)) {
+        res.status(400).json({ ok: false, error: "Ruta de archivo no válida." });
+        return;
       }
+      fs.mkdirSync(path.dirname(localFilePath), { recursive: true });
       fs.writeFileSync(localFilePath, file.buffer);
       let publicUrl = `/uploads/${storagePath.replace(/\\/g, "/")}`;
 
@@ -195,7 +233,7 @@ router.post(
       console.error("[UPLOAD EXCEPTION]:", err);
       res.status(500).json({
         ok: false,
-        error: `Excepción interna al procesar subida de archivo: ${err?.message || err}`
+        error: "Error interno al procesar la subida del archivo."
       });
     }
   }
@@ -203,25 +241,42 @@ router.post(
 
 // ============================================================================
 // CHUNKED UPLOAD: CARGA POR PARTES DE DOCUMENTOS PESADOS (ESTUDIO DE SUELOS)
-// Permite subir archivos de más de 82 páginas (hasta 2 GB) en bloques de 5MB
+// Permite subir archivos grandes (hasta 500 MB) en bloques de hasta 10 MB
 // ============================================================================
 
 router.post(
   "/upload-chunk",
-  upload.single("chunk"),
+  uploadBloque.single("chunk"),
   handleMulterErrors,
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const uploadId = String(req.body.uploadId || req.body.upload_id || "").trim();
+      const uploadId = sanearSegmento(req.body.uploadId || req.body.upload_id, "");
       const chunkIndex = parseInt(String(req.body.chunkIndex ?? req.body.chunk_index ?? "0"), 10);
       const totalChunks = parseInt(String(req.body.totalChunks ?? req.body.total_chunks ?? "1"), 10);
       const fileName = String(req.body.fileName || req.body.file_name || "documento_pesado.pdf").trim();
       const mimeType = String(req.body.mimeType || req.body.mime_type || "application/pdf").trim();
-      const expedienteId = String(req.body.expedienteId || req.body.expediente_id || "general").trim();
-      const seccion = String(req.body.seccion || "estudio_suelos").trim();
+      const expedienteId = sanearSegmento(req.body.expedienteId || req.body.expediente_id, "general");
+      const seccion = sanearSegmento(req.body.seccion, "estudio_suelos");
 
       if (!uploadId) {
         res.status(400).json({ ok: false, error: "El identificador de carga uploadId es requerido." });
+        return;
+      }
+
+      if (
+        !Number.isInteger(chunkIndex) ||
+        !Number.isInteger(totalChunks) ||
+        totalChunks < 1 ||
+        totalChunks > MAX_TOTAL_CHUNKS ||
+        chunkIndex < 0 ||
+        chunkIndex >= totalChunks
+      ) {
+        res.status(400).json({ ok: false, error: "Parámetros de bloque no válidos (chunkIndex / totalChunks)." });
+        return;
+      }
+
+      if (!extensionPermitida(fileName)) {
+        res.status(400).json({ ok: false, error: MENSAJE_TIPO_NO_PERMITIDO });
         return;
       }
 
@@ -239,16 +294,25 @@ router.post(
         return;
       }
 
-      const sessionDir = path.join(uploadsTempDir, uploadId);
-      if (!fs.existsSync(sessionDir)) {
-        fs.mkdirSync(sessionDir, { recursive: true });
+      if (chunkBuffer.length > MAX_CHUNK_SIZE_BYTES) {
+        res.status(400).json({ ok: false, error: "El bloque supera el tamaño máximo permitido." });
+        return;
       }
+
+      const sessionDir = path.join(uploadsTempDir, uploadId);
+      if (!rutaDentroDe(uploadsTempDir, sessionDir)) {
+        res.status(400).json({ ok: false, error: "Identificador de carga no válido." });
+        return;
+      }
+      fs.mkdirSync(sessionDir, { recursive: true });
 
       const chunkFilePath = path.join(sessionDir, `part_${String(chunkIndex).padStart(5, "0")}.part`);
       fs.writeFileSync(chunkFilePath, chunkBuffer);
 
       // Verificar cuántos chunks se han recibido
-      const existingParts = fs.readdirSync(sessionDir).filter((f) => f.startsWith("part_") && f.endsWith(".part"));
+      const existingParts = fs
+        .readdirSync(sessionDir)
+        .filter((f) => f.startsWith("part_") && f.endsWith(".part"));
 
       if (existingParts.length < totalChunks) {
         // Bloque recibido exitosamente, aún faltan partes
@@ -269,11 +333,22 @@ router.post(
       const timestamp = Date.now();
       const storagePath = `expedientes/${expedienteId}/${seccion}_${timestamp}_${nombreLimpio}`;
 
-      const localUploadsDir = path.join(process.cwd(), "public", "uploads");
       const localFilePath = path.join(localUploadsDir, storagePath);
-      const localDir = path.dirname(localFilePath);
-      if (!fs.existsSync(localDir)) {
-        fs.mkdirSync(localDir, { recursive: true });
+      if (!rutaDentroDe(localUploadsDir, localFilePath)) {
+        res.status(400).json({ ok: false, error: "Ruta de archivo no válida." });
+        return;
+      }
+      fs.mkdirSync(path.dirname(localFilePath), { recursive: true });
+
+      // Validar tamaño total antes de ensamblar
+      let totalBytes = 0;
+      for (const partFileName of existingParts) {
+        totalBytes += fs.statSync(path.join(sessionDir, partFileName)).size;
+      }
+      if (totalBytes > MAX_TOTAL_CHUNKED_BYTES) {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+        res.status(400).json({ ok: false, error: "El archivo ensamblado supera el tamaño máximo permitido (500 MB)." });
+        return;
       }
 
       const writeStream = fs.createWriteStream(localFilePath);
@@ -281,28 +356,32 @@ router.post(
       let totalBytesWritten = 0;
 
       for (const partFileName of existingParts) {
-        const partPath = path.join(sessionDir, partFileName);
-        const partBuf = fs.readFileSync(partPath);
+        const partBuf = fs.readFileSync(path.join(sessionDir, partFileName));
         hash.update(partBuf);
-        writeStream.write(partBuf);
+        if (!writeStream.write(partBuf)) {
+          await new Promise<void>((resolve) => writeStream.once("drain", () => resolve()));
+        }
         totalBytesWritten += partBuf.length;
       }
-      writeStream.end();
+
+      // Esperar a que el archivo termine de escribirse en disco antes de continuar
+      await new Promise<void>((resolve, reject) => {
+        writeStream.once("finish", () => resolve());
+        writeStream.once("error", reject);
+        writeStream.end();
+      });
 
       const sha256Hash = hash.digest("hex");
       let publicUrl = `/uploads/${storagePath.replace(/\\/g, "/")}`;
 
       // Limpieza segura de los chunks temporales
       try {
-        for (const partFileName of existingParts) {
-          fs.unlinkSync(path.join(sessionDir, partFileName));
-        }
-        fs.rmdirSync(sessionDir);
+        fs.rmSync(sessionDir, { recursive: true, force: true });
       } catch (cleanErr) {
         console.warn("[CHUNK CLEANUP WARN]:", cleanErr);
       }
 
-      // Sincronización asíncrona hacia Supabase Storage si el archivo es menor a 50MB o lectura en buffer
+      // Sincronización hacia Supabase Storage si el archivo es menor a 50MB
       try {
         if (totalBytesWritten <= 50 * 1024 * 1024) {
           const assembledBuffer = fs.readFileSync(localFilePath);
@@ -325,7 +404,7 @@ router.post(
         console.warn("[STORAGE ASSEMBLE WARN]:", storageErr?.message);
       }
 
-      console.log(`[CHUNKED UPLOAD COMPLETE]: Archivo pesado "${fileName}" (${(totalBytesWritten / 1024 / 1024).toFixed(2)} MB) ensamblado exitosamente.`);
+      console.log(`[CHUNKED UPLOAD COMPLETE]: Archivo pesado "${nombreLimpio}" (${(totalBytesWritten / 1024 / 1024).toFixed(2)} MB) ensamblado exitosamente.`);
 
       res.status(201).json({
         ok: true,
@@ -346,7 +425,7 @@ router.post(
       });
     } catch (err: any) {
       console.error("[CHUNKED UPLOAD ERROR]:", err);
-      res.status(500).json({ ok: false, error: `Error en ensamblaje de archivo: ${err?.message || err}` });
+      res.status(500).json({ ok: false, error: "Error interno en el ensamblaje del archivo." });
     }
   }
 );
