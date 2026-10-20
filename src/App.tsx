@@ -76,7 +76,7 @@ import { ModuloInformes } from "./components/ModuloInformes";
 import { ModalCambioPassword } from "./components/ModalCambioPassword";
 import { FichaTecnicaImprimible } from "./components/FichaTecnicaImprimible";
 import { CATALOGO_MUNICIPIOS } from "./data/municipios";
-import { normalizarTextoNombre, construirNombreCompleto, descomponerNombreCompleto } from "./utils/normalizacion";
+import { normalizarTextoNombre, construirNombreCompleto, descomponerNombreCompleto, decodificarNombresMetadata } from "./utils/normalizacion";
 import { formatearRol, formatearNombreUsuario } from "./utils/formatoRoles";
 import { convertirImagenAPdf } from "./utils/imageToPdf";
 
@@ -1051,6 +1051,25 @@ export default function App() {
       const data = await res.json();
       if (res.ok) {
         mostrarToast(data.mensaje || `Expediente enviado a revisión de la Fase ${numFase} exitosamente. Documentos bloqueados para Gestor Rural.`);
+        setDetalleExp((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            expediente: {
+              ...prev.expediente,
+              ...(data.expediente || {}),
+              bloqueadoPorRevision: true,
+              faseEnRevision: numFase
+            }
+          };
+        });
+        setExpedientes((prev) =>
+          prev.map((e) =>
+            e.id === detalleExp.expediente.id
+              ? { ...e, ...(data.expediente || {}), bloqueadoPorRevision: true, faseEnRevision: numFase }
+              : e
+          )
+        );
         await cargarDetalleExpediente(detalleExp.expediente.id);
         await cargarExpedientes();
       } else {
@@ -1401,9 +1420,32 @@ export default function App() {
 
     const nombres = [primerNombre, segundoNombre].filter(Boolean).join(" ");
 
+    let cedulaRecuperada = (item.numeroIdentificacion || item.cedula || "").trim();
+    let tipoIdRecuperado = (item.tipoIdentificacion as TipoIdentificacion) || "CC";
+
+    if (!cedulaRecuperada && item.resumenNecesidad) {
+      const meta = decodificarNombresMetadata(item.resumenNecesidad);
+      if (meta?.numeroIdentificacion) {
+        cedulaRecuperada = meta.numeroIdentificacion;
+        if (meta.tipoIdentificacion) tipoIdRecuperado = meta.tipoIdentificacion as TipoIdentificacion;
+      }
+    }
+
+    if (!cedulaRecuperada) {
+      const telLimpio = (item.telefono || "").replace(/\D/g, "");
+      const expMatch = expedientes.find(
+        (e) => (telLimpio && e.titular?.telefonoPrincipal?.replace(/\D/g, "") === telLimpio) ||
+               (item.nombreContacto && normalizarTextoNombre(e.titular?.nombreCompleto || "").includes(normalizarTextoNombre(primerApellido || "")))
+      );
+      if (expMatch?.titular?.numeroIdentificacion) {
+        cedulaRecuperada = expMatch.titular.numeroIdentificacion;
+        if (expMatch.titular.tipoIdentificacion) tipoIdRecuperado = expMatch.titular.tipoIdentificacion as TipoIdentificacion;
+      }
+    }
+
     setFormConvertir({
-      tipoIdentificacion: (item.tipoIdentificacion as TipoIdentificacion) || "CC",
-      numeroIdentificacion: item.numeroIdentificacion || item.cedula || "",
+      tipoIdentificacion: tipoIdRecuperado,
+      numeroIdentificacion: cedulaRecuperada,
       primerNombre,
       segundoNombre,
       primerApellido,
@@ -7074,15 +7116,29 @@ export default function App() {
                     </select>
                   </div>
                   <div className="col-span-2">
-                    <label className="block text-slate-600 mb-1 font-medium">Número Cédula / ID *</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-slate-600 font-medium">
+                        Número Cédula / ID <span className="text-red-500">*</span>
+                      </label>
+                      {formConvertir.numeroIdentificacion && (
+                        <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded font-medium">
+                          ✓ Traída de captación
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="text"
                       required
                       value={formConvertir.numeroIdentificacion}
                       onChange={(e) => setFormConvertir({ ...formConvertir, numeroIdentificacion: e.target.value })}
                       placeholder="ej: 75097530"
-                      className="w-full px-2.5 py-2 border border-slate-300 rounded-lg outline-none font-mono"
+                      className="w-full px-2.5 py-2 border border-slate-300 rounded-lg outline-none font-mono bg-slate-50 focus:bg-white"
                     />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      {formConvertir.numeroIdentificacion
+                        ? "Cédula vinculada automáticamente desde la captación del hogar. No es necesario volver a digitarla."
+                        : "No se registró en captación. Ingrese el número de cédula para crear el expediente."}
+                    </p>
                   </div>
                 </div>
 

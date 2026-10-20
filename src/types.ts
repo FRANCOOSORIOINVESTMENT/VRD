@@ -662,6 +662,7 @@ export interface DocVersion {
   versionNumero: number;
   storagePath: string;
   nombreArchivoOriginal: string;
+  nombreArchivo?: string;
   mimeType: string;
   tamanoBytes: number;
   sha256Hash: string;
@@ -681,6 +682,14 @@ export interface Documento {
   predioId?: string;
   versiones: DocVersion[];
   versionActual?: DocVersion;
+  categoria?: string;
+  esOficial?: boolean;
+  nombreArchivo?: string;
+  mimeType?: string;
+  tamanoBytes?: number;
+  sha256Hash?: string;
+  url?: string;
+  creadoEn?: string;
 }
 
 export interface RequisitoCaso {

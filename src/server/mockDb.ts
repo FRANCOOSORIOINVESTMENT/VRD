@@ -109,6 +109,7 @@ class MockDatabase {
     requiereCambioPassword?: boolean;
     requiere_cambio_password?: boolean;
   })[] = [...CUENTAS_FICTICIAS];
+  personas: Persona[] = [];
   interesados: Interesado[] = [];
   expedientes: Expediente[] = [];
   requisitosCaso: RequisitoCaso[] = [];

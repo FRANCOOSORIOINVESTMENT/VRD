@@ -1,8 +1,8 @@
 import { Router, Request, Response } from "express";
 import { supabase } from "../config/supabase";
 import { mockDb } from "../server/mockDb";
-import { Interesado, ContactoApoyo } from "../types";
-import { descomponerNombreCompleto } from "../utils/normalizacion";
+import { Interesado, ContactoApoyo, TipoIdentificacion } from "../types";
+import { descomponerNombreCompleto, decodificarNombresMetadata, limpiarTextoMetadata, normalizarTextoNombre } from "../utils/normalizacion";
 
 const router = Router();
 
@@ -62,22 +62,41 @@ router.get("/", async (_req: Request, res: Response): Promise<void> => {
         const fechaCreacionMs = new Date(row.creado_en).getTime();
         const fechaCaducidad = new Date(fechaCreacionMs + 45 * 24 * 60 * 60 * 1000).toISOString();
 
-        const partesNombre = descomponerNombreCompleto(row.nombre_contacto);
+        const partesNombre = decodificarNombresMetadata(row.resumen_necesidad) || descomponerNombreCompleto(row.nombre_contacto);
+        let cedulaRow = row.numero_identificacion || row.cedula || partesNombre.numeroIdentificacion || undefined;
+        let tipoIdRow = (row.tipo_identificacion as TipoIdentificacion) || (partesNombre.tipoIdentificacion as TipoIdentificacion) || "CC";
+        if (!cedulaRow) {
+          const telLimpio = String(row.telefono || "").replace(/\D/g, "");
+          const persMatch = mockDb.personas.find(
+            (p) => (telLimpio && p.telefonoPrincipal?.replace(/\D/g, "") === telLimpio) ||
+                   (row.nombre_contacto && normalizarTextoNombre(row.nombre_contacto).includes(normalizarTextoNombre(p.primerApellido || "")))
+          );
+          if (persMatch?.numeroIdentificacion) {
+            cedulaRow = persMatch.numeroIdentificacion;
+            if (persMatch.tipoIdentificacion) tipoIdRow = persMatch.tipoIdentificacion as TipoIdentificacion;
+          }
+        }
+
         return {
           id: row.id,
+          tipoIdentificacion: tipoIdRow,
+          numeroIdentificacion: cedulaRow,
+          cedula: cedulaRow,
           primerNombre: partesNombre.primerNombre,
           segundoNombre: partesNombre.segundoNombre || undefined,
           primerApellido: partesNombre.primerApellido,
           segundoApellido: partesNombre.segundoApellido || undefined,
           nombreContacto: row.nombre_contacto || "Sin Nombre Registrado",
           telefono: row.telefono || "",
+          telefonoSecundario: row.telefono_secundario || partesNombre.telefonoSecundario || undefined,
+          tieneWhatsappSecundario: Boolean(row.tiene_whatsapp_secundario),
           tieneWhatsapp: Boolean(row.tiene_whatsapp),
           correo: row.correo || undefined,
           departamentoCodigo: row.departamento_codigo || "25",
           municipioCodigo: row.municipio_codigo || "25899",
           vereda: row.vereda || "Rural",
           origenContacto: row.origen_contacto || "Llamada",
-          resumenNecesidad: row.resumen_necesidad || "",
+          resumenNecesidad: limpiarTextoMetadata(row.resumen_necesidad),
           comercialAsignadoId: row.comercial_asignado_id || "usr-comercial-01",
           estadoComercial: row.estado_comercial || "nuevo_contacto",
           convertidoAExpedienteId: row.convertido_a_expediente_id || undefined,

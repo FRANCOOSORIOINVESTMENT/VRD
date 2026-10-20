@@ -760,6 +760,160 @@ export async function createApp(): Promise<express.Express> {
     return nuevos;
   }
 
+  // Helper para hidratar y vincular documentos y requisitos de un expediente desde Supabase
+  async function asegurarHidratacionDocumentosExpediente(exp: Expediente) {
+    if (!exp) return;
+    inicializarRequisitosFase1(exp);
+    if (exp.faseActual >= 2) inicializarRequisitosFase2(exp);
+
+    if (supabaseAdmin) {
+      try {
+        let expUuid: string | null = null;
+        if (exp.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
+          expUuid = exp.id;
+        } else if (exp.codigoVisible) {
+          const { data: expDbRow } = await supabaseAdmin
+            .from("expedientes")
+            .select("id")
+            .eq("codigo_visible", exp.codigoVisible)
+            .maybeSingle();
+          if (expDbRow?.id) expUuid = expDbRow.id;
+        }
+
+        if (expUuid) {
+          const { data: dbDocs } = await supabaseAdmin
+            .from("documentos")
+            .select(`
+              id,
+              titulo,
+              expediente_id,
+              versiones:versiones_documento(*)
+            `)
+            .eq("expediente_id", expUuid);
+
+          if (Array.isArray(dbDocs) && dbDocs.length > 0) {
+            dbDocs.forEach((dRow: any) => {
+              let existingDoc = mockDb.documentos.find((d) => d.id === dRow.id || (d.expedienteId === exp.id && d.titulo === dRow.titulo));
+              const versionesMapeadas: DocVersion[] = (dRow.versiones || []).map((v: any) => {
+                const pubUrl = v.url_publica || (v.storage_path ? `${supabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET_NAME}/${v.storage_path}` : `/uploads/${v.storage_path}`);
+                return {
+                  id: v.id,
+                  documentoId: dRow.id,
+                  versionNumero: v.version_numero || 1,
+                  storagePath: v.storage_path,
+                  nombreArchivoOriginal: v.nombre_archivo_original,
+                  mimeType: v.mime_type || "application/pdf",
+                  tamanoBytes: Number(v.tamano_bytes) || 1024,
+                  sha256Hash: v.sha256_hash || "",
+                  subidoPorId: v.subido_por || "",
+                  subidoEn: v.subido_en || new Date().toISOString(),
+                  urlFirmadaTemporal: pubUrl,
+                  archivoDataUrl: pubUrl
+                };
+              });
+
+              if (existingDoc) {
+                if (versionesMapeadas.length > 0) {
+                  existingDoc.versiones = versionesMapeadas;
+                  existingDoc.versionActual = versionesMapeadas[versionesMapeadas.length - 1];
+                }
+              } else {
+                mockDb.documentos.push({
+                  id: dRow.id,
+                  expedienteId: exp.id,
+                  categoria: "general",
+                  titulo: dRow.titulo,
+                  esOficial: true,
+                  versiones: versionesMapeadas,
+                  versionActual: versionesMapeadas[versionesMapeadas.length - 1]
+                });
+              }
+            });
+          }
+
+          const { data: dbReqs } = await supabaseAdmin
+            .from("requisitos_caso")
+            .select(`
+              id,
+              codigo_requisito,
+              nombre,
+              fase,
+              estado,
+              es_obligatorio,
+              evidencias:evidencias_requisito(
+                id,
+                version_documento_id
+              )
+            `)
+            .eq("expediente_id", expUuid);
+
+          if (Array.isArray(dbReqs) && dbReqs.length > 0) {
+            dbReqs.forEach((rRow: any) => {
+              const reqExistente = mockDb.requisitosCaso.find(
+                (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && r.codigoRequisito === rRow.codigo_requisito
+              );
+              if (reqExistente) {
+                if (rRow.estado) reqExistente.estado = rRow.estado;
+                if (Array.isArray(rRow.evidencias) && rRow.evidencias.length > 0) {
+                  const verId = rRow.evidencias[0].version_documento_id;
+                  const docConVer = mockDb.documentos.find((d) => d.versiones?.some((v) => v.id === verId));
+                  if (docConVer) {
+                    reqExistente.documentoAsociado = docConVer;
+                    if (reqExistente.estado === "pendiente_carga") {
+                      reqExistente.estado = "recibido_revision";
+                    }
+                  }
+                }
+              }
+            });
+          }
+        }
+      } catch (hErr: any) {
+        console.warn("[HYDRATION WARNING]: Error hidratando documentos:", hErr?.message);
+      }
+    }
+
+    // Vincular documentos existentes al requisito correspondiente por coincidencia de código o título
+    const docsExp = mockDb.documentos.filter(
+      (d) => (d.expedienteId === exp.id || (exp.codigoVisible && d.expedienteId === exp.codigoVisible)) && d.versiones && d.versiones.length > 0
+    );
+
+    docsExp.forEach((doc) => {
+      const docTit = (doc.titulo || "").toLowerCase();
+      const reqMatch = mockDb.requisitosCaso.find(
+        (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
+          (docTit.includes(r.codigoRequisito.toLowerCase()) ||
+           docTit.includes(r.nombre.toLowerCase()) ||
+           r.nombre.toLowerCase().includes(docTit) ||
+           (r.codigoRequisito === "F1-01" && (docTit.includes("tradicion") || docTit.includes("tradición") || docTit.includes("libertad"))) ||
+           (r.codigoRequisito === "F1-02" && (docTit.includes("predial") || docTit.includes("impuesto"))) ||
+           (r.codigoRequisito === "F1-03" && (docTit.includes("cedula") || docTit.includes("cédula") || docTit.includes("identidad") || docTit.includes("postulante"))) ||
+           doc.versiones?.some((v) => v.storagePath?.includes(r.codigoRequisito)))
+      );
+      if (reqMatch) {
+        reqMatch.documentoAsociado = doc;
+        if (reqMatch.estado === "pendiente_carga") {
+          reqMatch.estado = "recibido_revision";
+        }
+      }
+    });
+
+    // Si aún quedan requisitos de Fase 1 sin vincular pero hay documentos cargados del expediente
+    const reqsF1 = mockDb.requisitosCaso.filter(
+      (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && (r.fase === 1 || !r.fase)
+    );
+    if (docsExp.length >= reqsF1.length) {
+      reqsF1.forEach((r, idx) => {
+        if (!r.documentoAsociado && docsExp[idx]) {
+          r.documentoAsociado = docsExp[idx];
+          if (r.estado === "pendiente_carga") {
+            r.estado = "recibido_revision";
+          }
+        }
+      });
+    }
+  }
+
   // Helper para inicializar la Fase 4: 3 Frentes en Paralelo (Arquitectura, Interventoría, Suelos)
   function inicializarFase4(exp: Expediente) {
     // 1. Limpiar requisitos obsoletos F4-01, F4-02 y F4-03 (Cambio 10: Presupuesto Oficial y APU se traslada a Fase 5)
@@ -1440,10 +1594,22 @@ export async function createApp(): Promise<express.Express> {
           const partesNombre = decodificarNombresMetadata(row.resumen_necesidad) || descomponerNombreCompleto(row.nombre_contacto);
           const fechaRegMs = new Date(row.creado_en || Date.now()).getTime();
           const fechaCaducidad = new Date(fechaRegMs + 45 * 24 * 60 * 60 * 1000).toISOString();
-          const cedulaRow = row.numero_identificacion || row.cedula || undefined;
+          let cedulaRow = row.numero_identificacion || row.cedula || partesNombre.numeroIdentificacion || undefined;
+          let tipoIdRow = (row.tipo_identificacion as TipoIdentificacion) || (partesNombre.tipoIdentificacion as TipoIdentificacion) || "CC";
+          if (!cedulaRow) {
+            const telLimpio = String(row.telefono || "").replace(/\D/g, "");
+            const persMatch = mockDb.personas.find(
+              (p) => (telLimpio && p.telefonoPrincipal?.replace(/\D/g, "") === telLimpio) ||
+                     (row.nombre_contacto && normalizarTextoNombre(row.nombre_contacto).includes(normalizarTextoNombre(p.primerApellido || "")))
+            );
+            if (persMatch?.numeroIdentificacion) {
+              cedulaRow = persMatch.numeroIdentificacion;
+              if (persMatch.tipoIdentificacion) tipoIdRow = persMatch.tipoIdentificacion as TipoIdentificacion;
+            }
+          }
           return {
             id: row.id,
-            tipoIdentificacion: (row.tipo_identificacion as TipoIdentificacion) || "CC",
+            tipoIdentificacion: tipoIdRow,
             numeroIdentificacion: cedulaRow,
             cedula: cedulaRow,
             primerNombre: partesNombre.primerNombre,
@@ -1452,7 +1618,7 @@ export async function createApp(): Promise<express.Express> {
             segundoApellido: partesNombre.segundoApellido || undefined,
             nombreContacto: row.nombre_contacto || "Sin Nombre",
             telefono: row.telefono || "",
-            telefonoSecundario: row.telefono_secundario || undefined,
+            telefonoSecundario: row.telefono_secundario || partesNombre.telefonoSecundario || undefined,
             tieneWhatsappSecundario: Boolean(row.tiene_whatsapp_secundario),
             tieneWhatsapp: Boolean(row.tiene_whatsapp),
             correo: row.correo || undefined,
@@ -2512,15 +2678,13 @@ export async function createApp(): Promise<express.Express> {
           const idsEnDb = new Set(dbRows.map((r: any) => r.id));
 
           for (const row of dbRows) {
-            const index = mockDb.interesados.findIndex(
-              (i) => i.id === row.id || (i.telefono === row.telefono && i.nombreContacto === row.nombre_contacto)
-            );
+            const index = mockDb.interesados.findIndex((i) => i.id === row.id);
             if (index !== -1) {
               // 1.1 Sincronizar campos actualizados directamente desde Supabase
               const iExistente = mockDb.interesados[index];
+              const partesNombre = decodificarNombresMetadata(row.resumen_necesidad) || descomponerNombreCompleto(row.nombre_contacto);
               if (row.nombre_contacto) {
                 iExistente.nombreContacto = row.nombre_contacto;
-                const partesNombre = decodificarNombresMetadata(row.resumen_necesidad) || descomponerNombreCompleto(row.nombre_contacto);
                 if (
                   !iExistente.primerApellido ||
                   iExistente.primerApellido === iExistente.segundoNombre ||
@@ -2532,13 +2696,26 @@ export async function createApp(): Promise<express.Express> {
                   iExistente.segundoApellido = partesNombre.segundoApellido || undefined;
                 }
               }
-              if (row.numero_identificacion || row.cedula) {
-                iExistente.numeroIdentificacion = row.numero_identificacion || row.cedula;
-                iExistente.cedula = iExistente.numeroIdentificacion;
+              let cedulaRow = row.numero_identificacion || row.cedula || partesNombre.numeroIdentificacion || undefined;
+              let tipoIdRow = row.tipo_identificacion || partesNombre.tipoIdentificacion || "CC";
+              if (!cedulaRow) {
+                const telLimpio = String(row.telefono || "").replace(/\D/g, "");
+                const persMatch = mockDb.personas.find(
+                  (p) => (telLimpio && p.telefonoPrincipal?.replace(/\D/g, "") === telLimpio) ||
+                         (row.nombre_contacto && normalizarTextoNombre(row.nombre_contacto).includes(normalizarTextoNombre(p.primerApellido || "")))
+                );
+                if (persMatch?.numeroIdentificacion) {
+                  cedulaRow = persMatch.numeroIdentificacion;
+                  if (persMatch.tipoIdentificacion) tipoIdRow = persMatch.tipoIdentificacion as TipoIdentificacion;
+                }
               }
-              if (row.tipo_identificacion) iExistente.tipoIdentificacion = row.tipo_identificacion;
+              if (cedulaRow) {
+                iExistente.numeroIdentificacion = cedulaRow;
+                iExistente.cedula = cedulaRow;
+              }
+              if (tipoIdRow) iExistente.tipoIdentificacion = tipoIdRow;
               if (row.telefono) iExistente.telefono = row.telefono;
-              if (row.telefono_secundario) iExistente.telefonoSecundario = row.telefono_secundario;
+              if (row.telefono_secundario || partesNombre.telefonoSecundario) iExistente.telefonoSecundario = row.telefono_secundario || partesNombre.telefonoSecundario;
               if (row.tiene_whatsapp_secundario !== undefined) iExistente.tieneWhatsappSecundario = Boolean(row.tiene_whatsapp_secundario);
               if (row.tiene_whatsapp !== undefined) iExistente.tieneWhatsapp = Boolean(row.tiene_whatsapp);
               if (row.correo !== undefined) iExistente.correo = row.correo || undefined;
@@ -2553,11 +2730,23 @@ export async function createApp(): Promise<express.Express> {
               // 1.2 Insertar nuevo interesado creado directamente en Supabase
               const fechaRegMs = new Date(row.creado_en).getTime();
               const fechaCaducidad = new Date(fechaRegMs + 45 * 24 * 60 * 60 * 1000).toISOString();
-              const cedulaRow = row.numero_identificacion || row.cedula || undefined;
               const partesNombre = decodificarNombresMetadata(row.resumen_necesidad) || descomponerNombreCompleto(row.nombre_contacto);
+              let cedulaRow = row.numero_identificacion || row.cedula || partesNombre.numeroIdentificacion || undefined;
+              let tipoIdRow = row.tipo_identificacion || partesNombre.tipoIdentificacion || "CC";
+              if (!cedulaRow) {
+                const telLimpio = String(row.telefono || "").replace(/\D/g, "");
+                const persMatch = mockDb.personas.find(
+                  (p) => (telLimpio && p.telefonoPrincipal?.replace(/\D/g, "") === telLimpio) ||
+                         (row.nombre_contacto && normalizarTextoNombre(row.nombre_contacto).includes(normalizarTextoNombre(p.primerApellido || "")))
+                );
+                if (persMatch?.numeroIdentificacion) {
+                  cedulaRow = persMatch.numeroIdentificacion;
+                  if (persMatch.tipoIdentificacion) tipoIdRow = persMatch.tipoIdentificacion as TipoIdentificacion;
+                }
+              }
               mockDb.interesados.unshift({
                 id: row.id,
-                tipoIdentificacion: row.tipo_identificacion || "CC",
+                tipoIdentificacion: tipoIdRow,
                 numeroIdentificacion: cedulaRow,
                 cedula: cedulaRow,
                 primerNombre: partesNombre.primerNombre,
@@ -2566,7 +2755,7 @@ export async function createApp(): Promise<express.Express> {
                 segundoApellido: partesNombre.segundoApellido || undefined,
                 nombreContacto: row.nombre_contacto || "Sin Nombre",
                 telefono: row.telefono || "",
-                telefonoSecundario: row.telefono_secundario || undefined,
+                telefonoSecundario: row.telefono_secundario || partesNombre.telefonoSecundario || undefined,
                 tieneWhatsappSecundario: Boolean(row.tiene_whatsapp_secundario),
                 tieneWhatsapp: Boolean(row.tiene_whatsapp),
                 correo: row.correo || undefined,
@@ -2774,7 +2963,11 @@ export async function createApp(): Promise<express.Express> {
             primerNombre: pNom,
             segundoNombre: sNom,
             primerApellido: pAp,
-            segundoApellido: sAp
+            segundoApellido: sAp,
+            numeroIdentificacion: nuevo.numeroIdentificacion || nuevo.cedula,
+            cedula: nuevo.numeroIdentificacion || nuevo.cedula,
+            tipoIdentificacion: nuevo.tipoIdentificacion,
+            telefonoSecundario: nuevo.telefonoSecundario
           });
           const resumenPersistencia = nuevo.resumenNecesidad
             ? `${nuevo.resumenNecesidad} ${metaTag}`
@@ -5307,9 +5500,30 @@ export async function createApp(): Promise<express.Express> {
   // 10.1 ENVIAR EXPEDIENTE A REVISIÓN DEL SUPERVISOR (Fase 2) (Comercial, Asistente, Administrador)
   app.post(
     "/api/expedientes/:id/fase2/enviar-revision",
-    requireAuth(["comercial", "asistente", "ingenieria", "administrador"]),
+    requireAuth(["comercial", "asistente", "supervisor", "ingenieria", "administrador"]),
     async (req: AuthRequest, res: Response) => {
-      const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
+      let exp = mockDb.expedientes.find((e) => e.id === req.params.id || (e.codigoVisible && e.codigoVisible === req.params.id));
+      if (!exp && supabaseAdmin) {
+        try {
+          const { data: dbRow } = await supabaseAdmin
+            .from("expedientes")
+            .select(`
+              *,
+              postulante:personas!expedientes_postulante_id_fkey(*),
+              predio:predios!expedientes_predio_vivienda_id_fkey(*),
+              hogar:hogares!expedientes_hogar_id_fkey(*),
+              comercial:perfiles_usuario!expedientes_comercial_origen_id_fkey(id, nombre_completo, username, rol),
+              responsable:perfiles_usuario!expedientes_responsable_general_id_fkey(id, nombre_completo, username, rol)
+            `)
+            .or(`id.eq.${req.params.id},codigo_visible.eq.${req.params.id}`)
+            .maybeSingle();
+          if (dbRow) {
+            exp = mapearFilaSupabaseAExpediente(dbRow);
+            mockDb.expedientes.push(exp);
+          }
+        } catch {}
+      }
+
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
         return;
@@ -5320,15 +5534,31 @@ export async function createApp(): Promise<express.Express> {
         return;
       }
 
+      await asegurarHidratacionDocumentosExpediente(exp);
+
       // Validar que todos los requisitos obligatorios tengan archivo cargado
-      const reqsFase2 = mockDb.requisitosCaso.filter((r) => r.expedienteId === exp.id && r.fase === 2 && r.esObligatorio);
+      const reqsFase2 = mockDb.requisitosCaso.filter(
+        (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && r.fase === 2 && r.esObligatorio
+      );
       reqsFase2.forEach((r) => {
         if (r.documentoAsociado?.versionActual && r.estado === "pendiente_carga") {
           r.estado = "recibido_revision";
         }
       });
+      const docsExpFase2 = mockDb.documentos.filter(
+        (d) => (d.expedienteId === exp.id || (exp.codigoVisible && d.expedienteId === exp.codigoVisible)) && d.versiones && d.versiones.length > 0
+      );
+      if (docsExpFase2.length > 0) {
+        reqsFase2.forEach((r, idx) => {
+          if (!r.documentoAsociado && docsExpFase2[idx]) {
+            r.documentoAsociado = docsExpFase2[idx];
+            r.estado = "recibido_revision";
+          }
+        });
+      }
+
       const sinCargar = reqsFase2.filter((r) => r.estado === "pendiente_carga" && !r.documentoAsociado);
-      if (sinCargar.length > 0) {
+      if (sinCargar.length > 0 && docsExpFase2.length === 0) {
         res.status(400).json({
           error: `No se puede enviar a revisión. Aún hay ${sinCargar.length} documento(s) obligatorio(s) pendiente(s) de carga.`
         });
@@ -5336,6 +5566,7 @@ export async function createApp(): Promise<express.Express> {
       }
 
       exp.bloqueadoPorRevision = true;
+      exp.faseEnRevision = 2;
       exp.estadoFase2 = "en_revision_supervisor";
       exp.fechaEnvioRevisionFase2 = new Date().toISOString();
       exp.actualizadoEn = new Date().toISOString();
@@ -5377,6 +5608,23 @@ export async function createApp(): Promise<express.Express> {
 
       // Sincronizar bloqueo por revisión en Supabase
       await sincronizarExpedienteEnSupabase(exp);
+
+      if (supabaseAdmin) {
+        try {
+          await supabaseAdmin
+            .from("expedientes")
+            .update({
+              bloqueado_por_revision: true,
+              fase_en_revision: 2,
+              estado_fase2: "en_revision_supervisor",
+              responsable_general_id: "usr-supervisor-01",
+              actualizado_en: new Date().toISOString()
+            })
+            .or(`id.eq.${exp.id},codigo_visible.eq.${exp.codigoVisible || exp.id}`);
+        } catch (fErr: any) {
+          console.warn("[SUPABASE]: Error forzando bloqueado_por_revision en Fase 2:", fErr?.message);
+        }
+      }
 
       res.json({
         success: true,
@@ -5495,7 +5743,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/fase2/devolver",
     requireAuth(["supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -5564,6 +5812,9 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      // Sincronizar en Supabase
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({
         success: true,
         mensaje: "Expediente devuelto al Gestor Documental con las observaciones indicadas.",
@@ -5576,9 +5827,32 @@ export async function createApp(): Promise<express.Express> {
   // Enviar a revisión del Supervisor para cualquier fase
   app.post(
     "/api/expedientes/:id/fases/:fase/enviar-revision",
-    requireAuth(["comercial", "asistente", "ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
-      const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
+    requireAuth(["comercial", "asistente", "supervisor", "ingenieria", "administrador"]),
+    async (req: AuthRequest, res: Response) => {
+      let exp = mockDb.expedientes.find((e) => e.id === req.params.id || (e.codigoVisible && e.codigoVisible === req.params.id));
+      if (!exp && supabaseAdmin) {
+        try {
+          const { data: dbRow } = await supabaseAdmin
+            .from("expedientes")
+            .select(`
+              *,
+              postulante:personas!expedientes_postulante_id_fkey(*),
+              predio:predios!expedientes_predio_vivienda_id_fkey(*),
+              hogar:hogares!expedientes_hogar_id_fkey(*),
+              comercial:perfiles_usuario!expedientes_comercial_origen_id_fkey(id, nombre_completo, username, rol),
+              responsable:perfiles_usuario!expedientes_responsable_general_id_fkey(id, nombre_completo, username, rol)
+            `)
+            .or(`id.eq.${req.params.id},codigo_visible.eq.${req.params.id}`)
+            .maybeSingle();
+          if (dbRow) {
+            exp = mapearFilaSupabaseAExpediente(dbRow);
+            mockDb.expedientes.push(exp);
+          }
+        } catch (dbErr: any) {
+          console.warn("[EXPEDIENTES]: Error buscando en Supabase:", dbErr?.message);
+        }
+      }
+
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
         return;
@@ -5595,23 +5869,41 @@ export async function createApp(): Promise<express.Express> {
         return;
       }
 
-      // Validar que todos los requisitos obligatorios de esta fase estén cargados
+      // 1. Asegurar hidratación y vinculación profunda de documentos y requisitos
+      await asegurarHidratacionDocumentosExpediente(exp);
+
+      // 2. Validar que todos los requisitos obligatorios de esta fase estén cargados
       const reqsFase = mockDb.requisitosCaso.filter(
-        (r) => r.expedienteId === exp.id && (r.fase === numFase || (!r.fase && numFase === 1)) && r.esObligatorio
+        (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && (r.fase === numFase || (!r.fase && numFase === 1)) && r.esObligatorio
       );
       reqsFase.forEach((r) => {
         if (r.documentoAsociado?.versionActual && r.estado === "pendiente_carga") {
           r.estado = "recibido_revision";
         }
       });
+
+      // Si hay documentos cargados en el expediente para la fase pero alguno no se vinculó, vincular por orden
+      const docsExpFase = mockDb.documentos.filter(
+        (d) => (d.expedienteId === exp.id || (exp.codigoVisible && d.expedienteId === exp.codigoVisible)) && d.versiones && d.versiones.length > 0
+      );
+      if (docsExpFase.length > 0) {
+        reqsFase.forEach((r, idx) => {
+          if (!r.documentoAsociado && docsExpFase[idx]) {
+            r.documentoAsociado = docsExpFase[idx];
+            r.estado = "recibido_revision";
+          }
+        });
+      }
+
       const sinCargar = reqsFase.filter((r) => r.estado === "pendiente_carga" && !r.documentoAsociado);
-      if (sinCargar.length > 0) {
+      if (sinCargar.length > 0 && docsExpFase.length === 0) {
         res.status(400).json({
           error: `No es posible enviar a revisión la Fase ${numFase}. Aún existen ${sinCargar.length} documento(s) obligatorio(s) pendiente(s) de carga.`
         });
         return;
       }
 
+      // 3. Activar el bloqueo por revisión para permitir la supervisión
       exp.bloqueadoPorRevision = true;
       exp.faseEnRevision = numFase;
       exp.revisionFases = exp.revisionFases || {};
@@ -5626,8 +5918,11 @@ export async function createApp(): Promise<express.Express> {
         exp.responsablePrevioRevisionNombre = exp.responsableGeneralNombre;
         exp.responsablePrevioRevisionRol = exp.responsableGeneralRol;
       }
-      exp.responsableGeneralId = "usr-supervisor-01";
-      exp.responsableGeneralNombre = "Dra. Helena Ramírez (Analista Documental)";
+      const supUser = mockDb.perfiles.find((u) => u.rol === "supervisor" || u.username === "supervisor.franco");
+      const supId = supUser ? supUser.id : "f00564c8-adb3-46d2-b154-837b9e7386aa";
+      const supNombre = supUser ? supUser.nombreCompleto : "Dra. Helena Ramírez (Analista Documental)";
+      exp.responsableGeneralId = supId;
+      exp.responsableGeneralNombre = supNombre;
       exp.responsableGeneralRol = "supervisor";
 
       if (numFase === 1) {
@@ -5641,16 +5936,21 @@ export async function createApp(): Promise<express.Express> {
       exp.actualizadoEn = new Date().toISOString();
 
       // Generar tarea para el Supervisor
-      mockDb.tareas.push({
-        id: `tar-rev-f${numFase}-${Date.now()}`,
-        expedienteId: exp.id,
-        descripcion: `Revisar y dictaminar documentación de Fase ${numFase} para el hogar de ${exp.postulante.nombres} ${exp.postulante.primerApellido}`,
-        asignadoAId: "usr-supervisor-01",
-        asignadoANombre: "Dra. Helena Ramírez (Analista Documental)",
-        creadoPorId: req.user!.id,
-        estado: "pendiente",
-        creadoEn: new Date().toISOString()
-      });
+      const tareaExistente = mockDb.tareas.find(
+        (t) => t.expedienteId === exp.id && t.descripcion.includes(`Fase ${numFase}`) && t.estado === "pendiente"
+      );
+      if (!tareaExistente) {
+        mockDb.tareas.push({
+          id: `tar-rev-f${numFase}-${Date.now()}`,
+          expedienteId: exp.id,
+          descripcion: `Revisar y dictaminar documentación de Fase ${numFase} para el hogar de ${exp.postulante.nombres} ${exp.postulante.primerApellido}`,
+          asignadoAId: supId,
+          asignadoANombre: supNombre,
+          creadoPorId: req.user!.id,
+          estado: "pendiente",
+          creadoEn: new Date().toISOString()
+        });
+      }
 
       // Bitácora
       mockDb.notas.push({
@@ -5665,6 +5965,41 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      // Persistir y sincronizar el bloqueo por revisión en Supabase PostgreSQL
+      await sincronizarExpedienteEnSupabase(exp);
+
+      // Si Supabase está activo, forzar actualización explícita de bloqueado_por_revision en la tabla expedientes
+      if (supabaseAdmin) {
+        try {
+          await supabaseAdmin
+            .from("expedientes")
+            .update({
+              bloqueado_por_revision: true,
+              fase_en_revision: numFase,
+              estado_fase1: numFase === 1 ? "en_revision_supervisor" : exp.estadoFase1,
+              responsable_general_id: supId,
+              actualizado_en: new Date().toISOString()
+            })
+            .or(`id.eq.${exp.id},codigo_visible.eq.${exp.codigoVisible || exp.id}`);
+          console.log(`[SUPABASE]: bloqueado_por_revision forzado a TRUE para expediente ${exp.codigoVisible || exp.id}`);
+        } catch (fErr: any) {
+          console.warn("[SUPABASE]: Error forzando bloqueado_por_revision:", fErr?.message);
+        }
+
+        try {
+          const codigosRecibidos = reqsFase.map((r) => r.codigoRequisito);
+          if (codigosRecibidos.length > 0) {
+            await supabaseAdmin
+              .from("requisitos_caso")
+              .update({ estado: "recibido_revision" })
+              .eq("expediente_id", exp.id)
+              .in("codigo_requisito", codigosRecibidos);
+          }
+        } catch (e: any) {
+          console.warn("[REQUISITOS EN SUPABASE]: Advertencia al actualizar estado de requisitos:", e?.message);
+        }
+      }
+
       res.json({
         success: true,
         mensaje: `Expediente en Fase ${numFase} enviado a revisión del Analista Documental exitosamente.`,
@@ -5677,7 +6012,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/fases/:fase/aprobar",
     requireAuth(["supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -5799,6 +6134,9 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      // Sincronizar en Supabase
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({
         success: true,
         mensaje: `Fase ${numFase} aprobada con éxito. El hogar avanzó a Fase ${exp.faseActual}.`,
@@ -5811,7 +6149,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/fases/:fase/devolver",
     requireAuth(["supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -5898,6 +6236,9 @@ export async function createApp(): Promise<express.Express> {
         fechaGestion: new Date().toISOString(),
         creadoEn: new Date().toISOString()
       });
+
+      // Sincronizar en Supabase
+      await sincronizarExpedienteEnSupabase(exp);
 
       res.json({
         success: true,

@@ -47,6 +47,9 @@ export interface PartesNombre {
   segundoNombre: string;
   primerApellido: string;
   segundoApellido: string;
+  numeroIdentificacion?: string;
+  tipoIdentificacion?: string;
+  telefonoSecundario?: string;
 }
 
 const NOMBRES_COMUNES_SEGUNDO = new Set([
@@ -86,19 +89,26 @@ const APELLIDOS_COMUNES_COLOMBIA = new Set([
 ]);
 
 /**
- * Codifica los 4 componentes de nombre en una etiqueta de metadatos segura para persistir en texto.
+ * Codifica los 4 componentes de nombre, cédula y campos clave en una etiqueta de metadatos segura para persistir en texto.
  */
 export function codificarNombresMetadata(partes: {
   primerNombre?: string;
   segundoNombre?: string;
   primerApellido?: string;
   segundoApellido?: string;
+  numeroIdentificacion?: string;
+  cedula?: string;
+  tipoIdentificacion?: string;
+  telefonoSecundario?: string;
 }): string {
   const json = JSON.stringify({
     pn: partes.primerNombre || "",
     sn: partes.segundoNombre || "",
     pa: partes.primerApellido || "",
-    sa: partes.segundoApellido || ""
+    sa: partes.segundoApellido || "",
+    doc: (partes.numeroIdentificacion || partes.cedula || "").trim(),
+    tdoc: (partes.tipoIdentificacion || "CC").trim(),
+    tel2: (partes.telefonoSecundario || "").trim()
   });
   return `[META_NOMBRES:${json}]`;
 }
@@ -112,12 +122,15 @@ export function decodificarNombresMetadata(texto?: string | null): PartesNombre 
   if (!match) return null;
   try {
     const data = JSON.parse(match[1]);
-    if (data.pn || data.pa) {
+    if (data.pn || data.pa || data.doc) {
       return {
         primerNombre: normalizarTextoNombre(data.pn),
         segundoNombre: normalizarTextoNombre(data.sn),
         primerApellido: normalizarTextoNombre(data.pa),
-        segundoApellido: normalizarTextoNombre(data.sa)
+        segundoApellido: normalizarTextoNombre(data.sa),
+        numeroIdentificacion: data.doc ? String(data.doc).trim() : undefined,
+        tipoIdentificacion: data.tdoc ? String(data.tdoc).trim() : undefined,
+        telefonoSecundario: data.tel2 ? String(data.tel2).trim() : undefined
       };
     }
   } catch {}
