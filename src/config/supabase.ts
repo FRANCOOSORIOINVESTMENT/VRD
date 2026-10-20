@@ -126,14 +126,32 @@ export async function persistirArchivoEnStorage(
     if (Buffer.isBuffer(bufferOrDataUrl)) {
       buffer = bufferOrDataUrl;
     } else if (typeof bufferOrDataUrl === "string") {
+      // Si ya es una URL remota de Supabase u otro servidor, no intentar decodificarla como base64
+      if (bufferOrDataUrl.startsWith("http://") || bufferOrDataUrl.startsWith("https://")) {
+        return { ok: true, publicUrl: bufferOrDataUrl, storagePath };
+      }
       if (bufferOrDataUrl.startsWith("data:")) {
         const match = bufferOrDataUrl.match(/^data:(.+?);base64,(.+)$/);
         if (match) {
           contentType = match[1] || mimeType;
           buffer = Buffer.from(match[2], "base64");
         } else {
-          buffer = Buffer.from(bufferOrDataUrl, "base64");
+          const commaIdx = bufferOrDataUrl.indexOf(",");
+          if (commaIdx !== -1) {
+            const meta = bufferOrDataUrl.substring(5, commaIdx);
+            const content = bufferOrDataUrl.substring(commaIdx + 1);
+            if (meta.includes(";base64")) {
+              buffer = Buffer.from(content, "base64");
+            } else {
+              buffer = Buffer.from(decodeURIComponent(content), "utf-8");
+            }
+          } else {
+            buffer = Buffer.from(bufferOrDataUrl, "base64");
+          }
         }
+      } else if (bufferOrDataUrl.startsWith("%PDF")) {
+        buffer = Buffer.from(bufferOrDataUrl, "utf-8");
+        contentType = "application/pdf";
       } else {
         buffer = Buffer.from(bufferOrDataUrl, "base64");
       }

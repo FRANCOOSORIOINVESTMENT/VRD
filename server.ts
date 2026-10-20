@@ -1519,6 +1519,61 @@ export async function createApp(): Promise<express.Express> {
         console.log(`[SUPABASE]: ${mockDb.expedientes.length} expedientes sincronizados oficialmente.`);
       }
 
+      // 4. Sincronizar documentos y versiones globales desde Supabase
+      try {
+        const { data: dbDocs } = await supabaseAdmin
+          .from("documentos")
+          .select(`
+            id,
+            titulo,
+            expediente_id,
+            versiones:versiones_documento(*)
+          `);
+
+        if (Array.isArray(dbDocs) && dbDocs.length > 0) {
+          dbDocs.forEach((dRow: any) => {
+            let existingDoc = mockDb.documentos.find((d) => d.id === dRow.id);
+            const versionesMapeadas: DocVersion[] = (dRow.versiones || []).map((v: any) => {
+              const pubUrl = v.url_publica || (v.storage_path ? `${supabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET_NAME}/${v.storage_path}` : `/uploads/${v.storage_path}`);
+              return {
+                id: v.id,
+                documentoId: dRow.id,
+                versionNumero: v.version_numero || 1,
+                storagePath: v.storage_path,
+                nombreArchivoOriginal: v.nombre_archivo_original,
+                mimeType: v.mime_type || "application/pdf",
+                tamanoBytes: Number(v.tamano_bytes) || 1024,
+                sha256Hash: v.sha256_hash || "",
+                subidoPorId: v.subido_por || "",
+                subidoEn: v.subido_en || new Date().toISOString(),
+                urlFirmadaTemporal: pubUrl,
+                archivoDataUrl: pubUrl
+              };
+            });
+
+            if (existingDoc) {
+              if (versionesMapeadas.length > 0) {
+                existingDoc.versiones = versionesMapeadas;
+                existingDoc.versionActual = versionesMapeadas[versionesMapeadas.length - 1];
+              }
+            } else {
+              mockDb.documentos.push({
+                id: dRow.id,
+                expedienteId: dRow.expediente_id,
+                categoria: "general",
+                titulo: dRow.titulo,
+                esOficial: true,
+                versiones: versionesMapeadas,
+                versionActual: versionesMapeadas[versionesMapeadas.length - 1]
+              });
+            }
+          });
+          console.log(`[SUPABASE]: ${dbDocs.length} documentos sincronizados oficialmente.`);
+        }
+      } catch (docErr: any) {
+        console.warn("[SUPABASE]: Advertencia sincronizando documentos:", docErr?.message);
+      }
+
       return {
         ok: true,
         expedientesCount: mockDb.expedientes.length,
@@ -3357,6 +3412,148 @@ export async function createApp(): Promise<express.Express> {
     inicializarRequisitosFase1(exp);
     limpiarRequisitosHuerfanosExpediente(exp);
 
+    // Hidratación directa desde Supabase: documentos, versiones inmutables y estados de requisitos
+    if (supabaseAdmin) {
+      try {
+        let expUuid: string | null = null;
+        if (exp.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
+          expUuid = exp.id;
+        } else {
+          const { data: expDbRow } = await supabaseAdmin
+            .from("expedientes")
+            .select("id")
+            .eq("codigo_visible", exp.codigoVisible)
+            .maybeSingle();
+          if (expDbRow?.id) expUuid = expDbRow.id;
+        }
+
+        if (expUuid) {
+          // 1. Obtener documentos y sus versiones desde Supabase
+          const { data: dbDocs } = await supabaseAdmin
+            .from("documentos")
+            .select(`
+              id,
+              titulo,
+              expediente_id,
+              versiones:versiones_documento(
+                id,
+                documento_id,
+                version_numero,
+                storage_path,
+                nombre_archivo_original,
+                mime_type,
+                tamano_bytes,
+                sha256_hash,
+                subido_por,
+                subido_en,
+                url_publica
+              )
+            `)
+            .eq("expediente_id", expUuid);
+
+          // 2. Obtener requisitos_caso y evidencias desde Supabase
+          const { data: dbReqs } = await supabaseAdmin
+            .from("requisitos_caso")
+            .select(`
+              id,
+              codigo_requisito,
+              nombre,
+              fase,
+              estado,
+              es_obligatorio,
+              evidencias:evidencias_requisito(
+                id,
+                version_documento_id
+              )
+            `)
+            .eq("expediente_id", expUuid);
+
+          if (Array.isArray(dbDocs) && dbDocs.length > 0) {
+            dbDocs.forEach((dRow: any) => {
+              let existingDoc = mockDb.documentos.find((d) => d.id === dRow.id || (d.expedienteId === exp.id && d.titulo === dRow.titulo));
+              const versionesMapeadas: DocVersion[] = (dRow.versiones || []).map((v: any) => {
+                const pubUrl = v.url_publica || (v.storage_path ? `${supabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET_NAME}/${v.storage_path}` : `/uploads/${v.storage_path}`);
+                return {
+                  id: v.id,
+                  documentoId: dRow.id,
+                  versionNumero: v.version_numero || 1,
+                  storagePath: v.storage_path,
+                  nombreArchivoOriginal: v.nombre_archivo_original,
+                  mimeType: v.mime_type || "application/pdf",
+                  tamanoBytes: Number(v.tamano_bytes) || 1024,
+                  sha256Hash: v.sha256_hash || "",
+                  subidoPorId: v.subido_por || "",
+                  subidoEn: v.subido_en || new Date().toISOString(),
+                  urlFirmadaTemporal: pubUrl,
+                  archivoDataUrl: pubUrl
+                };
+              });
+
+              if (existingDoc) {
+                if (versionesMapeadas.length > 0) {
+                  existingDoc.versiones = versionesMapeadas;
+                  existingDoc.versionActual = versionesMapeadas[versionesMapeadas.length - 1];
+                }
+              } else {
+                const newDoc: Documento = {
+                  id: dRow.id,
+                  expedienteId: exp.id,
+                  categoria: "general",
+                  titulo: dRow.titulo,
+                  esOficial: true,
+                  versiones: versionesMapeadas,
+                  versionActual: versionesMapeadas[versionesMapeadas.length - 1]
+                };
+                mockDb.documentos.push(newDoc);
+              }
+            });
+          }
+
+          if (Array.isArray(dbReqs) && dbReqs.length > 0) {
+            dbReqs.forEach((rRow: any) => {
+              const reqExistente = mockDb.requisitosCaso.find(
+                (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && r.codigoRequisito === rRow.codigo_requisito
+              );
+              if (reqExistente) {
+                if (rRow.estado) reqExistente.estado = rRow.estado;
+                if (Array.isArray(rRow.evidencias) && rRow.evidencias.length > 0) {
+                  const verId = rRow.evidencias[0].version_documento_id;
+                  const docConVer = mockDb.documentos.find((d) => d.versiones?.some((v) => v.id === verId));
+                  if (docConVer) {
+                    reqExistente.documentoAsociado = docConVer;
+                    if (reqExistente.estado === "pendiente_carga") {
+                      reqExistente.estado = "recibido_revision";
+                    }
+                  }
+                }
+              }
+            });
+          }
+
+          // Vincular documentos existentes al requisito correspondiente por coincidencia de código o título
+          mockDb.documentos
+            .filter((d) => d.expedienteId === exp.id && d.versiones && d.versiones.length > 0)
+            .forEach((doc) => {
+              const reqMatch = mockDb.requisitosCaso.find(
+                (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
+                  (doc.titulo?.toLowerCase().includes(r.codigoRequisito.toLowerCase()) ||
+                   doc.titulo?.toLowerCase().includes(r.nombre.toLowerCase()) ||
+                   r.nombre.toLowerCase().includes(doc.titulo?.toLowerCase()) ||
+                   doc.versiones?.some((v) => v.storagePath?.includes(r.codigoRequisito)))
+              );
+              if (reqMatch) {
+                reqMatch.documentoAsociado = doc;
+                if (reqMatch.estado === "pendiente_carga") {
+                  reqMatch.estado = "recibido_revision";
+                }
+              }
+            });
+        }
+      } catch (hErr: any) {
+        console.warn("[HYDRATION WARNING]: Error hidratando documentos de Supabase:", hErr?.message);
+      }
+    }
+
     // Requisitos asociados al expediente con sus documentos y versiones
     const requisitos = mockDb.requisitosCaso
       .filter((r) => r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible))
@@ -3877,12 +4074,14 @@ export async function createApp(): Promise<express.Express> {
                       mime_type: nuevaVersion.mimeType,
                       tamano_bytes: nuevaVersion.tamanoBytes,
                       sha256_hash: nuevaVersion.sha256Hash,
-                      subido_por: subidoPorUuid
+                      subido_por: subidoPorUuid,
+                      url_publica: nuevaVersion.urlFirmadaTemporal || nuevaVersion.archivoDataUrl
                     }
                   ])
                   .select("id")
                   .maybeSingle();
 
+                let reqDbId: string | null = null;
                 const { data: reqDb } = await supabaseAdmin
                   .from("requisitos_caso")
                   .select("id")
@@ -3890,19 +4089,51 @@ export async function createApp(): Promise<express.Express> {
                   .eq("codigo_requisito", reqCaso.codigoRequisito)
                   .maybeSingle();
 
-                if (reqDb?.id && verDb?.id) {
-                  await supabaseAdmin.from("evidencias_requisito").insert([
-                    {
-                      requisito_caso_id: reqDb.id,
-                      version_documento_id: verDb.id,
-                      vinculado_por: subidoPorUuid
-                    }
-                  ]);
+                if (reqDb?.id) {
+                  reqDbId = reqDb.id;
+                } else {
+                  const faseNum = Math.min(Math.max(Number(reqCaso.fase) || 1, 1), 7);
+                  const { data: nuevoReqDb } = await supabaseAdmin
+                    .from("requisitos_caso")
+                    .insert([
+                      {
+                        expediente_id: expUuid,
+                        codigo_requisito: reqCaso.codigoRequisito,
+                        nombre: reqCaso.nombre,
+                        descripcion: reqCaso.descripcion || null,
+                        fase: faseNum,
+                        estado: "recibido_revision",
+                        es_obligatorio: reqCaso.esObligatorio ?? true
+                      }
+                    ])
+                    .select("id")
+                    .maybeSingle();
+                  reqDbId = nuevoReqDb?.id || null;
+                }
+
+                if (reqDbId && verDb?.id) {
+                  const { data: evExistente } = await supabaseAdmin
+                    .from("evidencias_requisito")
+                    .select("id")
+                    .eq("requisito_caso_id", reqDbId)
+                    .eq("version_documento_id", verDb.id)
+                    .maybeSingle();
+
+                  if (!evExistente?.id) {
+                    await supabaseAdmin.from("evidencias_requisito").insert([
+                      {
+                        requisito_caso_id: reqDbId,
+                        version_documento_id: verDb.id,
+                        vinculado_por: subidoPorUuid
+                      }
+                    ]).catch(() => {});
+                  }
 
                   await supabaseAdmin
                     .from("requisitos_caso")
                     .update({ estado: "recibido_revision" })
-                    .eq("id", reqDb.id);
+                    .eq("id", reqDbId)
+                    .catch(() => {});
                 }
               }
             }
@@ -3997,16 +4228,22 @@ export async function createApp(): Promise<express.Express> {
       };
 
       // Si se incluye archivo adjunto directamente
+      let storagePath = "";
       if (req.body.archivoDataUrl) {
         const docId = `doc-add-${Date.now()}`;
         const nombreArchivo = req.body.nombreArchivo || `${nombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
+        const extMatch = nombreArchivo.match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toLowerCase() || "pdf";
+        storagePath = `expedientes/${exp.id}/adicionales/F${faseSolicitada}_add_${timestamp}.${extMatch}`;
         let urlFinal = req.body.archivoDataUrl;
         try {
-          urlFinal = await persistirArchivoEnStorage(
+          const resStorage = await persistirArchivoEnStorage(
+            storagePath,
             req.body.archivoDataUrl,
-            nombreArchivo,
-            `expedientes/${exp.id}/adicionales`
+            req.body.mimeType || "application/pdf"
           );
+          if (resStorage.ok && resStorage.publicUrl) {
+            urlFinal = resStorage.publicUrl;
+          }
         } catch (e: any) {
           console.warn("[STORAGE]: Advertencia persistiendo en storage:", e?.message);
         }
@@ -4032,10 +4269,12 @@ export async function createApp(): Promise<express.Express> {
               mimeType: req.body.mimeType || "application/pdf",
               tamanoBytes: Number(req.body.tamanoBytes) || 1048576,
               sha256Hash: `sha256-add-${timestamp}`,
-              storagePath: urlFinal,
+              storagePath,
               subidoPorId: req.user!.id,
               subidoPorNombre: req.user!.nombreCompleto,
-              subidoEn: new Date().toISOString()
+              subidoEn: new Date().toISOString(),
+              urlFirmadaTemporal: urlFinal,
+              archivoDataUrl: urlFinal
             }
           ]
         };
@@ -4054,16 +4293,64 @@ export async function createApp(): Promise<express.Express> {
             if (dbExp?.id) expUuid = dbExp.id;
           }
           if (expUuid) {
-            await supabaseAdmin.from("requisitos_caso").insert([
+            const { data: reqInsert } = await supabaseAdmin.from("requisitos_caso").insert([
               {
                 expediente_id: expUuid,
                 codigo_requisito: codigoRequisito,
                 nombre,
                 fase: faseSolicitada,
-                estado: nuevoRequisito.estado === "cargado" ? "recibido_revision" : "pendiente_cargue",
-                es_obligatorio: Boolean(req.body.esObligatorio)
+                estado: nuevoRequisito.estado === "cargado" ? "recibido_revision" : "pendiente_carga",
+                es_obligatorio: Boolean(req.body.esObligatorio),
+                es_adicional: true
               }
-            ]).catch(() => {});
+            ]).select("id").maybeSingle();
+
+            if (req.body.archivoDataUrl && reqInsert?.id) {
+              const { data: docDb } = await supabaseAdmin.from("documentos").insert([
+                {
+                  expediente_id: expUuid,
+                  titulo: `${nombre} (Fase ${faseSolicitada} Adicional)`
+                }
+              ]).select("id").maybeSingle();
+
+              if (docDb?.id) {
+                let subidoPorUuid: string | null = null;
+                if (req.user!.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.user!.id)) {
+                  subidoPorUuid = req.user!.id;
+                } else {
+                  const { data: usuarioDb } = await supabaseAdmin
+                    .from("perfiles_usuario")
+                    .select("id")
+                    .eq("username", String(req.user!.username || req.user!.id).toLowerCase())
+                    .maybeSingle();
+                  if (usuarioDb?.id) subidoPorUuid = usuarioDb.id;
+                }
+
+                const { data: verDb } = await supabaseAdmin.from("versiones_documento").insert([
+                  {
+                    documento_id: docDb.id,
+                    version_numero: 1,
+                    storage_path: storagePath,
+                    nombre_archivo_original: req.body.nombreArchivo || `${nombre}.pdf`,
+                    mime_type: req.body.mimeType || "application/pdf",
+                    tamano_bytes: Number(req.body.tamanoBytes) || 1048576,
+                    sha256_hash: `sha256-add-${timestamp}`,
+                    subido_por: subidoPorUuid,
+                    url_publica: nuevoRequisito.documentoAsociado?.versiones?.[0]?.archivoDataUrl
+                  }
+                ]).select("id").maybeSingle();
+
+                if (verDb?.id) {
+                  await supabaseAdmin.from("evidencias_requisito").insert([
+                    {
+                      requisito_caso_id: reqInsert.id,
+                      version_documento_id: verDb.id,
+                      vinculado_por: subidoPorUuid
+                    }
+                  ]).catch(() => {});
+                }
+              }
+            }
           }
         } catch (err: any) {
           console.warn("[SUPABASE]: Advertencia guardando requisito adicional:", err?.message);

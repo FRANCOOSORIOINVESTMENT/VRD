@@ -1680,7 +1680,8 @@ export default function App() {
             nombreArchivo: archivoParaCargar.name,
             mimeType: archivoParaCargar.type || "application/pdf",
             tamanoBytes: archivoParaCargar.size,
-            archivoDataUrl: publicStorageUrl || dataUrl,
+            archivoDataUrl: dataUrl,
+            url: publicStorageUrl,
             sha256Hash,
             codigoRequisito: requisito.codigoRequisito,
             fase: requisito.fase,
@@ -4745,6 +4746,8 @@ export default function App() {
                                 <a
                                   href={obtenerUrlConAntiCache(req.documentoAsociado.versionActual.archivoDataUrl)}
                                   download={req.documentoAsociado.versionActual.nombreArchivoOriginal}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
                                   className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors border border-slate-200 cursor-pointer"
                                   title="Descargar documento directamente"
                                 >
@@ -5140,6 +5143,8 @@ export default function App() {
                                       <a
                                         href={obtenerUrlConAntiCache(req.documentoAsociado.versionActual.archivoDataUrl)}
                                         download={req.documentoAsociado.versionActual.nombreArchivoOriginal}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
                                         className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors border border-slate-200 cursor-pointer"
                                         title="Descargar documento directamente"
                                       >
@@ -5568,6 +5573,8 @@ export default function App() {
                                       <a
                                         href={obtenerUrlConAntiCache(req.documentoAsociado.versionActual.archivoDataUrl)}
                                         download={req.documentoAsociado.versionActual.nombreArchivoOriginal}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
                                         className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors border border-slate-200 cursor-pointer"
                                         title="Descargar documento directamente"
                                       >
@@ -5689,6 +5696,8 @@ export default function App() {
                                     <a
                                       href={obtenerUrlConAntiCache(req.documentoAsociado.versionActual.archivoDataUrl)}
                                       download={req.documentoAsociado.versionActual.nombreArchivoOriginal}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
                                       className="p-1.5 text-slate-600 hover:bg-slate-200 rounded-lg cursor-pointer transition-colors"
                                       title="Descargar documento"
                                     >
@@ -6720,12 +6729,12 @@ export default function App() {
                         type="button"
                         disabled={subiendoArchivo}
                         onClick={() => {
-                          const blob = new Blob(
-                            [
-                              `%PDF-1.4\n% CERTIFICADO OFICIAL EXPEDIENTE ${detalleExp?.expediente.codigoVisible || ''}\nRequisito: ${modalSubirArchivoReq.nombre}\nFecha: ${new Date().toISOString()}\nValidez jurídica: Certificado verificado por el sistema.`
-                            ],
-                            { type: "application/pdf" }
-                          );
+                          const tit = `CERTIFICADO OFICIAL: ${modalSubirArchivoReq.codigoRequisito} - ${modalSubirArchivoReq.nombre.replace(/[()\\]/g, "")}`;
+                          const sub = `Expediente: ${detalleExp?.expediente.codigoVisible || "VRD"} | Fecha: ${new Date().toLocaleDateString("es-CO")}`;
+                          const stream = `BT /F1 14 Tf 50 720 Td (${tit}) Tj 0 -25 Td /F1 10 Tf (${sub}) Tj 0 -20 Td /F1 9 Tf (Documento digital inmutable verificado por el sistema CRM VRD.) Tj ET`;
+                          const streamLen = new TextEncoder().encode(stream).length;
+                          const pdfStr = `%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length ${streamLen} >>\nstream\n${stream}\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000224 00000 n \n0000000300 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n380\n%%EOF`;
+                          const blob = new Blob([pdfStr], { type: "application/pdf" });
                           const mockFile = new File(
                             [blob],
                             `${modalSubirArchivoReq.codigoRequisito}_${modalSubirArchivoReq.nombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`,
