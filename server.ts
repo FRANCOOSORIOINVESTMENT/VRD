@@ -6,7 +6,15 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import { mockDb, CUENTAS_FICTICIAS } from "./src/server/mockDb";
-import { hashPassword, comparePassword, crearUsuarioInicial } from "./src/server/authUtils";
+import {
+  hashPassword,
+  comparePassword,
+  crearUsuarioInicial,
+  firmarTokenSesion,
+  verificarTokenSesion,
+  asegurarSecretoSesion,
+  DURACION_SESION_MS
+} from "./src/server/authUtils";
 import uploadRouter from "./src/routes/upload.routes";
 import { verificarBucketStorage, persistirArchivoEnStorage, STORAGE_BUCKET_NAME } from "./src/config/supabase";
 import {
@@ -95,17 +103,75 @@ interface AuthRequest extends Request {
 export async function createApp(): Promise<express.Express> {
   const app = express();
 
-  // Middleware CORS para Render y clientes frontend
+  // Detrás del proxy de Render: permite que req.secure / req.ip reflejen la conexión real del cliente
+  app.set("trust proxy", 1);
+
+  // Falla rápido en producción si falta SESSION_SECRET
+  asegurarSecretoSesion();
+
+  const esProduccion = process.env.NODE_ENV === "production";
+
+  // Orígenes permitidos para CORS (separados por coma). Por defecto, solo APP_URL.
+  const ORIGENES_PERMITIDOS = (process.env.ALLOWED_ORIGINS || process.env.APP_URL || "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/+$/, ""))
+    .filter((o) => o && !o.startsWith("MY_"));
+
+  function origenPermitido(origin: string): boolean {
+    if (ORIGENES_PERMITIDOS.includes(origin)) return true;
+    // En desarrollo se permite localhost
+    return !esProduccion && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+  }
+
+  // Opciones de la cookie de sesión (firmada, HttpOnly)
+  function opcionesCookieSesion(req: Request) {
+    return {
+      httpOnly: true,
+      secure: esProduccion || req.secure,
+      sameSite: "lax" as const,
+      path: "/",
+      maxAge: DURACION_SESION_MS
+    };
+  }
+
+  // Límite de intentos de inicio de sesión: 8 fallos por usuario+IP cada 15 minutos
+  const MAX_FALLOS_LOGIN = 8;
+  const VENTANA_LOGIN_MS = 15 * 60 * 1000;
+  const fallosLogin = new Map<string, { cuenta: number; expira: number }>();
+  setInterval(() => {
+    const ahora = Date.now();
+    for (const [clave, v] of fallosLogin) if (v.expira < ahora) fallosLogin.delete(clave);
+  }, 5 * 60 * 1000).unref();
+
+  function loginBloqueado(clave: string): boolean {
+    const v = fallosLogin.get(clave);
+    return Boolean(v && v.expira > Date.now() && v.cuenta >= MAX_FALLOS_LOGIN);
+  }
+  function registrarFalloLogin(clave: string) {
+    const ahora = Date.now();
+    const v = fallosLogin.get(clave);
+    if (!v || v.expira < ahora) {
+      fallosLogin.set(clave, { cuenta: 1, expira: ahora + VENTANA_LOGIN_MS });
+    } else {
+      v.cuenta += 1;
+    }
+  }
+
+  // Middleware CORS: solo orígenes de confianza (con cookies de sesión)
   app.use((req: Request, res: Response, next: NextFunction) => {
-    res.header("Access-Control-Allow-Origin", (req.headers.origin as string) || "*");
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-user-id"
-    );
+    const origin = req.headers.origin as string | undefined;
+    if (origin && origenPermitido(origin)) {
+      res.header("Access-Control-Allow-Origin", origin);
+      res.header("Vary", "Origin");
+      res.header("Access-Control-Allow-Credentials", "true");
+      res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+      res.header(
+        "Access-Control-Allow-Headers",
+        "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+      );
+    }
     if (req.method === "OPTIONS") {
-      res.sendStatus(200);
+      res.sendStatus(origin && !origenPermitido(origin) ? 403 : 204);
       return;
     }
 
@@ -120,34 +186,15 @@ export async function createApp(): Promise<express.Express> {
   });
 
   app.set("etag", false);
-  app.use(express.json({ limit: "500mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "500mb" }));
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
   app.use(cookieParser());
 
-  // Directorio local indestructible para persistencia de archivos subidos
-  const uploadsDirPath = path.join(process.cwd(), "public", "uploads");
+  // Directorio local para persistencia de archivos subidos (se sirve DESPUÉS de la autenticación)
+  const uploadsDirPath = path.resolve(process.cwd(), "public", "uploads");
   if (!fs.existsSync(uploadsDirPath)) {
     fs.mkdirSync(uploadsDirPath, { recursive: true });
   }
-  app.use("/uploads", express.static(uploadsDirPath));
-
-  // Endpoint resiliente para servir archivos locales directamente
-  app.get("/api/documentos/archivo", (req: Request, res: Response) => {
-    try {
-      const rawPath = String(req.query.path || "");
-      const safePath = path.normalize(rawPath).replace(/^(\.\.[\/\\])+/, "");
-      const fullPath = path.join(uploadsDirPath, safePath);
-      if (fs.existsSync(fullPath)) {
-        return res.sendFile(fullPath);
-      }
-      res.status(404).json({ error: "Archivo local no encontrado en el servidor." });
-    } catch {
-      res.status(500).json({ error: "Error al servir archivo local." });
-    }
-  });
-
-  // Rutas modulares para subida directa de archivos (hasta 25MB por archivo)
-  app.use("/api/documentos", uploadRouter);
 
   // Verificación no bloqueante del bucket Supabase Storage
   verificarBucketStorage()
@@ -198,8 +245,8 @@ export async function createApp(): Promise<express.Express> {
             rol: rolNormalizado,
             activo: Boolean(dbU.activo),
             creadoEn: dbU.creado_en || new Date().toISOString(),
-            passwordHash: dbU.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
-            password_hash: dbU.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
+            passwordHash: dbU.password_hash || "",
+            password_hash: dbU.password_hash || "",
             requiereCambioPassword: Boolean(dbU.requiere_cambio_password),
             requiere_cambio_password: Boolean(dbU.requiere_cambio_password)
           };
@@ -220,36 +267,25 @@ export async function createApp(): Promise<express.Express> {
 
   // Middleware de resolución y verificación de sesión basada en headers (Bearer/x-user-id) y cookies HttpOnly
   app.use(async (req: AuthRequest, res: Response, next: NextFunction) => {
+    // La identidad SOLO se acepta mediante un token firmado por el servidor (cookie o Bearer).
+    // Ya no se aceptan IDs, usernames ni correos en texto plano (x-user-id / Bearer <id>).
     const authHeader = req.headers["authorization"];
-    const headerUserId = req.headers["x-user-id"] as string | undefined;
-    let sessionUserId = req.cookies["crm_session_user"];
-
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      sessionUserId = authHeader.substring(7).trim();
-    } else if (headerUserId) {
-      sessionUserId = headerUserId.trim();
-    }
+    const tokenBearer = authHeader && authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : "";
+    const sessionUserId: string | null =
+      verificarTokenSesion(req.cookies?.["crm_session_user"]) ||
+      (tokenBearer ? verificarTokenSesion(tokenBearer) : null);
 
     if (sessionUserId) {
-      let user = mockDb.perfiles.find(
-        (u) =>
-          (u.id === sessionUserId ||
-           u.username.toLowerCase() === sessionUserId.toLowerCase() ||
-           u.email.toLowerCase() === sessionUserId.toLowerCase()) &&
-          u.activo
-      );
+      let user = mockDb.perfiles.find((u) => u.id === sessionUserId && u.activo);
 
       // Si no está en memoria, consultar directamente en Supabase para evitar 401 por caché desfasado
       if (!user && supabaseAdmin) {
         try {
-          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionUserId);
-          let query = supabaseAdmin.from("perfiles_usuario").select("*");
-          if (isUuid) {
-            query = query.eq("id", sessionUserId);
-          } else {
-            query = query.or(`username.eq.${sessionUserId.toLowerCase()},email.eq.${sessionUserId.toLowerCase()}`);
-          }
-          const { data: dbU } = await query.maybeSingle();
+          const { data: dbU } = await supabaseAdmin
+            .from("perfiles_usuario")
+            .select("*")
+            .eq("id", sessionUserId)
+            .maybeSingle();
           if (dbU && dbU.activo) {
             user = {
               id: dbU.id,
@@ -259,8 +295,8 @@ export async function createApp(): Promise<express.Express> {
               rol: normalizarRolUsuario(dbU.rol),
               activo: Boolean(dbU.activo),
               creadoEn: dbU.creado_en || new Date().toISOString(),
-              passwordHash: dbU.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
-              password_hash: dbU.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
+              passwordHash: dbU.password_hash || "",
+              password_hash: dbU.password_hash || "",
               requiereCambioPassword: Boolean(dbU.requiere_cambio_password),
               requiere_cambio_password: Boolean(dbU.requiere_cambio_password)
             };
@@ -284,6 +320,42 @@ export async function createApp(): Promise<express.Express> {
     }
     next();
   });
+
+  // ARCHIVOS SUBIDOS: solo para usuarios autenticados
+  app.use(
+    "/uploads",
+    requireAuth(),
+    express.static(uploadsDirPath, {
+      dotfiles: "deny",
+      index: false,
+      setHeaders: (res) => {
+        res.setHeader("X-Content-Type-Options", "nosniff");
+      }
+    })
+  );
+
+  // Endpoint para servir archivos locales (autenticado y restringido a la carpeta de uploads)
+  app.get("/api/documentos/archivo", requireAuth(), (req: Request, res: Response) => {
+    try {
+      const rawPath = String(req.query.path || "");
+      const fullPath = path.resolve(uploadsDirPath, rawPath);
+      if (!fullPath.startsWith(uploadsDirPath + path.sep)) {
+        res.status(400).json({ error: "Ruta de archivo no válida." });
+        return;
+      }
+      if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.sendFile(fullPath);
+        return;
+      }
+      res.status(404).json({ error: "Archivo local no encontrado en el servidor." });
+    } catch {
+      res.status(500).json({ error: "Error al servir archivo local." });
+    }
+  });
+
+  // Rutas modulares para subida de archivos (requieren sesión)
+  app.use("/api/documentos", requireAuth(), uploadRouter);
 
   // Helper de protección RBAC en servidor (evita saltarse autorización en backend)
   function requireAuth(rolesPermitidos?: RolUsuario[]) {
@@ -2017,7 +2089,7 @@ export async function createApp(): Promise<express.Express> {
   app.get("/api/sync", requireAuth(), ejecutarSincronizacionMaestra);
 
   // 0.1 DIAGNÓSTICO DETALLADO SUPABASE
-  app.get("/api/supabase/status", async (req: Request, res: Response) => {
+  app.get("/api/supabase/status", requireAuth(["administrador"]), async (req: Request, res: Response) => {
     try {
       const status = await testSupabaseConnection();
       res.json({
@@ -2032,7 +2104,7 @@ export async function createApp(): Promise<express.Express> {
   });
 
   // 0.2 OBTENER ESQUEMA SQL PARA EJECUTAR EN SUPABASE SQL EDITOR
-  app.get("/api/supabase/schema-sql", (req: Request, res: Response) => {
+  app.get("/api/supabase/schema-sql", requireAuth(["administrador"]), (req: Request, res: Response) => {
     try {
       const sqlPath = path.join(process.cwd(), "src", "db", "001_initial_schema.sql");
       if (fs.existsSync(sqlPath)) {
@@ -2048,7 +2120,7 @@ export async function createApp(): Promise<express.Express> {
   });
 
   // 0.3 POBLAR O SINCRONIZAR DATOS BASE (MUNICIPIOS Y PERFILES) HACIA SUPABASE
-  app.post("/api/supabase/seed", async (req: Request, res: Response) => {
+  app.post("/api/supabase/seed", requireAuth(["administrador"]), async (req: Request, res: Response) => {
     if (!supabaseAdmin) {
       res.status(400).json({ ok: false, error: "Cliente Supabase no configurado" });
       return;
@@ -2126,6 +2198,12 @@ export async function createApp(): Promise<express.Express> {
     }
 
     const cleanUsername = String(username).toLowerCase().trim();
+    const claveLogin = `${req.ip}|${cleanUsername}`;
+
+    if (loginBloqueado(claveLogin)) {
+      res.status(429).json({ error: "Demasiados intentos fallidos. Intente de nuevo en 15 minutos." });
+      return;
+    }
 
     // 1. Buscar usuario en mockDb
     let user = mockDb.perfiles.find(
@@ -2153,8 +2231,8 @@ export async function createApp(): Promise<express.Express> {
               rol: rolNormalizado,
               activo: dbUser.activo,
               creadoEn: dbUser.creado_en || new Date().toISOString(),
-              passwordHash: dbUser.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
-              password_hash: dbUser.password_hash || "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO",
+              passwordHash: dbUser.password_hash || "",
+              password_hash: dbUser.password_hash || "",
               requiereCambioPassword: Boolean(dbUser.requiere_cambio_password),
               requiere_cambio_password: Boolean(dbUser.requiere_cambio_password)
             };
@@ -2181,6 +2259,7 @@ export async function createApp(): Promise<express.Express> {
     }
 
     if (!user) {
+      registrarFalloLogin(claveLogin);
       // Mensaje genérico para prevenir enumeración de usuarios
       res.status(401).json({ error: "Credenciales inválidas o cuenta inactiva." });
       return;
@@ -2191,31 +2270,26 @@ export async function createApp(): Promise<express.Express> {
     const esPasswordValida = await comparePassword(String(password), hashAComparar);
 
     if (!esPasswordValida) {
+      registrarFalloLogin(claveLogin);
       res.status(401).json({ error: "Credenciales inválidas o cuenta inactiva." });
       return;
     }
 
-    // Actualizar hash plano antiguo a bcrypt de manera transparente
-    if (!hashAComparar.startsWith("$2")) {
-      const nuevoBcrypt = await hashPassword(String(password));
-      user.passwordHash = nuevoBcrypt;
-      user.password_hash = nuevoBcrypt;
-    }
+    fallosLogin.delete(claveLogin);
 
-    const requiereCambio = Boolean(user.requiere_cambio_password ?? user.requiereCambioPassword);
+    // Si la cuenta aún usa la contraseña por defecto del sistema, se obliga a cambiarla
+    const HASH_PASSWORD_POR_DEFECTO = "$2b$10$R7Ln7bHfwo31wfJtcsos4uhsG/41vfYkftg1GdnBpFku/Uht74jNO";
+    const usaPasswordPorDefecto = hashAComparar === HASH_PASSWORD_POR_DEFECTO;
+    const requiereCambio =
+      usaPasswordPorDefecto || Boolean(user.requiere_cambio_password ?? user.requiereCambioPassword);
 
-    // Cookie compatible con iframes y contextos cruzados
-    res.cookie("crm_session_user", user.id, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "none",
-      path: "/",
-      maxAge: 8 * 60 * 60 * 1000 // 8 horas
-    });
+    // Cookie de sesión firmada (HttpOnly)
+    const tokenSesion = firmarTokenSesion(user.id);
+    res.cookie("crm_session_user", tokenSesion, opcionesCookieSesion(req));
 
     res.json({
       success: true,
-      token: user.id,
+      token: tokenSesion,
       user: {
         id: user.id,
         username: user.username,
@@ -2409,7 +2483,10 @@ export async function createApp(): Promise<express.Express> {
   );
 
   app.post("/api/auth/logout", (req: Request, res: Response) => {
-    res.clearCookie("crm_session_user", { path: "/", sameSite: "none", secure: true });
+    {
+      const { maxAge: _omitido, ...opcionesLimpieza } = opcionesCookieSesion(req);
+      res.clearCookie("crm_session_user", opcionesLimpieza);
+    }
     res.json({ success: true });
   });
 
@@ -2434,7 +2511,7 @@ export async function createApp(): Promise<express.Express> {
   });
 
   // Cambio rápido de usuario / perfil para pruebas y navegación
-  app.post("/api/auth/switch-user", async (req: Request, res: Response) => {
+  app.post("/api/auth/switch-user", requireAuth(["administrador"]), async (req: AuthRequest, res: Response) => {
     const { userId } = req.body;
     let user = mockDb.perfiles.find(
       (u) => (u.id === userId || u.username.toLowerCase() === String(userId).toLowerCase()) && u.activo !== false
@@ -2454,17 +2531,14 @@ export async function createApp(): Promise<express.Express> {
 
     const requiereCambio = Boolean(user.requiere_cambio_password ?? user.requiereCambioPassword);
 
-    res.cookie("crm_session_user", user.id, {
-      httpOnly: true,
-      secure: req.secure || req.protocol === "https",
-      sameSite: req.secure || req.protocol === "https" ? "none" : "lax",
-      path: "/",
-      maxAge: 8 * 60 * 60 * 1000
-    });
+    console.warn(`[AUDITORIA]: El administrador "${req.user?.username}" cambió de sesión al usuario "${user.username}".`);
+
+    const tokenSesionCambio = firmarTokenSesion(user.id);
+    res.cookie("crm_session_user", tokenSesionCambio, opcionesCookieSesion(req));
 
     res.json({
       success: true,
-      token: user.id,
+      token: tokenSesionCambio,
       user: {
         id: user.id,
         username: user.username,
@@ -3028,7 +3102,7 @@ export async function createApp(): Promise<express.Express> {
                 persona_contactada: nuevo.nombreContacto,
                 canal: nuevo.origenContacto || "contacto_inicial",
                 contenido: `Detalles de captación inicial: ${nuevo.resumenNecesidad}`
-              }]).catch(() => {});
+              }]);
             }
           }
         }
@@ -3708,6 +3782,7 @@ export async function createApp(): Promise<express.Express> {
                 (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && r.codigoRequisito === rRow.codigo_requisito
               );
               if (reqExistente) {
+                if (rRow.id) reqExistente.id = rRow.id;
                 if (rRow.estado) reqExistente.estado = rRow.estado;
                 if (Array.isArray(rRow.evidencias) && rRow.evidencias.length > 0) {
                   const verId = rRow.evidencias[0].version_documento_id;
@@ -3721,6 +3796,54 @@ export async function createApp(): Promise<express.Express> {
                 }
               }
             });
+
+            // Obtener revisiones humanas de estos requisitos desde Supabase
+            try {
+              const reqIds = dbReqs.map((r: any) => r.id).filter(Boolean);
+              if (reqIds.length > 0) {
+                const { data: dbRevs } = await supabaseAdmin
+                  .from("revisiones_humanas")
+                  .select(`
+                    id,
+                    requisito_caso_id,
+                    version_documento_id,
+                    supervisor_id,
+                    resultado,
+                    observacion,
+                    fecha_revision,
+                    supervisor:perfiles_usuario(nombre_completo)
+                  `)
+                  .in("requisito_caso_id", reqIds);
+
+                if (Array.isArray(dbRevs) && dbRevs.length > 0) {
+                  dbRevs.forEach((revRow: any) => {
+                    const reqOriginal = dbReqs.find((dr: any) => dr.id === revRow.requisito_caso_id);
+                    const revMapeada: RevisionHumana = {
+                      id: revRow.id,
+                      requisitoCasoId: revRow.requisito_caso_id,
+                      versionDocumentoId: revRow.version_documento_id,
+                      supervisorId: revRow.supervisor_id,
+                      supervisorNombre: revRow.supervisor?.nombre_completo || "Analista Documental",
+                      cicloRevision: 1,
+                      resultado: revRow.resultado,
+                      observacion: revRow.observacion || "",
+                      fechaRevision: revRow.fecha_revision
+                    };
+                    if (reqOriginal?.codigo_requisito) {
+                      (revMapeada as any).codigoRequisito = reqOriginal.codigo_requisito;
+                    }
+                    const idxExistente = mockDb.revisiones.findIndex((r) => r.id === revMapeada.id);
+                    if (idxExistente >= 0) {
+                      mockDb.revisiones[idxExistente] = revMapeada;
+                    } else {
+                      mockDb.revisiones.push(revMapeada);
+                    }
+                  });
+                }
+              }
+            } catch (revErr: any) {
+              console.warn("[SUPABASE REVISIONES FETCH WARNING]:", revErr?.message);
+            }
           }
 
           // Vincular documentos existentes al requisito correspondiente por coincidencia de código o título
@@ -3774,13 +3897,38 @@ export async function createApp(): Promise<express.Express> {
           }
         }
         const revision = mockDb.revisiones
-          .filter((rev) => rev.requisitoCasoId === r.id)
+          .filter((rev) =>
+            rev.requisitoCasoId === r.id ||
+            rev.requisitoCasoId === r.codigoRequisito ||
+            (rev as any).codigoRequisito === r.codigoRequisito ||
+            (r.codigoRequisito && rev.requisitoCasoId?.includes(r.codigoRequisito.toLowerCase()))
+          )
           .sort((a, b) => new Date(b.fechaRevision).getTime() - new Date(a.fechaRevision).getTime())[0];
+
+        let ultimaRevision = revision || r.ultimaRevision;
+        if (!ultimaRevision && (r.estado === "con_observaciones" || r.observaciones)) {
+          ultimaRevision = {
+            id: `rev-synth-${r.id}`,
+            requisitoCasoId: r.id,
+            versionDocumentoId: doc?.versionActual?.id || "",
+            supervisorId: "usr-supervisor-01",
+            supervisorNombre: "Analista Documental",
+            cicloRevision: 1,
+            resultado: "OBSERVADO",
+            observacion: r.observaciones || "Documento observado por el supervisor. Subir archivo corregido.",
+            fechaRevision: exp.actualizadoEn || new Date().toISOString()
+          };
+        }
+
+        if (ultimaRevision && ultimaRevision.resultado === "OBSERVADO") {
+          r.estado = "con_observaciones";
+          r.observaciones = ultimaRevision.observacion;
+        }
 
         return {
           ...r,
           documentoAsociado: doc,
-          ultimaRevision: revision
+          ultimaRevision
         };
       });
 
@@ -4009,10 +4157,13 @@ export async function createApp(): Promise<express.Express> {
             exp.bloqueadoPorRevision = false;
           } else {
             const esSubsanacion =
+              exp.estadoFase1 === "devuelto" ||
               exp.estadoFase2 === "devuelto" ||
               reqCaso.estado === "con_observaciones" ||
               reqCaso.estado === "pendiente_carga" ||
-              reqCaso.estado === "actualizado";
+              reqCaso.estado === "actualizado" ||
+              reqCaso.ultimaRevision?.resultado === "OBSERVADO" ||
+              Boolean(reqCaso.observaciones);
 
             if (!esSubsanacion) {
               res.status(403).json({
@@ -4187,7 +4338,12 @@ export async function createApp(): Promise<express.Express> {
           }
         }
 
-        // Si estaba devuelto con observaciones en Fase 2, reactivar en preparación
+        reqCaso.observaciones = undefined;
+
+        // Si estaba devuelto con observaciones en Fase 1 o Fase 2, reactivar en preparación
+        if (exp.estadoFase1 === "devuelto") {
+          exp.estadoFase1 = "en_preparacion";
+        }
         if (exp.estadoFase2 === "devuelto") {
           exp.estadoFase2 = "en_preparacion";
         }
@@ -4319,14 +4475,13 @@ export async function createApp(): Promise<express.Express> {
                         version_documento_id: verDb.id,
                         vinculado_por: subidoPorUuid
                       }
-                    ]).catch(() => {});
+                    ]);
                   }
 
                   await supabaseAdmin
                     .from("requisitos_caso")
                     .update({ estado: "recibido_revision" })
-                    .eq("id", reqDbId)
-                    .catch(() => {});
+                    .eq("id", reqDbId);
                 }
               }
             }
@@ -4416,7 +4571,7 @@ export async function createApp(): Promise<express.Express> {
         predioId: exp.predioVivienda?.id || `pre-${exp.id}`,
         personaId: exp.postulante?.id || `per-${exp.id}`,
         esObligatorio: Boolean(req.body.esObligatorio),
-        estado: req.body.archivoDataUrl ? "cargado" : "pendiente_carga",
+        estado: req.body.archivoDataUrl ? "recibido_revision" : "pendiente_carga",
         creadoEn: new Date().toISOString()
       };
 
@@ -4441,35 +4596,30 @@ export async function createApp(): Promise<express.Express> {
           console.warn("[STORAGE]: Advertencia persistiendo en storage:", e?.message);
         }
 
-        const docObj: Documento = {
-          id: docId,
-          expedienteId: exp.id,
-          categoria: `fase${faseSolicitada}`,
-          nombreArchivo,
+        const verActualObj: DocVersion = {
+          id: `ver-${docId}-1`,
+          documentoId: docId,
+          versionNumero: 1,
+          nombreArchivoOriginal: nombreArchivo,
           mimeType: req.body.mimeType || "application/pdf",
           tamanoBytes: Number(req.body.tamanoBytes) || 1048576,
           sha256Hash: `sha256-add-${timestamp}`,
-          url: urlFinal,
+          storagePath,
+          subidoPorId: req.user!.id,
+          subidoPorNombre: req.user!.nombreCompleto,
+          subidoEn: new Date().toISOString(),
+          urlFirmadaTemporal: urlFinal,
+          archivoDataUrl: urlFinal
+        };
+
+        const docObj: Documento = {
+          id: docId,
+          expedienteId: exp.id,
+          titulo: `${nombre} (Fase ${faseSolicitada} Adicional)`,
+          categoria: `fase${faseSolicitada}`,
           esOficial: true,
-          versionActual: 1,
-          creadoEn: new Date().toISOString(),
-          versiones: [
-            {
-              id: `ver-${docId}-1`,
-              documentoId: docId,
-              versionNumero: 1,
-              nombreArchivo,
-              mimeType: req.body.mimeType || "application/pdf",
-              tamanoBytes: Number(req.body.tamanoBytes) || 1048576,
-              sha256Hash: `sha256-add-${timestamp}`,
-              storagePath,
-              subidoPorId: req.user!.id,
-              subidoPorNombre: req.user!.nombreCompleto,
-              subidoEn: new Date().toISOString(),
-              urlFirmadaTemporal: urlFinal,
-              archivoDataUrl: urlFinal
-            }
-          ]
+          versionActual: verActualObj,
+          versiones: [verActualObj]
         };
         mockDb.documentos.push(docObj);
         nuevoRequisito.documentoAsociado = docObj;
@@ -4492,7 +4642,7 @@ export async function createApp(): Promise<express.Express> {
                 codigo_requisito: codigoRequisito,
                 nombre,
                 fase: faseSolicitada,
-                estado: nuevoRequisito.estado === "cargado" ? "recibido_revision" : "pendiente_carga",
+                estado: nuevoRequisito.estado === "recibido_revision" ? "recibido_revision" : "pendiente_carga",
                 es_obligatorio: Boolean(req.body.esObligatorio),
                 es_adicional: true
               }
@@ -4540,7 +4690,7 @@ export async function createApp(): Promise<express.Express> {
                       version_documento_id: verDb.id,
                       vinculado_por: subidoPorUuid
                     }
-                  ]).catch(() => {});
+                  ]);
                 }
               }
             }
@@ -5268,7 +5418,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/requisitos/:reqId/revisar",
     requireAuth(["supervisor", "administrador", "ingenieria"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -5309,15 +5459,6 @@ export async function createApp(): Promise<express.Express> {
         return;
       }
 
-      // Restricción para Fase 2 en conformación
-      if (
-        req.user?.rol === "supervisor" &&
-        reqCaso.fase === 2 &&
-        !exp.bloqueadoPorRevision
-      ) {
-        res.status(400).json({ error: "El expediente está en conformación por el Gestor Documental y no ha sido remitido a revisión." });
-        return;
-      }
 
       const { resultado, observacion } = req.body;
       if (resultado !== "ACEPTADO" && resultado !== "OBSERVADO") {
@@ -5373,6 +5514,7 @@ export async function createApp(): Promise<express.Express> {
 
       mockDb.revisiones.push(nuevaRevision);
       reqCaso.estado = resultado === "ACEPTADO" ? "aceptado" : "con_observaciones";
+      reqCaso.observaciones = observacion ? String(observacion).trim() : "";
       reqCaso.ultimaRevision = nuevaRevision;
 
       // Si es F5-01 o fase 5, actualizar tramite de licencia si existe
@@ -5382,11 +5524,32 @@ export async function createApp(): Promise<express.Express> {
         }
       }
 
-      // Si se observó, generar tarea automática al responsable para subsanar
+      // Si se observó con comentarios, desbloquear el expediente para permitir subsanación y corrección
       if (resultado === "OBSERVADO") {
+        exp.bloqueadoPorRevision = false;
+        if (reqCaso.fase === 1 || !reqCaso.fase) {
+          exp.estadoFase1 = "devuelto";
+          exp.motivoDevolucionFase = nuevaRevision.observacion;
+        } else if (reqCaso.fase === 2) {
+          exp.estadoFase2 = "devuelto";
+          exp.observacionDevolucionFase2 = nuevaRevision.observacion;
+        } else {
+          exp.revisionFases = exp.revisionFases || {};
+          exp.revisionFases[reqCaso.fase] = {
+            estado: "devuelto",
+            observacionesDevolucion: nuevaRevision.observacion,
+            fechaDecisionSupervisor: new Date().toISOString(),
+            supervisorId: req.user!.id,
+            supervisorNombre: req.user!.nombreCompleto
+          };
+        }
+
         const responsableDestino = reqCaso.fase === 1
-          ? exp.comercialOrigenId
-          : (exp.asistenteAsignadoId || exp.responsableGeneralId || exp.comercialOrigenId);
+          ? (exp.comercialOrigenId || "usr-comercial-01")
+          : (exp.asistenteAsignadoId || exp.responsableGeneralId || exp.comercialOrigenId || "usr-asistente-01");
+        
+        exp.responsableGeneralId = responsableDestino;
+
         mockDb.tareas.push({
           id: `tar-${Date.now()}`,
           expedienteId: exp.id,
@@ -5396,9 +5559,85 @@ export async function createApp(): Promise<express.Express> {
           estado: "pendiente",
           creadoEn: new Date().toISOString()
         });
+
+        mockDb.notas.push({
+          id: `nota-obs-${Date.now()}`,
+          expedienteId: exp.id,
+          autorId: req.user!.id,
+          autorNombre: req.user!.nombreCompleto,
+          personaContactada: "Responsable de Gestión",
+          canal: "sistema",
+          contenido: `Observación registrada en requisito '${reqCaso.nombre}': ${nuevaRevision.observacion}. Documento habilitado para corrección y subsanación.`,
+          fechaGestion: new Date().toISOString(),
+          creadoEn: new Date().toISOString()
+        });
       }
 
-      res.status(200).json({ success: true, revision: nuevaRevision, requisito: reqCaso });
+      // Sincronizar actualización en Supabase
+      await sincronizarExpedienteEnSupabase(exp);
+
+      if (supabaseAdmin) {
+        try {
+          await supabaseAdmin
+            .from("requisitos_caso")
+            .update({
+              estado: resultado === "ACEPTADO" ? "aceptado" : "con_observaciones"
+            })
+            .or(`id.eq.${reqCaso.id},and(expediente_id.eq.${exp.id},codigo_requisito.eq.${reqCaso.codigoRequisito})`);
+
+          const esUuid = (str?: string) => str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+          let reqUuid = esUuid(reqCaso.id) ? reqCaso.id : null;
+          if (!reqUuid) {
+            const { data: rRow } = await supabaseAdmin
+              .from("requisitos_caso")
+              .select("id")
+              .eq("expediente_id", exp.id)
+              .eq("codigo_requisito", reqCaso.codigoRequisito)
+              .maybeSingle();
+            if (rRow?.id) reqUuid = rRow.id;
+          }
+
+          let verUuid = esUuid(versionId) ? versionId : null;
+          if (!verUuid) {
+            const { data: vRow } = await supabaseAdmin
+              .from("versiones_documento")
+              .select("id")
+              .order("subido_en", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (vRow?.id) verUuid = vRow.id;
+          }
+
+          let supUuid = esUuid(req.user!.id) ? req.user!.id : null;
+          if (!supUuid) {
+            const { data: sRow } = await supabaseAdmin
+              .from("perfiles_usuario")
+              .select("id")
+              .eq("rol", "supervisor")
+              .limit(1)
+              .maybeSingle();
+            if (sRow?.id) supUuid = sRow.id;
+          }
+
+          if (reqUuid && verUuid && supUuid) {
+            await supabaseAdmin.from("revisiones_humanas").insert([
+              {
+                requisito_caso_id: reqUuid,
+                version_documento_id: verUuid,
+                supervisor_id: supUuid,
+                ciclo_revision: 1,
+                resultado,
+                observacion: observacion ? String(observacion).trim() : "",
+                fecha_revision: nuevaRevision.fechaRevision
+              }
+            ]);
+          }
+        } catch (sbErr: any) {
+          console.warn("[SUPABASE REVISION ERROR]:", sbErr?.message);
+        }
+      }
+
+      res.status(200).json({ success: true, revision: nuevaRevision, requisito: reqCaso, expediente: exp });
     }
   );
 
@@ -6185,7 +6424,9 @@ export async function createApp(): Promise<express.Express> {
         supervisorNombre: req.user!.nombreCompleto
       };
 
-      if (numFase === 2) {
+      if (numFase === 1) {
+        exp.estadoFase1 = "devuelto";
+      } else if (numFase === 2) {
         exp.estadoFase2 = "devuelto";
         exp.observacionDevolucionFase2 = obsTexto;
         exp.fechaDecisionSupervisorFase2 = new Date().toISOString();
