@@ -12,15 +12,27 @@ services:
         value: "10000"
       - key: APP_MODE
         value: supabase
+      # URL pública de la app, p. ej. https://vrd.onrender.com (se define en el panel de Render)
+      - key: APP_URL
+        sync: false
+      # Orígenes extra permitidos por CORS, separados por coma (opcional)
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # Secreto para firmar las sesiones: Render lo genera automáticamente
+      - key: SESSION_SECRET
+        generateValue: true
       - key: SUPABASE_URL
         value: https://dcelksfchabhrlevlfah.supabase.co
       - key: SUPABASE_PROJECT_ID
         value: dcelksfchabhrlevlfah
+      # Clave pública (anon/publishable): diseñada para ser visible en el cliente
       - key: SUPABASE_ANON_KEY
         value: sb_publishable_B8tc_3lQWCKeBJ3camRySQ_yZAVTqLw
       - key: SUPABASE_PUBLISHABLE_KEY
         value: sb_publishable_B8tc_3lQWCKeBJ3camRySQ_yZAVTqLw
+      # CLAVES SECRETAS: NUNCA escribirlas en este archivo.
+      # Se cargan a mano en el panel de Render (Environment) con la clave NUEVA tras rotarla.
       - key: SUPABASE_SECRET_KEY
-        value: sb_secret_iJsl30gWg_k86wvb5FFNSw_jDiG5XIh
+        sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
-        value: sb_secret_iJsl30gWg_k86wvb5FFNSw_jDiG5XIh
+        sync: false
