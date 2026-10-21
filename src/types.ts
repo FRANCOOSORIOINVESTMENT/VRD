@@ -709,6 +709,8 @@ export interface RequisitoCaso {
   alertaVigencia?: string;
   documentoAsociado?: Documento;
   ultimaRevision?: RevisionHumana;
+  observaciones?: string;
+  creadoEn?: string;
 }
 
 export interface RevisionHumana {

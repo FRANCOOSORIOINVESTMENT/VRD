@@ -26,8 +26,8 @@ export const supabaseSecretKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   supabasePublishableKey;
 
-export const APP_MODE = process.env.APP_MODE || "supabase";
-export const isMockMode = APP_MODE === "mock" && !process.env.SUPABASE_URL;
+export const APP_MODE = (process.env.APP_MODE === "mock" && !supabaseUrl) ? "mock" : "supabase";
+export const isMockMode = APP_MODE === "mock";
 
 let clientPublic: SupabaseClient | null = null;
 let clientAdmin: SupabaseClient | null = null;

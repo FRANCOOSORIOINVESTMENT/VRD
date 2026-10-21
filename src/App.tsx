@@ -134,23 +134,28 @@ export default function App() {
 
   // Helper de peticiones autenticadas compatible con cookies, iframes y sin caché
   const authFetch = (url: string, options: RequestInit = {}) => {
-    const token = currentUser?.id || localStorage.getItem("crm_user_token") || "";
+    const token = localStorage.getItem("crm_user_token") || currentUser?.id || "";
     const headers = new Headers(options.headers || {});
     if (token) {
       headers.set("Authorization", `Bearer ${token}`);
-      headers.set("x-user-id", token);
+      headers.set("x-user-id", currentUser?.id || token);
     }
     
+    // Solicitar explícitamente JSON para evitar fallbacks HTML del servidor o proxies
+    headers.set("Accept", "application/json");
+
     // Evitar caché de navegador para sincronización y actualización inmediata en tiempo real
     headers.set("Cache-Control", "no-cache, no-store, must-revalidate");
     headers.set("Pragma", "no-cache");
     
-    const separator = url.includes("?") ? "&" : "?";
-    const cacheBustedUrl = `${url}${separator}_t=${Date.now()}`;
+    // Sanitizar API_URL para prevenir dobles barras accidentales (ej: //api/...)
+    const rawApiUrl = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
+    const cleanPath = url.startsWith('/') ? url : `/${url}`;
+    const separator = cleanPath.includes("?") ? "&" : "?";
+    const cacheBustedUrl = `${cleanPath}${separator}_t=${Date.now()}`;
+    const fullUrl = rawApiUrl ? `${rawApiUrl}${cacheBustedUrl}` : cacheBustedUrl;
     
-    const API_URL = import.meta.env.VITE_API_URL || '';
-    
-    return fetch(`${API_URL}${cacheBustedUrl}`, {
+    return fetch(fullUrl, {
       ...options,
       cache: "no-store",
       credentials: "include",
@@ -447,9 +452,21 @@ export default function App() {
       .catch(() => {});
 
     authFetch("/api/auth/me")
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) {
+          if (res.status === 401) {
+            setCurrentUser(null);
+            localStorage.removeItem("crm_user_session");
+            localStorage.removeItem("crm_user_token");
+          }
+          return null;
+        }
+        const contentType = res.headers.get("content-type") || "";
+        if (!contentType.includes("application/json")) return null;
+        return res.json();
+      })
       .then((data) => {
-        if (data.authenticated && data.user) {
+        if (data && data.authenticated && data.user) {
           setCurrentUser(data.user);
           localStorage.setItem("crm_user_session", JSON.stringify(data.user));
           localStorage.setItem("crm_user_token", data.user.id);
@@ -459,11 +476,10 @@ export default function App() {
           } else {
             setVistaActual("expedientes");
           }
-        } else {
-          // Si no está autenticado en servidor y no había sesión local válida
-          if (!localStorage.getItem("crm_user_token")) {
-            setCurrentUser(null);
-          }
+        } else if (data && !data.authenticated) {
+          setCurrentUser(null);
+          localStorage.removeItem("crm_user_session");
+          localStorage.removeItem("crm_user_token");
         }
       })
       .catch(() => {})
@@ -490,10 +506,16 @@ export default function App() {
   useEffect(() => {
     if (currentUser && modalAprobarFase1) {
       authFetch("/api/usuarios/asistentes")
-        .then((res) => res.json())
+        .then(async (res) => {
+          if (!res.ok) return null;
+          const contentType = res.headers.get("content-type") || "";
+          return contentType.includes("application/json") ? res.json() : null;
+        })
         .then((data) => {
-          setAsistentesElegibles(data);
-          if (data.length > 0) setAsistenteSeleccionadoId(data[0].id);
+          if (Array.isArray(data)) {
+            setAsistentesElegibles(data);
+            if (data.length > 0) setAsistenteSeleccionadoId(data[0].id);
+          }
         })
         .catch(() => {});
     }
@@ -675,15 +697,22 @@ export default function App() {
     setAuthError(null);
     setIniciandoSesion(true);
     try {
-      const API_URL = import.meta.env.VITE_API_URL || "";
-      const res = await fetch(`${API_URL}/api/auth/login`, {
+      const rawApiUrl = (import.meta.env.VITE_API_URL || "").trim().replace(/\/+$/, "");
+      const res = await fetch(`${rawApiUrl}/api/auth/login`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ username: loginUsername, password: loginPassword })
       });
       let data: any = {};
       try {
-        data = await res.json();
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          data = await res.json();
+        } else {
+          setAuthError("El servidor respondió con un formato no reconocido. Verifique la conexión.");
+          return;
+        }
       } catch {
         setAuthError("No se pudo conectar con el servidor. Verifique la conexión con el servicio web en Render.");
         return;
@@ -771,7 +800,11 @@ export default function App() {
 
   const cargarUsuarios = () => {
     authFetch("/api/usuarios/todos")
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const contentType = res.headers.get("content-type") || "";
+        return contentType.includes("application/json") ? res.json() : null;
+      })
       .then((data) => {
         if (Array.isArray(data)) setTodosUsuarios(data);
       })
@@ -780,7 +813,20 @@ export default function App() {
 
   const cargarExpedientes = (): Promise<void> => {
     return authFetch(`/api/expedientes?t=${Date.now()}`)
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) {
+          if (res.status === 401) {
+            console.warn("[CARGA EXPEDIENTES]: Sesión no autorizada (401).");
+          }
+          return null;
+        }
+        const contentType = res.headers.get("content-type") || "";
+        if (!contentType.includes("application/json")) {
+          console.warn("[CARGA EXPEDIENTES]: Respuesta no JSON recibida del servidor.");
+          return null;
+        }
+        return res.json();
+      })
       .then((data) => {
         if (Array.isArray(data)) {
           setExpedientes([...data]);
@@ -795,7 +841,20 @@ export default function App() {
     const rolesAutorizados = ["comercial", "administrador", "planeacion", "supervisor", "asistente"];
     if (!currentUser || !rolesAutorizados.includes(currentUser.rol)) return Promise.resolve();
     return authFetch(`/api/interesados?t=${Date.now()}`)
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) {
+          if (res.status === 401) {
+            console.warn("[CARGA INTERESADOS]: Sesión no autorizada (401).");
+          }
+          return null;
+        }
+        const contentType = res.headers.get("content-type") || "";
+        if (!contentType.includes("application/json")) {
+          console.warn("[CARGA INTERESADOS]: Respuesta no JSON recibida del servidor.");
+          return null;
+        }
+        return res.json();
+      })
       .then((data) => {
         if (Array.isArray(data)) {
           setInteresados([...data]);
@@ -808,7 +867,11 @@ export default function App() {
 
   const cargarOrigenesCaptacion = (): Promise<void> => {
     return authFetch(`/api/configuracion/origenes-captacion?t=${Date.now()}`)
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const contentType = res.headers.get("content-type") || "";
+        return contentType.includes("application/json") ? res.json() : null;
+      })
       .then((data) => {
         if (data?.success && Array.isArray(data.origenes) && data.origenes.length > 0) {
           setOrigenesCaptacion(data.origenes);
@@ -822,8 +885,13 @@ export default function App() {
 
   const cargarDetalleExpediente = (id: string): Promise<any> => {
     return authFetch(`/api/expedientes/${id}?t=${Date.now()}`)
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const contentType = res.headers.get("content-type") || "";
+        return contentType.includes("application/json") ? res.json() : null;
+      })
       .then((data) => {
+        if (!data) return;
         if (data && data.expediente) {
           setDetalleExp({ ...data });
         } else {
@@ -1571,7 +1639,11 @@ export default function App() {
   const cargarSolicitudesRetiro = () => {
     if (!currentUser) return;
     authFetch("/api/solicitudes-retiro")
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const contentType = res.headers.get("content-type") || "";
+        return contentType.includes("application/json") ? res.json() : null;
+      })
       .then((data) => {
         if (Array.isArray(data)) setSolicitudesRetiro(data);
       })
@@ -2099,19 +2171,36 @@ export default function App() {
             : "Revisión registrada con éxito: Requisito OBSERVADO con novedades para subsanar."
         );
         // Actualización optimista local inmediata en el estado del expediente activo
-        if (reqActualizado) {
-          setDetalleExp((prev) => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              requisitos: prev.requisitos.map((r) =>
-                r.id === modalRevisarReq.id || r.codigoRequisito === modalRevisarReq.codigoRequisito
-                  ? { ...r, ...reqActualizado, estado: reqActualizado.estado, ultimaRevision: reqActualizado.ultimaRevision }
-                  : r
-              )
-            };
-          });
-        }
+        setDetalleExp((prev) => {
+          if (!prev) return prev;
+          const expActualizado = data.expediente
+            ? { ...prev.expediente, ...data.expediente }
+            : dictamenFinal === "OBSERVADO"
+            ? { ...prev.expediente, bloqueadoPorRevision: false, estadoFase1: "devuelto" }
+            : prev.expediente;
+
+          return {
+            ...prev,
+            expediente: expActualizado,
+            requisitos: prev.requisitos.map((r) =>
+              r.id === modalRevisarReq.id || r.codigoRequisito === modalRevisarReq.codigoRequisito
+                ? {
+                    ...r,
+                    ...reqActualizado,
+                    estado: reqActualizado?.estado || (dictamenFinal === "ACEPTADO" ? "aceptado" : "con_observaciones"),
+                    observaciones: formRevision.observacion,
+                    ultimaRevision: data.revision || {
+                      id: `rev-${Date.now()}`,
+                      requisitoCasoId: r.id,
+                      resultado: dictamenFinal,
+                      observacion: formRevision.observacion,
+                      fechaRevision: new Date().toISOString()
+                    }
+                  }
+                : r
+            )
+          };
+        });
         await cargarDetalleExpediente(expedienteSeleccionadoId);
         await cargarExpedientes();
       } else {
@@ -4024,6 +4113,15 @@ export default function App() {
                       <div className="flex items-center space-x-2">
                         <button
                           type="button"
+                          onClick={() => setModalDevolverFase1(true)}
+                          className="px-3.5 py-2 text-xs font-bold rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 transition-all flex items-center space-x-1.5 cursor-pointer shadow-xs"
+                          title="Devolver expediente al Gestor Rural para corregir observaciones"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 text-amber-700" />
+                          <span>Devolver con Observaciones</span>
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => !deshabilitarSupervisorF1 && setModalAprobarFase1(true)}
                           disabled={
                             deshabilitarSupervisorF1 ||
@@ -4536,6 +4634,19 @@ export default function App() {
                         </div>
                       )}
 
+                      {/* BANNER DE EXPEDIENTE DEVUELTO CON OBSERVACIONES EN FASE 1 */}
+                      {detalleExp.expediente.estadoFase1 === "devuelto" && !detalleExp.expediente.bloqueadoPorRevision && (
+                        <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl mb-5 flex items-start space-x-3 text-amber-900 shadow-xs">
+                          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                          <div className="flex-1">
+                            <h4 className="font-bold text-sm">Expediente Devuelto con Observaciones por Análisis Documental</h4>
+                            <p className="text-xs text-amber-800 mt-0.5">
+                              <strong>Motivo:</strong> {detalleExp.expediente.motivoDevolucionFase || "Corrija los documentos observados usando el botón 'Corregir Documento' y vuelva a enviar a revisión."}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
                       {/* BARRA DE HERRAMIENTAS Y ACCIONES DE FASE 1 */}
                       <div className="p-4 bg-blue-50/90 border border-blue-200 rounded-xl mb-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
                         <div className="flex items-center space-x-3">
@@ -4605,6 +4716,8 @@ export default function App() {
                                 <span>
                                   {faltanSubirFase1.length > 0
                                     ? `Faltan ${faltanSubirFase1.length} Doc(s) por Cargar`
+                                    : detalleExp.expediente.estadoFase1 === "devuelto"
+                                    ? "Reenviar a Análisis Documental"
                                     : "Enviar a Análisis Documental"}
                                 </span>
                               </button>
@@ -4620,6 +4733,15 @@ export default function App() {
                                 !todosFase1Aceptados;
                               return (
                                 <div className="flex items-center space-x-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setModalDevolverFase1(true)}
+                                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-xs bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 cursor-pointer"
+                                    title="Devolver expediente al Gestor Rural para corregir observaciones"
+                                  >
+                                    <RotateCcw className="w-3.5 h-3.5 text-amber-700" />
+                                    <span>Devolver con Observaciones</span>
+                                  </button>
                                   <button
                                     type="button"
                                     disabled={deshabilitarSupervisorF1 || !todosFase1Aceptados || guardandoAprobacion}
@@ -4729,9 +4851,28 @@ export default function App() {
                                 )}
 
                                 {/* Observación activa si existe */}
-                                {req.ultimaRevision?.resultado === "OBSERVADO" && (
-                                  <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
-                                    <strong>Observación de Análisis Documental:</strong> {req.ultimaRevision.observacion}
+                                {(req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.ultimaRevision?.observacion) || Boolean(req.observaciones)) && (
+                                  <div className="mt-2.5 p-3 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-900 shadow-2xs">
+                                    <div className="flex items-center justify-between gap-2 mb-1">
+                                      <div className="flex items-center space-x-1.5 font-bold text-amber-900">
+                                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                                        <span>Observación de Análisis Documental:</span>
+                                      </div>
+                                      {(currentUser.rol === "comercial" || currentUser.rol === "asistente" || currentUser.rol === "administrador") && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleAbrirModalSubir(req)}
+                                          className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold transition-colors cursor-pointer shrink-0 shadow-2xs"
+                                          title="Subir archivo corregido para subsanar esta observación"
+                                        >
+                                          <Upload className="w-3 h-3" />
+                                          <span>Subir Corrección</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                    <p className="text-slate-700 pl-5 leading-relaxed">
+                                      {req.ultimaRevision?.observacion || req.observaciones || "Por favor subsanar la observación indicada por el supervisor."}
+                                    </p>
                                   </div>
                                 )}
                               </div>
@@ -4743,8 +4884,8 @@ export default function App() {
                                 className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
                                   req.estado === "aceptado"
                                     ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                    : req.estado === "con_observaciones"
-                                    ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                    : req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)
+                                    ? "bg-amber-100 text-amber-800 border border-amber-300 font-bold"
                                     : req.estado === "recibido_revision"
                                     ? "bg-blue-50 text-blue-700 border border-blue-200"
                                     : "bg-slate-100 text-slate-600"
@@ -4752,7 +4893,7 @@ export default function App() {
                               >
                                 {req.estado === "aceptado"
                                   ? "Aceptado"
-                                  : req.estado === "con_observaciones"
+                                  : req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)
                                   ? "Con Observaciones"
                                   : req.estado === "recibido_revision"
                                   ? "En Revisión"
@@ -4799,11 +4940,41 @@ export default function App() {
 
                               {/* Cargar / Reemplazar en Fase 1 según Rol y Estado de Revisión */}
                               {!esSalidaDefinitiva && currentUser.rol !== "planeacion" && (() => {
+                                const tieneObservacion =
+                                  req.estado === "con_observaciones" ||
+                                  req.ultimaRevision?.resultado === "OBSERVADO" ||
+                                  Boolean(req.ultimaRevision?.observacion) ||
+                                  Boolean(req.observaciones);
+
+                                const faseConObservaciones =
+                                  detalleExp.expediente.estadoFase1 === "devuelto" ||
+                                  Boolean(detalleExp.expediente.motivoDevolucionFase) ||
+                                  detalleExp.requisitos.some(
+                                    (r) =>
+                                      (r.fase === 1 || !r.fase) &&
+                                      (r.estado === "con_observaciones" || r.ultimaRevision?.resultado === "OBSERVADO" || Boolean(r.observaciones))
+                                  );
+
+                                const esObservado = tieneObservacion || faseConObservaciones;
                                 const puedeCargar = currentUser.rol === "administrador" ||
                                   currentUser.rol === "supervisor" ||
+                                  esObservado ||
                                   (!detalleExp.expediente.bloqueadoPorRevision && (currentUser.rol === "comercial" || currentUser.rol === "asistente"));
 
                                 if (puedeCargar) {
+                                  if (tieneObservacion && (currentUser.rol === "comercial" || currentUser.rol === "asistente")) {
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleAbrirModalSubir(req)}
+                                        className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer shadow-xs"
+                                        title="Subir corrección para subsanar la observación del supervisor"
+                                      >
+                                        <Upload className="w-3.5 h-3.5" />
+                                        <span>Corregir Documento</span>
+                                      </button>
+                                    );
+                                  }
                                   return (
                                     <button
                                       type="button"
@@ -4816,12 +4987,12 @@ export default function App() {
                                   );
                                 }
 
-                                if (detalleExp.expediente.bloqueadoPorRevision && (currentUser.rol === "comercial" || currentUser.rol === "asistente")) {
+                                if (detalleExp.expediente.bloqueadoPorRevision && !esObservado && (currentUser.rol === "comercial" || currentUser.rol === "asistente")) {
                                   return (
                                     <span
                                       title={
                                         currentUser.rol === "comercial"
-                                          ? "El expediente se encuentra en evaluación de Análisis Documental. La edición está temporalmente bloqueada para el Gestor Rural."
+                                          ? "El expediente se encuentra en evaluación de Análisis Documental. La edición se habilitará si el documento recibe observaciones."
                                           : "El expediente se encuentra en evaluación de Análisis Documental."
                                       }
                                       className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-amber-50 text-amber-800 border border-amber-200 rounded-lg text-[11px] font-semibold"
@@ -4841,7 +5012,7 @@ export default function App() {
 
                               {/* Supervisor: Evaluar */}
                               {!esSalidaDefinitiva && (currentUser.rol === "supervisor" || currentUser.rol === "administrador") && req.documentoAsociado?.versionActual && (() => {
-                                const deshabilitarRevisarSupervisor = currentUser.rol === "supervisor" && !detalleExp.expediente.bloqueadoPorRevision;
+                                const deshabilitarRevisarSupervisor = !req.documentoAsociado?.versionActual;
                                 return (
                                   <button
                                     type="button"
@@ -4851,18 +5022,10 @@ export default function App() {
                                       setModalRevisarReq(req);
                                       setFormRevision({ resultado: "ACEPTADO", observacion: "" });
                                     }}
-                                    className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1 border ${
-                                      deshabilitarRevisarSupervisor
-                                        ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60"
-                                        : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200 cursor-pointer"
-                                    }`}
-                                    title={
-                                      deshabilitarRevisarSupervisor
-                                        ? "Revisión no disponible: El Gestor Rural debe finalizar la carga y enviar el expediente a Análisis Documental."
-                                        : "Revisar y calificar documento"
-                                    }
+                                    className="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1 border bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200 cursor-pointer"
+                                    title="Dictaminar o revisar requisito documental"
                                   >
-                                    <CheckCircle2 className={`w-3.5 h-3.5 ${deshabilitarRevisarSupervisor ? "text-slate-400" : "text-emerald-700"}`} />
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
                                     <span>Revisar</span>
                                   </button>
                                 );
@@ -4979,6 +5142,15 @@ export default function App() {
                                   !todosFase2Aceptados;
                                 return (
                                   <div className="flex items-center space-x-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => setModalDevolverFase2(true)}
+                                      className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-xs bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 cursor-pointer"
+                                      title="Devolver expediente al Gestor Documental para corregir observaciones"
+                                    >
+                                      <RotateCcw className="w-3.5 h-3.5 text-amber-700" />
+                                      <span>Devolver con Observaciones</span>
+                                    </button>
                                     <button
                                       type="button"
                                       disabled={deshabilitarParaSupervisor || !todosFase2Aceptados || guardandoAprobacionFase2}
@@ -5126,9 +5298,28 @@ export default function App() {
                                       )}
 
                                       {/* Observación activa si existe */}
-                                      {req.ultimaRevision?.resultado === "OBSERVADO" && (
-                                        <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
-                                          <strong>Observación de Análisis Documental:</strong> {req.ultimaRevision.observacion}
+                                      {(req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) && (
+                                        <div className="mt-2.5 p-3 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-900 shadow-2xs">
+                                          <div className="flex items-center justify-between gap-2 mb-1">
+                                            <div className="flex items-center space-x-1.5 font-bold text-amber-900">
+                                              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                                              <span>Observación de Análisis Documental:</span>
+                                            </div>
+                                            {(currentUser.rol === "asistente" || currentUser.rol === "comercial" || currentUser.rol === "administrador") && (
+                                              <button
+                                                type="button"
+                                                onClick={() => handleAbrirModalSubir(req)}
+                                                className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold transition-colors cursor-pointer shrink-0 shadow-2xs"
+                                                title="Subir archivo corregido para subsanar esta observación"
+                                              >
+                                                <Upload className="w-3 h-3" />
+                                                <span>Subir Corrección</span>
+                                              </button>
+                                            )}
+                                          </div>
+                                          <p className="text-slate-700 pl-5 leading-relaxed">
+                                            {req.ultimaRevision?.observacion || req.observaciones || "Por favor subsanar la observación indicada por el supervisor."}
+                                          </p>
                                         </div>
                                       )}
                                     </div>
@@ -5196,11 +5387,42 @@ export default function App() {
 
                                     {/* ASISTENTE O ADMIN: CARGAR / REEMPLAZAR DOCUMENTO (Y COMERCIAL EN FASE 1) */}
                                     {!esSalidaDefinitiva && currentUser.rol !== "planeacion" && (() => {
+                                      const tieneObservacionF2 =
+                                        req.estado === "con_observaciones" ||
+                                        req.ultimaRevision?.resultado === "OBSERVADO" ||
+                                        Boolean(req.ultimaRevision?.observacion) ||
+                                        Boolean(req.observaciones);
+
+                                      const fase2ConObservaciones =
+                                        detalleExp.expediente.estadoFase2 === "devuelto" ||
+                                        Boolean(detalleExp.expediente.observacionDevolucionFase2) ||
+                                        Boolean(detalleExp.expediente.motivoDevolucionFase) ||
+                                        detalleExp.requisitos.some(
+                                          (r) =>
+                                            r.fase === 2 &&
+                                            (r.estado === "con_observaciones" || r.ultimaRevision?.resultado === "OBSERVADO" || Boolean(r.observaciones))
+                                        );
+
+                                      const esObservadoF2 = tieneObservacionF2 || fase2ConObservaciones;
                                       const puedeCargarF2 = currentUser.rol === "administrador" ||
                                         currentUser.rol === "supervisor" ||
+                                        esObservadoF2 ||
                                         (!detalleExp.expediente.bloqueadoPorRevision && (currentUser.rol === "asistente" || (currentUser.rol === "comercial" && (req.fase === 1 || !req.fase || req.origenFase1))));
 
                                       if (puedeCargarF2) {
+                                        if (tieneObservacionF2 && (currentUser.rol === "asistente" || currentUser.rol === "comercial")) {
+                                          return (
+                                            <button
+                                              type="button"
+                                              onClick={() => handleAbrirModalSubir(req)}
+                                              className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer shadow-xs"
+                                              title="Subir corrección para subsanar la observación del supervisor"
+                                            >
+                                              <Upload className="w-3.5 h-3.5" />
+                                              <span>Corregir Documento</span>
+                                            </button>
+                                          );
+                                        }
                                         return (
                                           <button
                                             type="button"
@@ -5213,7 +5435,7 @@ export default function App() {
                                         );
                                       }
 
-                                      if (detalleExp.expediente.bloqueadoPorRevision && (currentUser.rol === "asistente" || currentUser.rol === "comercial")) {
+                                      if (detalleExp.expediente.bloqueadoPorRevision && !esObservadoF2 && (currentUser.rol === "asistente" || currentUser.rol === "comercial")) {
                                         return (
                                           <span
                                             title="Expediente en evaluación de Análisis Documental"
@@ -5230,7 +5452,7 @@ export default function App() {
 
                                     {/* SUPERVISOR: EVALUAR DOCUMENTO CARGADO */}
                                     {!esSalidaDefinitiva && (currentUser.rol === "supervisor" || currentUser.rol === "administrador") && req.documentoAsociado?.versionActual && (() => {
-                                      const deshabilitarRevisarSupervisor = currentUser.rol === "supervisor" && !detalleExp.expediente.bloqueadoPorRevision;
+                                      const deshabilitarRevisarSupervisor = !req.documentoAsociado?.versionActual;
                                       return (
                                         <button
                                           type="button"
@@ -5567,6 +5789,32 @@ export default function App() {
                                           </span>
                                         </div>
                                       )}
+
+                                      {/* Observación activa si existe */}
+                                      {(req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) && (
+                                        <div className="mt-2.5 p-3 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-900 shadow-2xs">
+                                          <div className="flex items-center justify-between gap-2 mb-1">
+                                            <div className="flex items-center space-x-1.5 font-bold text-amber-900">
+                                              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                                              <span>Observación de Análisis Documental:</span>
+                                            </div>
+                                            {(currentUser.rol === "asistente" || currentUser.rol === "ingenieria" || currentUser.rol === "administrador" || currentUser.rol === "comercial") && (
+                                              <button
+                                                type="button"
+                                                onClick={() => handleAbrirModalSubir(req)}
+                                                className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold transition-colors cursor-pointer shrink-0 shadow-2xs"
+                                                title="Subir archivo corregido para subsanar esta observación"
+                                              >
+                                                <Upload className="w-3 h-3" />
+                                                <span>Subir Corrección</span>
+                                              </button>
+                                            )}
+                                          </div>
+                                          <p className="text-slate-700 pl-5 leading-relaxed">
+                                            {req.ultimaRevision?.observacion || req.observaciones || "Por favor subsanar la observación indicada por el supervisor."}
+                                          </p>
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
 
@@ -5624,26 +5872,51 @@ export default function App() {
                                       </a>
                                     )}
 
-                                    {!esSalidaDefinitiva && currentUser.rol !== "planeacion" && (currentUser.rol === "asistente" || currentUser.rol === "administrador" || currentUser.rol === "ingenieria") && (
-                                      !detalleExp.expediente.bloqueadoPorRevision || currentUser.rol === "administrador" ? (
-                                        <button
-                                          type="button"
-                                          onClick={() => handleAbrirModalSubir(req)}
-                                          className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1 cursor-pointer border border-blue-200 shadow-2xs"
-                                        >
-                                          <Upload className="w-3.5 h-3.5 text-blue-600" />
-                                          <span>{req.documentoAsociado ? "Reemplazar" : "Subir Documento"}</span>
-                                        </button>
-                                      ) : (
+                                    {!esSalidaDefinitiva && currentUser.rol !== "planeacion" && (currentUser.rol === "asistente" || currentUser.rol === "administrador" || currentUser.rol === "ingenieria" || currentUser.rol === "comercial") && (() => {
+                                      const tieneObservacionFases =
+                                        req.estado === "con_observaciones" ||
+                                        req.ultimaRevision?.resultado === "OBSERVADO" ||
+                                        Boolean(req.ultimaRevision?.observacion) ||
+                                        Boolean(req.observaciones);
+
+                                      const faseGenericaConObservaciones =
+                                        detalleExp.expediente.revisionFases?.[req.fase || tabRequisitos]?.estado === "devuelto" ||
+                                        Boolean(detalleExp.expediente.revisionFases?.[req.fase || tabRequisitos]?.observacionesDevolucion) ||
+                                        detalleExp.requisitos.some(
+                                          (r) =>
+                                            r.fase === (req.fase || tabRequisitos) &&
+                                            (r.estado === "con_observaciones" || r.ultimaRevision?.resultado === "OBSERVADO" || Boolean(r.observaciones))
+                                        );
+
+                                      const esObservadoFases = tieneObservacionFases || faseGenericaConObservaciones;
+
+                                      if (!detalleExp.expediente.bloqueadoPorRevision || currentUser.rol === "administrador" || esObservadoFases) {
+                                        return (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleAbrirModalSubir(req)}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1 cursor-pointer border shadow-2xs ${
+                                              esObservadoFases
+                                                ? "bg-amber-500 hover:bg-amber-600 text-white border-amber-500 font-bold"
+                                                : "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                                            }`}
+                                          >
+                                            <Upload className={`w-3.5 h-3.5 ${esObservadoFases ? "text-white" : "text-blue-600"}`} />
+                                            <span>{esObservadoFases ? "Corregir Documento" : req.documentoAsociado ? "Reemplazar" : "Subir Documento"}</span>
+                                          </button>
+                                        );
+                                      }
+
+                                      return (
                                         <span className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-amber-50 text-amber-800 border border-amber-200 rounded-lg text-[11px] font-semibold">
                                           <Lock className="w-3 h-3 text-amber-600" />
                                           <span>Bloqueado por Revisión</span>
                                         </span>
-                                      )
-                                    )}
+                                      );
+                                    })()}
 
                                     {!esSalidaDefinitiva && (currentUser.rol === "supervisor" || currentUser.rol === "administrador") && req.documentoAsociado?.versionActual && (() => {
-                                      const deshabilitarRevisarSupervisor = currentUser.rol === "supervisor" && !detalleExp.expediente.bloqueadoPorRevision;
+                                      const deshabilitarRevisarSupervisor = !req.documentoAsociado?.versionActual;
                                       return (
                                         <button
                                           type="button"

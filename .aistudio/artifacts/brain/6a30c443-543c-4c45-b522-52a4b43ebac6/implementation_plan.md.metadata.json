@@ -1,6 +1,0 @@
-{
-  "summary": "Plan for robust Supabase-first persistence and real-time auto-sync to resolve data resets between AI Studio preview and Render deployment.",
-  "updatedAt": "2026-10-15T16:21:57.389823174Z",
-  "requestFeedback": true,
-  "userFacing": true
-}

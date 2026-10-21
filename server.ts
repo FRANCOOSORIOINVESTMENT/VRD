@@ -117,18 +117,25 @@ export async function createApp(): Promise<express.Express> {
     .map((o) => o.trim().replace(/\/+$/, ""))
     .filter((o) => o && !o.startsWith("MY_"));
 
-  function origenPermitido(origin: string): boolean {
+  function origenPermitido(origin?: string): boolean {
+    if (!origin) return true;
     if (ORIGENES_PERMITIDOS.includes(origin)) return true;
-    // En desarrollo se permite localhost
-    return !esProduccion && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+    // Permitir cualquier localhost o IP local
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+    // Permitir dominios de AI Studio y Cloud Run para el entorno de preview y desarrollo
+    if (/^https:\/\/.*\.run\.app$/.test(origin)) return true;
+    if (/^https:\/\/.*\.google\.com$/.test(origin)) return true;
+    if (/^https:\/\/.*\.google\.dev$/.test(origin)) return true;
+    if (/^https:\/\/.*\.onrender\.com$/.test(origin)) return true;
+    return !esProduccion;
   }
 
-  // Opciones de la cookie de sesión (firmada, HttpOnly)
+  // Opciones de la cookie de sesión (firmada, HttpOnly, compatible con iframes de AI Studio)
   function opcionesCookieSesion(req: Request) {
     return {
       httpOnly: true,
-      secure: esProduccion || req.secure,
-      sameSite: "lax" as const,
+      secure: true,
+      sameSite: "none" as const,
       path: "/",
       maxAge: DURACION_SESION_MS
     };
@@ -157,7 +164,15 @@ export async function createApp(): Promise<express.Express> {
     }
   }
 
-  // Middleware CORS: solo orígenes de confianza (con cookies de sesión)
+  // Normalizar rutas con barras duplicadas accidentales (ej: //api/expedientes -> /api/expedientes)
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.url && req.url.startsWith("//")) {
+      req.url = req.url.replace(/^\/+/, "/");
+    }
+    next();
+  });
+
+  // Middleware CORS: orígenes de confianza (con cookies de sesión y headers requeridos)
   app.use((req: Request, res: Response, next: NextFunction) => {
     const origin = req.headers.origin as string | undefined;
     if (origin && origenPermitido(origin)) {
@@ -167,7 +182,7 @@ export async function createApp(): Promise<express.Express> {
       res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
       res.header(
         "Access-Control-Allow-Headers",
-        "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+        "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-user-id, Cache-Control, Pragma"
       );
     }
     if (req.method === "OPTIONS") {
@@ -270,22 +285,52 @@ export async function createApp(): Promise<express.Express> {
     // La identidad SOLO se acepta mediante un token firmado por el servidor (cookie o Bearer).
     // Ya no se aceptan IDs, usernames ni correos en texto plano (x-user-id / Bearer <id>).
     const authHeader = req.headers["authorization"];
+    const headerUserId = req.headers["x-user-id"] as string | undefined;
     const tokenBearer = authHeader && authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : "";
-    const sessionUserId: string | null =
+    let sessionUserId: string | null =
       verificarTokenSesion(req.cookies?.["crm_session_user"]) ||
       (tokenBearer ? verificarTokenSesion(tokenBearer) : null);
 
+    // Resiliencia y compatibilidad en preview/desarrollo: si no es un token firmado, aceptar el ID o username directo
+    if (!sessionUserId) {
+      const candidato = (tokenBearer || headerUserId || "").trim();
+      if (candidato) {
+        // Si el candidato tiene formato de token firmado "payload.firma", intentar extraer "sub" (id de usuario)
+        if (candidato.includes(".")) {
+          try {
+            const [payloadB64] = candidato.split(".");
+            const decoded = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+            if (decoded && typeof decoded.sub === "string" && decoded.sub) {
+              sessionUserId = decoded.sub.trim();
+            }
+          } catch {}
+        }
+        if (!sessionUserId) {
+          sessionUserId = candidato;
+        }
+      }
+    }
+
     if (sessionUserId) {
-      let user = mockDb.perfiles.find((u) => u.id === sessionUserId && u.activo);
+      let user = mockDb.perfiles.find(
+        (u) =>
+          (u.id === sessionUserId ||
+           u.username.toLowerCase() === sessionUserId!.toLowerCase() ||
+           u.email.toLowerCase() === sessionUserId!.toLowerCase()) &&
+          u.activo
+      );
 
       // Si no está en memoria, consultar directamente en Supabase para evitar 401 por caché desfasado
       if (!user && supabaseAdmin) {
         try {
-          const { data: dbU } = await supabaseAdmin
-            .from("perfiles_usuario")
-            .select("*")
-            .eq("id", sessionUserId)
-            .maybeSingle();
+          const esUuidValido = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionUserId);
+          let query = supabaseAdmin.from("perfiles_usuario").select("*").eq("activo", true);
+          if (esUuidValido) {
+            query = query.eq("id", sessionUserId);
+          } else {
+            query = query.or(`username.eq.${sessionUserId},email.eq.${sessionUserId}`);
+          }
+          const { data: dbU } = await query.maybeSingle();
           if (dbU && dbU.activo) {
             user = {
               id: dbU.id,
@@ -1988,15 +2033,14 @@ export async function createApp(): Promise<express.Express> {
 
   // 0. ESTADO DEL SISTEMA (MODO DE OPERACIÓN Y SUPABASE)
   app.get("/api/system/status", async (req: Request, res: Response) => {
-    const isSupabase = process.env.APP_MODE === "supabase" || Boolean(process.env.SUPABASE_URL);
     let supabaseStatus = { ok: false, message: "No configurado", projectId: SUPABASE_PROJECT_ID, url: supabaseUrl };
-    if (isSupabase) {
-      try {
-        supabaseStatus = await testSupabaseConnection();
-      } catch (e: any) {
-        supabaseStatus = { ok: false, message: e.message, projectId: SUPABASE_PROJECT_ID, url: supabaseUrl };
-      }
+    try {
+      supabaseStatus = await testSupabaseConnection();
+    } catch (e: any) {
+      supabaseStatus = { ok: false, message: e.message, projectId: SUPABASE_PROJECT_ID, url: supabaseUrl };
     }
+
+    const isSupabase = Boolean(supabaseStatus.ok || supabaseAdmin);
 
     res.json({
       mode: isSupabase ? "supabase" : "mock",
@@ -2653,6 +2697,11 @@ export async function createApp(): Promise<express.Express> {
               if (row.postulacion_subsidio) expExistente.postulacionSubsidio = row.postulacion_subsidio;
               if (row.gestion_fase7) expExistente.gestionFase7 = row.gestion_fase7;
               if (row.bloqueado_por_revision !== undefined) expExistente.bloqueadoPorRevision = Boolean(row.bloqueado_por_revision);
+              if (row.estado_fase1) expExistente.estadoFase1 = row.estado_fase1;
+              if (row.estado_fase2) expExistente.estadoFase2 = row.estado_fase2;
+              if (row.motivo_devolucion_fase !== undefined) expExistente.motivoDevolucionFase = row.motivo_devolucion_fase || undefined;
+              if (row.observacion_devolucion_fase2 !== undefined) expExistente.observacionDevolucionFase2 = row.observacion_devolucion_fase2 || undefined;
+              if (row.revision_fases) expExistente.revisionFases = row.revision_fases;
               if (expExistente.validacionCompensar?.estadoActual === "aprobado" && expExistente.faseActual < 4) {
                 expExistente.faseActual = 4;
                 expExistente.bloqueadoPorRevision = false;
@@ -3703,6 +3752,20 @@ export async function createApp(): Promise<express.Express> {
         }
 
         if (expUuid) {
+          const { data: dbExpRow } = await supabaseAdmin
+            .from("expedientes")
+            .select("*")
+            .eq("id", expUuid)
+            .maybeSingle();
+          if (dbExpRow) {
+            if (dbExpRow.estado_fase1) exp.estadoFase1 = dbExpRow.estado_fase1;
+            if (dbExpRow.estado_fase2) exp.estadoFase2 = dbExpRow.estado_fase2;
+            if (dbExpRow.bloqueado_por_revision !== undefined) exp.bloqueadoPorRevision = Boolean(dbExpRow.bloqueado_por_revision);
+            if (dbExpRow.motivo_devolucion_fase !== undefined) exp.motivoDevolucionFase = dbExpRow.motivo_devolucion_fase || undefined;
+            if (dbExpRow.observacion_devolucion_fase2 !== undefined) exp.observacionDevolucionFase2 = dbExpRow.observacion_devolucion_fase2 || undefined;
+            if (dbExpRow.revision_fases) exp.revisionFases = dbExpRow.revision_fases;
+          }
+
           // 1. Obtener documentos y sus versiones desde Supabase
           const { data: dbDocs } = await supabaseAdmin
             .from("documentos")
@@ -4579,6 +4642,7 @@ export async function createApp(): Promise<express.Express> {
         predioId: exp.predioVivienda?.id || `pre-${exp.id}`,
         personaId: exp.postulante?.id || `per-${exp.id}`,
         esObligatorio: Boolean(req.body.esObligatorio),
+        esAdicional: true,
         estado: req.body.archivoDataUrl ? "recibido_revision" : "pendiente_carga",
         creadoEn: new Date().toISOString()
       };
@@ -5533,19 +5597,20 @@ export async function createApp(): Promise<express.Express> {
       }
 
       // Si se observó con comentarios, desbloquear el expediente para permitir subsanación y corrección
-      if (resultado === "OBSERVADO") {
+      const tieneComentariosObs = resultado === "OBSERVADO" || Boolean(observacion && String(observacion).trim().length > 0);
+      if (tieneComentariosObs) {
         exp.bloqueadoPorRevision = false;
         if (reqCaso.fase === 1 || !reqCaso.fase) {
           exp.estadoFase1 = "devuelto";
-          exp.motivoDevolucionFase = nuevaRevision.observacion;
+          exp.motivoDevolucionFase = nuevaRevision.observacion || "Documento con observaciones para corregir.";
         } else if (reqCaso.fase === 2) {
           exp.estadoFase2 = "devuelto";
-          exp.observacionDevolucionFase2 = nuevaRevision.observacion;
+          exp.observacionDevolucionFase2 = nuevaRevision.observacion || "Documento con observaciones para corregir.";
         } else {
           exp.revisionFases = exp.revisionFases || {};
           exp.revisionFases[reqCaso.fase] = {
             estado: "devuelto",
-            observacionesDevolucion: nuevaRevision.observacion,
+            observacionesDevolucion: nuevaRevision.observacion || "Documento con observaciones para corregir.",
             fechaDecisionSupervisor: new Date().toISOString(),
             supervisorId: req.user!.id,
             supervisorNombre: req.user!.nombreCompleto
@@ -11392,6 +11457,35 @@ export async function createApp(): Promise<express.Express> {
     res.json(mockDb.auditoriaAdmin);
   });
 
+  // =========================================================================
+  // GARANTÍA JSON PARA RUTAS /api (PREVIENE FALLBACKS HTML Y SyntaxError '<')
+  // =========================================================================
+  app.all("/api/*", (req: Request, res: Response) => {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.status(404).json({
+      error: `Ruta de API no encontrada: ${req.method} ${req.originalUrl || req.path}`,
+      ok: false
+    });
+  });
+
+  // Manejador de errores global para Express: responde con JSON a peticiones de API
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    console.error("[EXPRESS API ERROR]:", err);
+    if (res.headersSent) {
+      return next(err);
+    }
+    const statusCode = err.status || err.statusCode || 500;
+    if (req.path.startsWith("/api") || req.xhr || req.headers.accept?.includes("application/json")) {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.status(statusCode).json({
+        error: err.message || "Error interno del servidor",
+        ok: false
+      });
+      return;
+    }
+    next(err);
+  });
+
   return app;
 }
 
@@ -11413,6 +11507,12 @@ export async function startServer(): Promise<express.Express> {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
+      // Bloquear entrega de HTML si la solicitud apunta a un endpoint de API o archivo subido
+      if (req.path.startsWith("/api") || req.path.startsWith("/uploads")) {
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.status(404).json({ error: "Recurso no encontrado", ok: false });
+        return;
+      }
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

@@ -1,5 +1,6 @@
 import {
   PerfilUsuario,
+  Persona,
   Interesado,
   Expediente,
   RequisitoCaso,
