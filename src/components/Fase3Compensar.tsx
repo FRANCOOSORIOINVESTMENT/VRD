@@ -36,6 +36,28 @@ import {
   RefreshCw
 } from "lucide-react";
 
+/**
+ * Agrega un parámetro anti-caché SOLO a URLs normales (http/https o rutas relativas).
+ * Las URLs data: (imágenes en base64) y blob: se devuelven intactas: agregarles "?t=..."
+ * corrompe el contenido base64 y la imagen deja de mostrarse.
+ */
+const conAntiCache = (url?: string): string | undefined => {
+  if (!url) return url;
+  if (url.startsWith("data:") || url.startsWith("blob:")) return url;
+  return url.includes("?") ? `${url}&t=${Date.now()}` : `${url}?t=${Date.now()}`;
+};
+
+/** SHA-256 del archivo (hexadecimal) para la huella de integridad de la evidencia. */
+const calcularSha256Archivo = async (file: File): Promise<string | undefined> => {
+  try {
+    const buf = await file.arrayBuffer();
+    const hash = await crypto.subtle.digest("SHA-256", buf);
+    return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return undefined;
+  }
+};
+
 interface Fase3CompensarProps {
   expediente: Expediente;
   requisitosFase2: RequisitoCaso[];
@@ -228,6 +250,30 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
     setErrorEnvio(null);
 
     try {
+      // 1) Intentar guardar la imagen en Supabase Storage y registrar solo su enlace (liviano y permanente).
+      //    Si no es posible, se conserva la imagen en base64 como respaldo (se guarda en la base de datos).
+      let urlEvidenciaFinal = evidenciaUrl;
+      let hashEvidenciaFinal: string | undefined;
+      if (evidenciaArchivo) {
+        hashEvidenciaFinal = await calcularSha256Archivo(evidenciaArchivo);
+        try {
+          const fd = new FormData();
+          fd.append("archivo", evidenciaArchivo);
+          fd.append("expedienteId", expediente.id);
+          fd.append("codigoRequisito", "F3-ENVIO");
+          const up = await authFetch("/api/documentos/upload", { method: "POST", body: fd });
+          const upJson = await up.json().catch(() => null);
+          const urlSubida: string | undefined = upJson?.data?.url;
+          // Solo se usa si es un enlace público absoluto (Supabase Storage): las rutas /uploads locales son temporales en Render.
+          if (up.ok && upJson?.ok && urlSubida && /^https?:\/\//i.test(urlSubida)) {
+            urlEvidenciaFinal = urlSubida;
+            hashEvidenciaFinal = upJson.data.sha256Hash || hashEvidenciaFinal;
+          }
+        } catch {
+          // Se mantiene el respaldo en base64
+        }
+      }
+
       const res = await authFetch(`/api/expedientes/${expediente.id}/compensar/registrar-envio`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -239,7 +285,8 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
           documentosIncluidos: docsParaEnvio,
           radicadoOReferencia: radicadoOReferencia.trim() || "Sin radicado / En trámite",
           notasEnvio,
-          evidenciaUrl,
+          evidenciaUrl: urlEvidenciaFinal,
+          evidenciaHash: hashEvidenciaFinal,
           evidenciaNombre: evidenciaNombre || "Pantallazo_Envio_Compensar.png",
           evidenciaMimeType: evidenciaMimeType || "image/png",
           evidenciaTamanoBytes: evidenciaTamanoBytes || 102400
@@ -718,7 +765,7 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                             onClick={() => {
                               const ver = req.documentoAsociado!.versionActual!;
                               onAbrirVisor({
-                                url: ver.url ? (ver.url.includes("?") ? `${ver.url}&t=${Date.now()}` : `${ver.url}?t=${Date.now()}`) : ver.url,
+                                url: conAntiCache(ver.url),
                                 nombreArchivo: ver.nombreArchivoOriginal,
                                 sha256: ver.sha256,
                                 version: ver.versionNumero,
@@ -734,7 +781,7 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                             <span>Ver</span>
                           </button>
                           <a
-                            href={req.documentoAsociado.versionActual.url ? (req.documentoAsociado.versionActual.url.includes("?") ? `${req.documentoAsociado.versionActual.url}&t=${Date.now()}` : `${req.documentoAsociado.versionActual.url}?t=${Date.now()}`) : "#"}
+                            href={conAntiCache(req.documentoAsociado.versionActual.url) || "#"}
                             download={req.documentoAsociado.versionActual.nombreArchivoOriginal}
                             className="p-1 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded text-[11px] font-bold flex items-center cursor-pointer"
                             title="Descargar documento"
@@ -1019,7 +1066,7 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                             tamanoBytes: version!.tamanoBytes,
                             subidoPor: version!.subidoPorNombre,
                             subidoEn: version!.subidoEn,
-                            archivoDataUrl: version!.archivoDataUrl ? (version!.archivoDataUrl.includes("?") ? `${version!.archivoDataUrl}&t=${Date.now()}` : `${version!.archivoDataUrl}?t=${Date.now()}`) : version!.archivoDataUrl,
+                            archivoDataUrl: conAntiCache(version!.archivoDataUrl),
                             fotos: version!.fotos,
                             fotoInicialIndex: 0
                           })
@@ -1035,7 +1082,7 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                     {/* Botón Descargar Documento */}
                     {tieneArchivo && (
                       <a
-                        href={version!.archivoDataUrl ? (version!.archivoDataUrl.includes("?") ? `${version!.archivoDataUrl}&t=${Date.now()}` : `${version!.archivoDataUrl}?t=${Date.now()}`) : "#"}
+                        href={conAntiCache(version!.archivoDataUrl) || "#"}
                         download={version!.nombreArchivoOriginal}
                         className="inline-flex items-center space-x-1 px-2 py-0.5 font-semibold text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded transition-colors cursor-pointer"
                         title="Descargar archivo a su equipo"
@@ -1296,7 +1343,7 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                             tamanoBytes: env.evidenciaTamanoBytes || 102400,
                             subidoPor: env.usuarioEnvioNombre,
                             subidoEn: env.fechaEnvio,
-                            archivoDataUrl: env.evidenciaUrl ? (env.evidenciaUrl.includes("?") ? `${env.evidenciaUrl}&t=${Date.now()}` : `${env.evidenciaUrl}?t=${Date.now()}`) : env.evidenciaUrl
+                            archivoDataUrl: conAntiCache(env.evidenciaUrl)
                           })
                         }
                         className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-md text-xs font-semibold border border-blue-200 transition-colors cursor-pointer"
@@ -1305,7 +1352,7 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
                         <span>Ver Pantallazo del Envío</span>
                       </button>
                       <a
-                        href={env.evidenciaUrl ? (env.evidenciaUrl.includes("?") ? `${env.evidenciaUrl}&t=${Date.now()}` : `${env.evidenciaUrl}?t=${Date.now()}`) : "#"}
+                        href={conAntiCache(env.evidenciaUrl) || "#"}
                         download={env.evidenciaNombre || "Pantallazo_Envio_Compensar.png"}
                         className="inline-flex items-center space-x-1 px-2.5 py-1 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-md text-xs font-semibold border border-slate-200 transition-colors cursor-pointer"
                         title="Descargar pantallazo"
