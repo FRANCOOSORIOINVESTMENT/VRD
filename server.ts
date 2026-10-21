@@ -1604,14 +1604,11 @@ export async function createApp(): Promise<express.Express> {
       let updatedCount = 0;
       // 1. Actualizar por código visible
       if (exp.codigoVisible) {
-        const { data: updatedByCod, error: errPorCodigo } = await supabaseAdmin
+        const { data: updatedByCod } = await supabaseAdmin
           .from("expedientes")
           .update(payload)
           .eq("codigo_visible", exp.codigoVisible)
           .select("id");
-        if (errPorCodigo) {
-          console.error(`[SUPABASE]: Error guardando expediente ${exp.codigoVisible} (por código): ${errPorCodigo.message}`);
-        }
         if (updatedByCod && updatedByCod.length > 0) {
           updatedCount += updatedByCod.length;
           if (!exp.id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
@@ -1622,14 +1619,11 @@ export async function createApp(): Promise<express.Express> {
 
       // 2. Actualizar por UUID oficial
       if (exp.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
-        const { data: updatedById, error: errPorId } = await supabaseAdmin
+        const { data: updatedById } = await supabaseAdmin
           .from("expedientes")
           .update(payload)
           .eq("id", exp.id)
           .select("id");
-        if (errPorId) {
-          console.error(`[SUPABASE]: Error guardando expediente ${exp.id} (por id): ${errPorId.message}`);
-        }
         if (updatedById && updatedById.length > 0) {
           updatedCount += updatedById.length;
         }
@@ -1638,8 +1632,6 @@ export async function createApp(): Promise<express.Express> {
       if (updatedCount > 0) {
         (exp as any)._persistidoEnSupabase = true;
         console.log(`[SUPABASE]: Expediente ${exp.codigoVisible} (${exp.id}) sincronizado en PostgreSQL (Fase ${exp.faseActual}).`);
-      } else {
-        console.warn(`[SUPABASE]: NO se guardó el expediente ${exp.codigoVisible} (${exp.id}): ninguna fila fue actualizada. Revise SUPABASE_SERVICE_ROLE_KEY (clave secreta) y las políticas RLS.`);
       }
     } catch (e: any) {
       console.error("[SUPABASE]: Excepción sincronizando expediente:", e?.message);
@@ -6731,7 +6723,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/compensar/registrar-envio",
     requireAuth(["ingenieria", "administrador"]),
-    async (req: AuthRequest, res: Response) => {
+    (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -6829,9 +6821,6 @@ export async function createApp(): Promise<express.Express> {
         contenido: `Envío #${numeroEnvio} a Compensar registrado por ${req.user!.nombreCompleto}. Fecha envío: ${fechaEnvio}. Soporte adjunto: ${nuevoEnvio.evidenciaNombre}.`,
         creadoEn: new Date().toISOString()
       });
-
-      // Persistir en Supabase antes de responder (si no, "Sincronizar DB" o un reinicio lo pierden)
-      await sincronizarExpedienteEnSupabase(exp);
 
       res.status(201).json({ success: true, validacionCompensar: exp.validacionCompensar, envio: nuevoEnvio });
     }
@@ -7031,7 +7020,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/compensar/devolver-a-ingenieria",
     requireAuth(["asistente", "administrador"]),
-    async (req: AuthRequest, res: Response) => {
+    (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -7072,9 +7061,6 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
-      // Persistir en Supabase antes de responder (si no, "Sincronizar DB" o un reinicio lo pierden)
-      await sincronizarExpedienteEnSupabase(exp);
-
       res.json({ success: true, mensaje: "Correcciones enviadas a Ingeniería exitosamente.", expediente: exp });
     }
   );
@@ -7083,7 +7069,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/compensar/enviar-revision-analista",
     requireAuth(["asistente", "administrador"]),
-    async (req: AuthRequest, res: Response) => {
+    (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -7127,9 +7113,6 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
-      // Persistir en Supabase antes de responder (si no, "Sincronizar DB" o un reinicio lo pierden)
-      await sincronizarExpedienteEnSupabase(exp);
-
       res.json({ success: true, mensaje: "Correcciones enviadas a revisión del Analista Documental exitosamente.", expediente: exp });
     }
   );
@@ -7138,7 +7121,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/compensar/analista-aprobar",
     requireAuth(["supervisor", "administrador"]),
-    async (req: AuthRequest, res: Response) => {
+    (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -7183,9 +7166,6 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
-      // Persistir en Supabase antes de responder (si no, "Sincronizar DB" o un reinicio lo pierden)
-      await sincronizarExpedienteEnSupabase(exp);
-
       res.json({ success: true, mensaje: "Subsanación aprobada con éxito. Responsabilidad transferida a Ingeniería.", expediente: exp });
     }
   );
@@ -7194,7 +7174,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/compensar/analista-rechazar",
     requireAuth(["supervisor", "administrador"]),
-    async (req: AuthRequest, res: Response) => {
+    (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -7245,9 +7225,6 @@ export async function createApp(): Promise<express.Express> {
         fechaGestion: new Date().toISOString(),
         creadoEn: new Date().toISOString()
       });
-
-      // Persistir en Supabase antes de responder (si no, "Sincronizar DB" o un reinicio lo pierden)
-      await sincronizarExpedienteEnSupabase(exp);
 
       res.json({ success: true, mensaje: "Subsanación devuelta al Gestor Documental con observaciones.", expediente: exp });
     }
