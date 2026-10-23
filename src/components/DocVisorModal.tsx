@@ -128,29 +128,17 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
           </div>
           <div className="flex items-center space-x-2 shrink-0">
             {urlVisualizar && (
-              <>
-                <a
-                  href={urlVisualizar}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors border border-slate-200"
-                  title="Abrir en pestaña independiente"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Pestaña nueva</span>
-                </a>
-                <a
-                  href={urlVisualizar}
-                  download={nombreDescargar}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors shadow-xs"
-                  title="Descargar imagen/archivo"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Descargar</span>
-                </a>
-              </>
+              <a
+                href={urlVisualizar}
+                download={nombreDescargar}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors shadow-xs"
+                title="Descargar imagen/archivo"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Descargar</span>
+              </a>
             )}
             {esImagen && (
               <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1 text-xs text-slate-600 space-x-1">

@@ -495,8 +495,10 @@ export async function createApp(): Promise<express.Express> {
             if (!integrantesIdsValidos.has(r.personaId)) return false;
           }
         }
-        // Solo permitir códigos F1-01, F1-02, F1-03 en Fase 1
-        if (!["F1-01", "F1-02", "F1-03"].includes(r.codigoRequisito)) {
+        // Permitir códigos base F1-01, F1-02, F1-03 y requisitos adicionales en Fase 1
+        const esBaseF1 = ["F1-01", "F1-02", "F1-03"].includes(r.codigoRequisito);
+        const esAdicionalF1 = Boolean(r.esAdicional) || Boolean(r.codigoRequisito?.includes("ADICIONAL")) || Boolean(r.fase === 1 && !esBaseF1);
+        if (!esBaseF1 && !esAdicionalF1) {
           return false;
         }
       }
@@ -725,8 +727,11 @@ export async function createApp(): Promise<express.Express> {
       postulacionSubsidio: row.postulacion_subsidio || undefined,
       gestionFase7: row.gestion_fase7 || undefined,
       solicitudRechazo: row.solicitud_rechazo || undefined,
-      subsanacionFase3Activa: Boolean(row.subsanacion_fase3_activa),
-      subsanacionFase3Estado: row.subsanacion_fase3_estado || undefined,
+      historialSolicitudesRechazo: row.historial_solicitudes_rechazo || undefined,
+      subsanacionFase3Activa: Boolean(row.subsanacion_fase3_activa || row.validacion_compensar?.subsanacionFase3Activa),
+      subsanacionFase3Estado: row.subsanacion_fase3_estado || row.validacion_compensar?.subsanacionFase3Estado || undefined,
+      subsanacionFase3ObservacionAnalista: row.validacion_compensar?.subsanacionFase3ObservacionAnalista || undefined,
+      subsanacionFase3DocumentosModificados: row.validacion_compensar?.subsanacionFase3DocumentosModificados || undefined,
       _persistidoEnSupabase: true
     } as Expediente;
 
@@ -1633,7 +1638,15 @@ export async function createApp(): Promise<express.Express> {
         estado_fase1: exp.estadoFase1 || "en_preparacion",
         estado_fase2: exp.estadoFase2 || "en_preparacion",
         observacion_devolucion_fase2: exp.observacionDevolucionFase2 || null,
-        validacion_compensar: exp.validacionCompensar || null,
+        validacion_compensar: exp.validacionCompensar
+          ? {
+              ...exp.validacionCompensar,
+              subsanacionFase3Activa: Boolean(exp.subsanacionFase3Activa),
+              subsanacionFase3Estado: exp.subsanacionFase3Estado || null,
+              subsanacionFase3ObservacionAnalista: exp.subsanacionFase3ObservacionAnalista || null,
+              subsanacionFase3DocumentosModificados: exp.subsanacionFase3DocumentosModificados || []
+            }
+          : null,
         gestion_fase4: exp.gestionFase4 || null,
         tramite_licencia: exp.tramiteLicencia || null,
         postulacion_subsidio: exp.postulacionSubsidio || null,
@@ -2673,7 +2686,21 @@ export async function createApp(): Promise<express.Express> {
               if (dbFase) expExistente.faseActual = Math.max(expExistente.faseActual || 1, dbFase);
               if (row.estado_general) expExistente.estadoGeneral = row.estado_general;
               if (row.actualizado_en) expExistente.actualizadoEn = row.actualizado_en;
-              if (row.validacion_compensar) expExistente.validacionCompensar = row.validacion_compensar;
+              if (row.validacion_compensar) {
+                expExistente.validacionCompensar = row.validacion_compensar;
+                if (row.validacion_compensar.subsanacionFase3Activa !== undefined) {
+                  expExistente.subsanacionFase3Activa = Boolean(row.validacion_compensar.subsanacionFase3Activa);
+                }
+                if (row.validacion_compensar.subsanacionFase3Estado !== undefined) {
+                  expExistente.subsanacionFase3Estado = row.validacion_compensar.subsanacionFase3Estado;
+                }
+                if (row.validacion_compensar.subsanacionFase3ObservacionAnalista !== undefined) {
+                  expExistente.subsanacionFase3ObservacionAnalista = row.validacion_compensar.subsanacionFase3ObservacionAnalista;
+                }
+                if (row.validacion_compensar.subsanacionFase3DocumentosModificados !== undefined) {
+                  expExistente.subsanacionFase3DocumentosModificados = row.validacion_compensar.subsanacionFase3DocumentosModificados;
+                }
+              }
               if (row.gestion_fase4) {
                 inicializarFase4(expExistente);
                 expExistente.gestionFase4 = {
@@ -3758,12 +3785,35 @@ export async function createApp(): Promise<express.Express> {
             .eq("id", expUuid)
             .maybeSingle();
           if (dbExpRow) {
+            if (dbExpRow.fase_actual) exp.faseActual = Number(dbExpRow.fase_actual);
+            if (dbExpRow.estado_general) exp.estadoGeneral = dbExpRow.estado_general;
             if (dbExpRow.estado_fase1) exp.estadoFase1 = dbExpRow.estado_fase1;
             if (dbExpRow.estado_fase2) exp.estadoFase2 = dbExpRow.estado_fase2;
             if (dbExpRow.bloqueado_por_revision !== undefined) exp.bloqueadoPorRevision = Boolean(dbExpRow.bloqueado_por_revision);
             if (dbExpRow.motivo_devolucion_fase !== undefined) exp.motivoDevolucionFase = dbExpRow.motivo_devolucion_fase || undefined;
             if (dbExpRow.observacion_devolucion_fase2 !== undefined) exp.observacionDevolucionFase2 = dbExpRow.observacion_devolucion_fase2 || undefined;
             if (dbExpRow.revision_fases) exp.revisionFases = dbExpRow.revision_fases;
+            if (dbExpRow.validacion_compensar) {
+              exp.validacionCompensar = dbExpRow.validacion_compensar;
+              if (dbExpRow.validacion_compensar.subsanacionFase3Activa !== undefined) {
+                exp.subsanacionFase3Activa = Boolean(dbExpRow.validacion_compensar.subsanacionFase3Activa);
+              }
+              if (dbExpRow.validacion_compensar.subsanacionFase3Estado !== undefined) {
+                exp.subsanacionFase3Estado = dbExpRow.validacion_compensar.subsanacionFase3Estado;
+              }
+              if (dbExpRow.validacion_compensar.subsanacionFase3ObservacionAnalista !== undefined) {
+                exp.subsanacionFase3ObservacionAnalista = dbExpRow.validacion_compensar.subsanacionFase3ObservacionAnalista;
+              }
+              if (dbExpRow.validacion_compensar.subsanacionFase3DocumentosModificados !== undefined) {
+                exp.subsanacionFase3DocumentosModificados = dbExpRow.validacion_compensar.subsanacionFase3DocumentosModificados;
+              }
+            }
+            if (dbExpRow.gestion_fase4) exp.gestionFase4 = dbExpRow.gestion_fase4;
+            if (dbExpRow.tramite_licencia) exp.tramiteLicencia = dbExpRow.tramite_licencia;
+            if (dbExpRow.postulacion_subsidio) exp.postulacionSubsidio = dbExpRow.postulacion_subsidio;
+            if (dbExpRow.gestion_fase7) exp.gestionFase7 = dbExpRow.gestion_fase7;
+            if (dbExpRow.solicitud_rechazo) exp.solicitudRechazo = dbExpRow.solicitud_rechazo;
+            if (dbExpRow.historial_solicitudes_rechazo) exp.historialSolicitudesRechazo = dbExpRow.historial_solicitudes_rechazo;
           }
 
           // 1. Obtener documentos y sus versiones desde Supabase
@@ -4551,7 +4601,7 @@ export async function createApp(): Promise<express.Express> {
 
                   await supabaseAdmin
                     .from("requisitos_caso")
-                    .update({ estado: "recibido_revision" })
+                    .update({ estado: reqCaso.estado, actualizado_en: new Date().toISOString() })
                     .eq("id", reqDbId);
                 }
               }
@@ -4560,6 +4610,9 @@ export async function createApp(): Promise<express.Express> {
             console.error("[SUPABASE DB]: Error al persistir documento en PostgreSQL:", err?.message);
           }
         }
+
+        // Sincronizar estado del expediente en Supabase (reflejando documentos modificados en subsanación Fase 3 y timestamps)
+        await sincronizarExpedienteEnSupabase(exp);
 
         res.status(201).json({
           success: true,
@@ -6299,13 +6352,16 @@ export async function createApp(): Promise<express.Express> {
         }
 
         try {
-          const codigosRecibidos = reqsFase.map((r) => r.codigoRequisito);
-          if (codigosRecibidos.length > 0) {
+          const codigosNoAceptados = reqsFase
+            .filter((r) => r.estado !== "aceptado")
+            .map((r) => r.codigoRequisito);
+          if (codigosNoAceptados.length > 0) {
             await supabaseAdmin
               .from("requisitos_caso")
               .update({ estado: "recibido_revision" })
               .eq("expediente_id", exp.id)
-              .in("codigo_requisito", codigosRecibidos);
+              .in("codigo_requisito", codigosNoAceptados)
+              .neq("estado", "aceptado");
           }
         } catch (e: any) {
           console.warn("[REQUISITOS EN SUPABASE]: Advertencia al actualizar estado de requisitos:", e?.message);
@@ -6566,7 +6622,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/avanzar-fase",
     requireAuth(["supervisor", "ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -6605,7 +6661,7 @@ export async function createApp(): Promise<express.Express> {
       });
 
       // Sincronizar avance de fase en Supabase
-      sincronizarExpedienteEnSupabase(exp);
+      await sincronizarExpedienteEnSupabase(exp);
 
       res.json({
         success: true,
@@ -6979,7 +7035,6 @@ export async function createApp(): Promise<express.Express> {
         exp.actualizadoEn = new Date().toISOString();
 
         inicializarFase4(exp);
-        sincronizarExpedienteEnSupabase(exp);
 
         mockDb.tareas.push({
           id: `tar-f4-${Date.now()}`,
@@ -7006,6 +7061,9 @@ export async function createApp(): Promise<express.Express> {
 
         // CAMBIO 6: Activar subsanación interna para el Gestor Documental
         exp.subsanacionFase3Activa = true;
+        exp.subsanacionFase3Estado = "en_correccion_gestor";
+        exp.subsanacionFase3ObservacionAnalista = undefined;
+        exp.subsanacionFase3DocumentosModificados = [];
         const gestor = mockDb.perfiles.find((p) => p.id === exp.asistenteAsignadoId) ||
           mockDb.perfiles.find((p) => p.rol === "asistente");
         exp.responsableGeneralId = gestor ? gestor.id : "usr-asistente-01";
@@ -7021,6 +7079,27 @@ export async function createApp(): Promise<express.Express> {
               reqObs.estado = "con_observaciones";
             }
           });
+        }
+
+        // Sincronizar requisitos observados en PostgreSQL
+        if (supabaseAdmin && Array.isArray(documentosConObservacion) && documentosConObservacion.length > 0) {
+          try {
+            let expUuid: string | null = null;
+            if (exp.id && esUuidValido(exp.id)) expUuid = exp.id;
+            else if (exp.codigoVisible) {
+              const { data: rowExp } = await supabaseAdmin.from("expedientes").select("id").eq("codigo_visible", exp.codigoVisible).maybeSingle();
+              if (rowExp?.id) expUuid = rowExp.id;
+            }
+            if (expUuid) {
+              await supabaseAdmin
+                .from("requisitos_caso")
+                .update({ estado: "con_observaciones", actualizado_en: new Date().toISOString() })
+                .eq("expediente_id", expUuid)
+                .in("codigo_requisito", documentosConObservacion);
+            }
+          } catch (e: any) {
+            console.error("[SUPABASE]: Error actualizando requisitos con observación en DB:", e?.message);
+          }
         }
 
         mockDb.tareas.push({
@@ -7082,6 +7161,9 @@ export async function createApp(): Promise<express.Express> {
           creadoEn: new Date().toISOString()
         });
       }
+
+      // Persistir respuesta de Compensar de forma inmediata e inmutable en Supabase PostgreSQL
+      await sincronizarExpedienteEnSupabase(exp);
 
       res.status(200).json({
         success: true,
@@ -7322,7 +7404,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/compensar/avanzar-fase4",
     requireAuth(["comercial", "asistente", "ingenieria", "supervisor", "administrador", "planeacion"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id || e.codigoVisible === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -7338,7 +7420,7 @@ export async function createApp(): Promise<express.Express> {
       exp.bloqueadoPorRevision = false;
       exp.actualizadoEn = new Date().toISOString();
       inicializarFase4(exp);
-      sincronizarExpedienteEnSupabase(exp);
+      await sincronizarExpedienteEnSupabase(exp);
 
       mockDb.notas.push({
         id: `not-fase4-${Date.now()}`,
@@ -7695,7 +7777,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/avanzar-fase-5",
     requireAuth(["ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -7757,6 +7839,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, expediente: exp });
     }
   );
@@ -7767,7 +7851,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/licencia/radicar",
     requireAuth(["ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -7842,6 +7926,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, tramiteLicencia: exp.tramiteLicencia, expediente: exp });
     }
   );
@@ -7850,7 +7936,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/licencia/observaciones",
     requireAuth(["ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -7933,6 +8019,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, tramiteLicencia: exp.tramiteLicencia, expediente: exp });
     }
   );
@@ -7941,7 +8029,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/licencia/subsanar",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -8019,6 +8107,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, tramiteLicencia: exp.tramiteLicencia, expediente: exp });
     }
   );
@@ -8027,7 +8117,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/licencia/aprobar",
     requireAuth(["ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -8133,6 +8223,8 @@ export async function createApp(): Promise<express.Express> {
         contenido: `[Fase 5 - Licencia de Construcción] ¡LICENCIA DE CONSTRUCCIÓN APROBADA! Resolución No. ${numeroResolucionLicencia} emitida por ${exp.tramiteLicencia!.entidadMunicipal}. Vigencia: ${exp.tramiteLicencia!.vigenciaMeses} meses. Documentos anexos registrados: ${documentosSoporte.map((d) => d.nombreArchivo).join(", ")}. El expediente queda habilitado para avanzar a Fase 6 (En Postulación).`,
         creadoEn: new Date().toISOString()
       });
+
+      await sincronizarExpedienteEnSupabase(exp);
 
       res.json({ success: true, tramiteLicencia: exp.tramiteLicencia, expediente: exp });
     }
@@ -8390,7 +8482,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/licencia/historial",
     requireAuth(["ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -8430,6 +8522,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, tramiteLicencia: exp.tramiteLicencia, expediente: exp });
     }
   );
@@ -8438,7 +8532,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/avanzar-fase-6",
     requireAuth(["ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -8481,6 +8575,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, expediente: exp });
     }
   );
@@ -8493,7 +8589,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/postulacion/enviar",
     requireAuth(["ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -8572,6 +8668,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, expediente: exp, postulacion: exp.postulacionSubsidio });
     }
   );
@@ -8580,7 +8678,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/postulacion/respuesta",
     requireAuth(["ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -8715,6 +8813,8 @@ export async function createApp(): Promise<express.Express> {
         });
       }
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, expediente: exp, postulacion: exp.postulacionSubsidio });
     }
   );
@@ -8723,7 +8823,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/postulacion/subsanar",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -8799,6 +8899,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, expediente: exp, postulacion: exp.postulacionSubsidio });
     }
   );
@@ -8807,7 +8909,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/postulacion/indicar-obra",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -8887,6 +8989,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, expediente: exp, postulacion: exp.postulacionSubsidio });
     }
   );
@@ -8895,7 +8999,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/postulacion/historial",
     requireAuth(["ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -8923,6 +9027,8 @@ export async function createApp(): Promise<express.Express> {
       postulacion.historial.unshift(nuevoEvento);
       postulacion.actualizadoEn = new Date().toISOString();
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, evento: nuevoEvento, postulacion: exp.postulacionSubsidio });
     }
   );
@@ -8931,7 +9037,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/postulacion/documento-carga-activa",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -8975,6 +9081,8 @@ export async function createApp(): Promise<express.Express> {
         soporte
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, soporte, postulacion: exp.postulacionSubsidio });
     }
   );
@@ -8983,7 +9091,7 @@ export async function createApp(): Promise<express.Express> {
   app.delete(
     "/api/expedientes/:id/postulacion/documento-carga-activa/:codigo",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -9020,6 +9128,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, postulacion: exp.postulacionSubsidio });
     }
   );
@@ -9028,7 +9138,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/postulacion/aplicar-lote-documentos-28",
     requireAuth(["ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -9078,6 +9188,8 @@ export async function createApp(): Promise<express.Express> {
         autorRol: req.user!.rol
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({
         success: true,
         actualizados,
@@ -9091,7 +9203,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/postulacion/soporte-multipredio",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -9149,6 +9261,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, soporteMultipredio: exp.postulacionSubsidio!.soporteMultipredio, postulacion: exp.postulacionSubsidio });
     }
   );
@@ -9157,7 +9271,7 @@ export async function createApp(): Promise<express.Express> {
   app.delete(
     "/api/expedientes/:id/postulacion/soporte-multipredio",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -9193,6 +9307,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, postulacion: exp.postulacionSubsidio });
     }
   );
@@ -9201,7 +9317,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/postulacion/anexo-libre",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -9253,6 +9369,8 @@ export async function createApp(): Promise<express.Express> {
         soporte
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, anexo: nuevoAnexo, postulacion: exp.postulacionSubsidio });
     }
   );
@@ -9261,7 +9379,7 @@ export async function createApp(): Promise<express.Express> {
   app.delete(
     "/api/expedientes/:id/postulacion/anexo-libre/:anexoId",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -9299,6 +9417,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, postulacion: exp.postulacionSubsidio });
     }
   );
@@ -9307,7 +9427,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/avanzar-fase-7",
     requireAuth(["ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -9435,6 +9555,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, expediente: exp, postulacion: post });
     }
   );
@@ -9447,7 +9569,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/fase7/registrar-hito",
     requireAuth(["supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -9508,6 +9630,8 @@ export async function createApp(): Promise<express.Express> {
         contenido: `HITO DE OBRA CERTIFICADO: Hito ${hito.numero} (${hito.nombre}) cumplido según verificación en campo de ${req.user!.nombreCompleto}. Evidencia: ${hito.fotos.length} fotos registradas.`,
         creadoEn: new Date().toISOString()
       });
+
+      await sincronizarExpedienteEnSupabase(exp);
 
       res.json({ success: true, gestionFase7: exp.gestionFase7, expediente: exp });
     }
@@ -9777,7 +9901,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/fase7/registrar-observacion-desembolso",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -9817,6 +9941,8 @@ export async function createApp(): Promise<express.Express> {
       };
       exp.gestionFase7!.historial.unshift(eventoObs);
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, gestionFase7: exp.gestionFase7, expediente: exp });
     }
   );
@@ -9825,7 +9951,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/fase7/subsanar-desembolso",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -9867,6 +9993,8 @@ export async function createApp(): Promise<express.Express> {
       };
       exp.gestionFase7!.historial.unshift(eventoSub);
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, gestionFase7: exp.gestionFase7, expediente: exp });
     }
   );
@@ -9875,7 +10003,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/fase7/confirmar-desembolso",
     requireAuth(["ingenieria", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -9928,6 +10056,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, gestionFase7: exp.gestionFase7, expediente: exp });
     }
   );
@@ -9936,7 +10066,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/fase7/agregar-nota",
     requireAuth(["supervisor", "ingenieria", "administrador", "comercial", "asistente"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -9972,6 +10102,8 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      await sincronizarExpedienteEnSupabase(exp);
+
       res.json({ success: true, gestionFase7: exp.gestionFase7 });
     }
   );
@@ -9981,7 +10113,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/solicitar-rechazo",
     requireAuth(["comercial", "asistente", "ingenieria", "supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -10062,6 +10194,8 @@ export async function createApp(): Promise<express.Express> {
 
       // Notificación por correo electrónico (simulación en consola/log de auditoría)
       console.log(`[EMAIL DISPATCHED] Notificación formal de Solicitud de Rechazo enviada a supervisores (${supervisores.map((s) => s.email).join(", ")}) para el expediente ${exp.codigoVisible || exp.id}. Motivo: ${motivo}`);
+
+      await sincronizarExpedienteEnSupabase(exp);
 
       res.status(201).json({
         success: true,
@@ -10144,7 +10278,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     ["/api/expedientes/:id/solicitud-rechazo/desestimar", "/api/expedientes/:id/desestimar-rechazo"],
     requireAuth(["supervisor", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -10193,6 +10327,8 @@ export async function createApp(): Promise<express.Express> {
         contenido: `Solicitud de rechazo DESESTIMADA por el Supervisor ${req.user!.nombreCompleto}. Motivo: ${motivoDesestimacion}. El hogar continúa normalmente en Fase ${exp.faseActual}.`,
         creadoEn: new Date().toISOString()
       });
+
+      await sincronizarExpedienteEnSupabase(exp);
 
       res.json({ success: true, expediente: exp });
     }
