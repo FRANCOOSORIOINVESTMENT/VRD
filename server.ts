@@ -1720,6 +1720,135 @@ export async function createApp(): Promise<express.Express> {
   }
 
   /**
+   * Elimina formalmente un integrante de un hogar y sus requisitos documentales en Supabase PostgreSQL.
+   */
+  async function eliminarIntegranteDeSupabase(
+    expedienteId: string,
+    integranteId: string,
+    personaId?: string,
+    numeroIdentificacion?: string
+  ) {
+    if (!supabaseAdmin) return;
+    try {
+      let expUuid: string | null = null;
+      let hogarId: string | null = null;
+
+      // 1. Buscar expediente en Supabase para obtener su UUID oficial y el hogar_id
+      if (esUuidValido(expedienteId)) {
+        const { data: expRow } = await supabaseAdmin
+          .from("expedientes")
+          .select("id, hogar_id")
+          .eq("id", expedienteId)
+          .maybeSingle();
+        if (expRow) {
+          expUuid = expRow.id;
+          hogarId = expRow.hogar_id;
+        }
+      }
+
+      if (!expUuid) {
+        const { data: expRow } = await supabaseAdmin
+          .from("expedientes")
+          .select("id, hogar_id")
+          .eq("codigo_visible", expedienteId)
+          .maybeSingle();
+        if (expRow) {
+          expUuid = expRow.id;
+          hogarId = expRow.hogar_id;
+        }
+      }
+
+      // Si no se encuentra con la ID directa, buscar en mockDb por el ID para obtener codigoVisible
+      if (!expUuid) {
+        const mockExp = mockDb.expedientes.find((e) => e.id === expedienteId || e.codigoVisible === expedienteId);
+        if (mockExp?.codigoVisible) {
+          const { data: expRow } = await supabaseAdmin
+            .from("expedientes")
+            .select("id, hogar_id")
+            .eq("codigo_visible", mockExp.codigoVisible)
+            .maybeSingle();
+          if (expRow) {
+            expUuid = expRow.id;
+            hogarId = expRow.hogar_id;
+          }
+        }
+      }
+
+      // 2. Si integranteId es un UUID directo, borrar por ID de la tabla integrantes_hogar
+      if (esUuidValido(integranteId)) {
+        await supabaseAdmin
+          .from("integrantes_hogar")
+          .delete()
+          .eq("id", integranteId);
+      }
+
+      // 3. Buscar persona_id si es UUID directo o por numeroIdentificacion
+      let targetPersonaId = esUuidValido(personaId) ? personaId : null;
+      if (!targetPersonaId && numeroIdentificacion) {
+        const { data: pRow } = await supabaseAdmin
+          .from("personas")
+          .select("id")
+          .eq("numero_identificacion", String(numeroIdentificacion).trim())
+          .maybeSingle();
+        if (pRow?.id) {
+          targetPersonaId = pRow.id;
+        }
+      }
+
+      // 4. Si tenemos hogarId y targetPersonaId, borrar de integrantes_hogar por (hogar_id, persona_id)
+      if (hogarId && targetPersonaId) {
+        await supabaseAdmin
+          .from("integrantes_hogar")
+          .delete()
+          .eq("hogar_id", hogarId)
+          .eq("persona_id", targetPersonaId);
+      } else if (hogarId && numeroIdentificacion) {
+        // Borrar cualquier integrante de este hogar cuya persona tenga la misma identificación
+        const { data: personasMatch } = await supabaseAdmin
+          .from("personas")
+          .select("id")
+          .eq("numero_identificacion", String(numeroIdentificacion).trim());
+        if (personasMatch && personasMatch.length > 0) {
+          for (const pMatch of personasMatch) {
+            await supabaseAdmin
+              .from("integrantes_hogar")
+              .delete()
+              .eq("hogar_id", hogarId)
+              .eq("persona_id", pMatch.id);
+          }
+        }
+      }
+
+      // 5. Eliminar requisitos documentales (requisitos_caso) del integrante en Supabase
+      if (expUuid && targetPersonaId) {
+        await supabaseAdmin
+          .from("requisitos_caso")
+          .delete()
+          .eq("expediente_id", expUuid)
+          .eq("persona_id", targetPersonaId);
+      } else if (expUuid && numeroIdentificacion) {
+        const { data: personasMatch } = await supabaseAdmin
+          .from("personas")
+          .select("id")
+          .eq("numero_identificacion", String(numeroIdentificacion).trim());
+        if (personasMatch && personasMatch.length > 0) {
+          for (const pMatch of personasMatch) {
+            await supabaseAdmin
+              .from("requisitos_caso")
+              .delete()
+              .eq("expediente_id", expUuid)
+              .eq("persona_id", pMatch.id);
+          }
+        }
+      }
+
+      console.log(`[SUPABASE]: Integrante ${integranteId} (Persona: ${targetPersonaId || numeroIdentificacion}) eliminado permanentemente de Supabase.`);
+    } catch (err: any) {
+      console.error("[SUPABASE]: Error al eliminar integrante de Supabase:", err?.message);
+    }
+  }
+
+  /**
    * Sincronización maestra e hidratación completa desde Supabase hacia la memoria del servidor.
    * Carga perfiles, interesados, expedientes con integrantes/predio/postulante y documentos.
    */
@@ -5156,8 +5285,10 @@ export async function createApp(): Promise<express.Express> {
 
       const exp = mockDb.expedientes.find((e) => e.id === solicitud.expedienteId);
       if (exp) {
+        let integranteEliminado = null;
         const idx = exp.hogar.integrantes.findIndex((i) => i.id === solicitud.integranteId);
         if (idx !== -1) {
+          integranteEliminado = exp.hogar.integrantes[idx];
           exp.hogar.integrantes.splice(idx, 1);
         }
 
@@ -5177,6 +5308,16 @@ export async function createApp(): Promise<express.Express> {
           fechaGestion: new Date().toISOString(),
           creadoEn: new Date().toISOString()
         });
+
+        // Persistencia inmediata de la eliminación en Supabase (PostgreSQL)
+        eliminarIntegranteDeSupabase(
+          exp.id,
+          solicitud.integranteId,
+          solicitud.personaId,
+          solicitud.numeroIdentificacion || integranteEliminado?.persona?.numeroIdentificacion
+        ).catch((e) => console.error("[SUPABASE]: Error al eliminar integrante de Supabase:", e?.message));
+
+        sincronizarExpedienteEnSupabase(exp).catch(() => {});
       }
 
       solicitud.estado = "autorizada";
@@ -5288,6 +5429,16 @@ export async function createApp(): Promise<express.Express> {
       mockDb.requisitosCaso = mockDb.requisitosCaso.filter(
         (r) => !(r.expedienteId === exp.id && r.personaId === integrante.persona.id)
       );
+
+      // Persistencia inmediata de la eliminación en Supabase (PostgreSQL)
+      eliminarIntegranteDeSupabase(
+        exp.id,
+        integrante.id,
+        integrante.persona?.id,
+        integrante.persona?.numeroIdentificacion
+      ).catch((e) => console.error("[SUPABASE]: Error al eliminar integrante de Supabase:", e?.message));
+
+      sincronizarExpedienteEnSupabase(exp).catch(() => {});
 
       res.json({
         success: true,
