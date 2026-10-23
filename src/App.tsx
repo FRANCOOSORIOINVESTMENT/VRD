@@ -4443,7 +4443,6 @@ export default function App() {
                   const esFase1 = r.fase === 1 || (!r.fase && r.codigoRequisito?.startsWith("F1-"));
                   if (!esFase1) return false;
                   if (r.codigoRequisito === "F1-04" || r.nombre?.toLowerCase().includes("fotogr")) return false;
-                  if (r.codigoRequisito === "F1-03" && r.personaId && titularId && r.personaId !== titularId) return false;
                   return ["F1-01", "F1-02", "F1-03"].includes(r.codigoRequisito) || Boolean(r.codigoRequisito?.includes("ADICIONAL")) || Boolean(r.esAdicional);
                 }
                 return r.fase === tabRequisitos;
@@ -4456,7 +4455,6 @@ export default function App() {
                 const esFase1 = r.fase === 1 || (!r.fase && r.codigoRequisito?.startsWith("F1-"));
                 if (!esFase1) return false;
                 if (r.codigoRequisito === "F1-04" || r.nombre?.toLowerCase().includes("fotogr")) return false;
-                if (r.codigoRequisito === "F1-03" && r.personaId && titularId && r.personaId !== titularId) return false;
                 return ["F1-01", "F1-02", "F1-03"].includes(r.codigoRequisito) || Boolean(r.codigoRequisito?.includes("ADICIONAL")) || Boolean(r.esAdicional);
               });
               const reqsFase1Obligatorios = reqsFase1.filter((r) => r.esObligatorio);

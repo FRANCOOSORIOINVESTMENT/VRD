@@ -460,13 +460,12 @@ export async function createApp(): Promise<express.Express> {
       }
     });
 
-    // Migrar cualquier F1-03 que pertenezca a un familiar hacia Fase 2 (F2-01)
+    // Asegurar que las cédulas de integrantes del hogar pertenezcan a Fase 1 (F1-03)
     reqsF1.forEach((r) => {
-      if (r.codigoRequisito === "F1-03" && r.personaId && r.personaId !== titularPersonaId) {
+      if ((r.codigoRequisito === "F1-03" || r.codigoRequisito === "F2-01") && r.personaId && r.personaId !== titularPersonaId) {
         if (integrantesIdsValidos.has(r.personaId)) {
-          // Es un integrante registrado: migrarlo a Fase 2 para no ensuciar Fase 1
-          r.fase = 2;
-          r.codigoRequisito = "F2-01";
+          r.fase = 1;
+          r.codigoRequisito = "F1-03";
           if (!r.nombre.includes("Cédula de Integrante")) {
             r.nombre = `Cédula de Integrante: ${r.personaNombre || "Familiar"}`;
           }
@@ -592,33 +591,49 @@ export async function createApp(): Promise<express.Express> {
       reqPredial.predioId = predioId;
     }
 
-    // 3. Asegurar F1-03 (Cédula Postulante Principal)
-    let reqCedulaPostulante = mockDb.requisitosCaso.find(
-      (r) =>
-        (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
-        r.fase === 1 &&
-        r.codigoRequisito === "F1-03" &&
-        (r.personaId === titularPersonaId || !r.personaId)
-    );
-    if (!reqCedulaPostulante) {
-      reqCedulaPostulante = {
-        id: `req-f1-03-${exp.id}-${titularPersonaId}`,
-        expedienteId: exp.id,
-        codigoRequisito: "F1-03",
-        nombre: `Cédula del Postulante: ${titularNombre}`,
-        descripcion: "Documento de identidad legible del postulante principal.",
-        fase: 1,
-        personaId: titularPersonaId,
-        personaNombre: titularNombre,
-        estado: "pendiente_carga",
-        esObligatorio: true,
-        esAdicional: false
-      };
-      mockDb.requisitosCaso.push(reqCedulaPostulante);
-    } else {
-      reqCedulaPostulante.personaId = titularPersonaId;
-      reqCedulaPostulante.personaNombre = titularNombre;
-      reqCedulaPostulante.nombre = `Cédula del Postulante: ${titularNombre}`;
+    // 3. Asegurar F1-03 para Postulante Principal e Integrantes del Hogar en Fase 1
+    if (exp.hogar?.integrantes && Array.isArray(exp.hogar.integrantes)) {
+      exp.hogar.integrantes.forEach((integ) => {
+        const pId = integ.persona?.id || `per-${integ.id}`;
+        const pNombre = integ.persona
+          ? `${integ.persona.primerNombre || integ.persona.nombres || 'Integrante'} ${integ.persona.primerApellido || ''}`.trim()
+          : "Integrante del Hogar";
+        const esPrincipal = integ.esPostulantePrincipal;
+
+        let reqCed = mockDb.requisitosCaso.find(
+          (r) =>
+            (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
+            (r.fase === 1 || !r.fase) &&
+            r.codigoRequisito === "F1-03" &&
+            (r.personaId === pId || (!r.personaId && esPrincipal))
+        );
+
+        if (!reqCed) {
+          reqCed = {
+            id: `req-f1-03-${exp.id}-${pId}`,
+            expedienteId: exp.id,
+            codigoRequisito: "F1-03",
+            nombre: esPrincipal ? `Cédula del Postulante: ${pNombre}` : `Cédula de Integrante: ${pNombre} (${integ.parentesco || 'Familiar'})`,
+            descripcion: esPrincipal ? "Documento de identidad legible del postulante principal." : `Documento de identidad del integrante del hogar (${integ.parentesco || 'Familiar'}).`,
+            fase: 1,
+            personaId: pId,
+            personaNombre: pNombre,
+            estado: "pendiente_carga",
+            esObligatorio: true,
+            esAdicional: false
+          };
+          mockDb.requisitosCaso.push(reqCed);
+        } else {
+          reqCed.fase = 1;
+          reqCed.personaId = pId;
+          reqCed.personaNombre = pNombre;
+          if (esPrincipal) {
+            reqCed.nombre = `Cédula del Postulante: ${pNombre}`;
+          } else if (!reqCed.nombre.includes("Cédula de Integrante")) {
+            reqCed.nombre = `Cédula de Integrante: ${pNombre} (${integ.parentesco || 'Familiar'})`;
+          }
+        }
+      });
     }
 
     // 4. Limpiar cualquier anomalía o requisito huérfano
@@ -4901,17 +4916,14 @@ export async function createApp(): Promise<express.Express> {
         retiroPendiente: false
       });
 
-      // Crear requisito de cédula para este integrante
-      // CRÍTICO: Los integrantes secundarios del hogar corresponden a la Fase 2 (F2-01: Documentos del Grupo Familiar).
-      // NUNCA deben añadirse como F1-03 ni en Fase 1, pues Fase 1 es exclusiva del postulante titular y del predio.
-      const faseReq = exp.faseActual > 2 ? exp.faseActual : 2;
+      // Crear requisito de cédula para este integrante en Fase 1 (F1-03)
       const nuevoReq: RequisitoCaso = {
-        id: `req-f2-01-${nuevaPersonaId}`,
+        id: `req-f1-03-${nuevaPersonaId}`,
         expedienteId: exp.id,
-        codigoRequisito: "F2-01",
+        codigoRequisito: "F1-03",
         nombre: `Cédula de Integrante: ${nombreCompleto}`,
         descripcion: `Documento de identidad de integrante del hogar (${parentesco}).`,
-        fase: faseReq,
+        fase: 1,
         personaId: nuevaPersonaId,
         personaNombre: `${nombreCompleto} (${parentesco})`,
         estado: "pendiente_carga",
@@ -4930,7 +4942,7 @@ export async function createApp(): Promise<express.Express> {
         autorNombre: req.user!.nombreCompleto,
         personaContactada: nombreCompleto,
         canal: "sistema",
-        contenido: `${req.user!.nombreCompleto} agregó al integrante ${nombreCompleto} (${parentesco}) al hogar declarado.`,
+        contenido: `${req.user!.nombreCompleto} agregó al integrante ${nombreCompleto} (${parentesco}) al hogar declarado en Fase 1.`,
         fechaGestion: new Date().toISOString(),
         creadoEn: new Date().toISOString()
       });
@@ -4977,26 +4989,29 @@ export async function createApp(): Promise<express.Express> {
                 }
               ]);
 
-              // 4. Crear requisito documental de cédula para este integrante (Fase 2)
+              // 4. Crear requisito documental de cédula para este integrante en Fase 1 (F1-03)
               const { data: plantilla } = await supabaseAdmin
                 .from("plantillas_requisito")
                 .select("id")
-                .or("codigo_requisito.eq.F2-01,codigo_requisito.eq.F2-04")
+                .eq("codigo_requisito", "F1-03")
                 .maybeSingle();
 
-              if (plantilla?.id) {
-                await supabaseAdmin.from("requisitos_caso").insert([
-                  {
-                    expediente_id: expDb.id,
-                    plantilla_id: plantilla.id,
-                    fase: faseReq,
-                    persona_id: personaDb.id,
-                    estado: "pendiente_carga"
-                  }
-                ]);
-              }
+              await supabaseAdmin.from("requisitos_caso").insert([
+                {
+                  expediente_id: expDb.id,
+                  plantilla_id: plantilla?.id || null,
+                  codigo_requisito: "F1-03",
+                  nombre: `Cédula de Integrante: ${nombreCompleto}`,
+                  fase: 1,
+                  persona_id: personaDb.id,
+                  estado: "pendiente_carga",
+                  es_obligatorio: true,
+                  es_adicional: false
+                }
+              ]);
+
               console.log(
-                `[SUPABASE]: Integrante ${nombreCompleto} (${parentesco}) persistido en Supabase para expediente ${exp.codigoVisible}`
+                `[SUPABASE]: Integrante ${nombreCompleto} (${parentesco}) y su requisito Cédula F1-03 de Fase 1 persistidos en Supabase para expediente ${exp.codigoVisible}`
               );
             }
           } catch (err: any) {
