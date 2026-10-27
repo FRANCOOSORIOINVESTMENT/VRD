@@ -102,7 +102,9 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
   }, [expediente]);
 
   // Filtros y búsqueda en la tabla de los 28 documentos
-  const [filtroEstado, setFiltroEstado] = useState<"todos" | "Encontrado" | "No Encontrado" | "No Aplica">("todos");
+  const [filtroEstado, setFiltroEstado] = useState<
+    "todos" | "Añadido en Fase 6" | "Traído de Fase Anterior" | "Encontrado" | "No Encontrado" | "No Aplica"
+  >("todos");
   const [busquedaTexto, setBusquedaTexto] = useState("");
 
   const itemsFiltrados = useMemo(() => {
@@ -120,10 +122,13 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
     });
   }, [lista28, filtroEstado, busquedaTexto]);
 
-  // Contadores
+  // Contadores por estado
+  const conteoTraidos = lista28.filter((d) => d.estado === "Traído de Fase Anterior").length;
+  const conteoAnadidos = lista28.filter((d) => d.estado === "Añadido en Fase 6").length;
   const conteoEncontrados = lista28.filter((d) => d.estado === "Encontrado").length;
   const conteoFaltantes = lista28.filter((d) => d.estado === "No Encontrado").length;
   const conteoNoAplica = lista28.filter((d) => d.estado === "No Aplica").length;
+  const totalListos = conteoTraidos + conteoAnadidos + conteoEncontrados;
 
   // Estados locales para herramientas y descargas
   const [copiadoPortapapeles, setCopiadoPortapapeles] = useState(false);
@@ -488,19 +493,33 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
 
         {/* BARRA DE PROGRESO DE LOS 28 DOCUMENTOS */}
         <div className="mt-5 pt-4 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-          <div className="flex flex-wrap items-center gap-3 text-slate-600">
+          <div className="flex flex-wrap items-center gap-2 text-slate-600">
             <span className="font-semibold text-slate-800">Estado de Auditoría (28 Documentos):</span>
-            <span className="inline-flex items-center space-x-1 text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>{conteoEncontrados} Encontrados</span>
-            </span>
-            <span className="inline-flex items-center space-x-1 text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200">
-              <AlertTriangle className="w-3.5 h-3.5" />
-              <span>{conteoFaltantes} Pendientes</span>
+            {conteoTraidos > 0 && (
+              <span className="inline-flex items-center space-x-1 text-blue-800 font-bold bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-200">
+                <Layers className="w-3.5 h-3.5 text-blue-600" />
+                <span>{conteoTraidos} de Fases Previas</span>
+              </span>
+            )}
+            {conteoAnadidos > 0 && (
+              <span className="inline-flex items-center space-x-1 text-purple-800 font-bold bg-purple-50 px-2 py-0.5 rounded-lg border border-purple-200">
+                <Plus className="w-3.5 h-3.5 text-purple-600" />
+                <span>{conteoAnadidos} Subidos en F6</span>
+              </span>
+            )}
+            {conteoEncontrados > 0 && (
+              <span className="inline-flex items-center space-x-1 text-emerald-800 font-bold bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span>{conteoEncontrados} en ZIP</span>
+              </span>
+            )}
+            <span className="inline-flex items-center space-x-1 text-amber-800 font-bold bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+              <span>{conteoFaltantes} No Encontrados</span>
             </span>
             {conteoNoAplica > 0 && (
               <span className="inline-flex items-center space-x-1 text-slate-600 font-bold bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200">
-                <Info className="w-3.5 h-3.5" />
+                <Info className="w-3.5 h-3.5 text-slate-500" />
                 <span>{conteoNoAplica} No Aplica</span>
               </span>
             )}
@@ -511,12 +530,12 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
               <div
                 className="bg-emerald-500 h-2.5 rounded-full transition-all duration-300"
                 style={{
-                  width: `${Math.round(((conteoEncontrados + conteoNoAplica) / 28) * 100)}%`
+                  width: `${Math.round(((totalListos + conteoNoAplica) / 28) * 100)}%`
                 }}
               />
             </div>
             <span className="font-mono font-bold text-slate-700">
-              {Math.round(((conteoEncontrados + conteoNoAplica) / 28) * 100)}%
+              {Math.round(((totalListos + conteoNoAplica) / 28) * 100)}%
             </span>
           </div>
         </div>
@@ -777,6 +796,30 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
             </button>
             <button
               type="button"
+              onClick={() => setFiltroEstado("Traído de Fase Anterior")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center space-x-1 ${
+                filtroEstado === "Traído de Fase Anterior"
+                  ? "bg-blue-700 text-white shadow-xs"
+                  : "bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200"
+              }`}
+            >
+              <Layers className="w-3 h-3" />
+              <span>De Fases Previas ({conteoTraidos})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setFiltroEstado("Añadido en Fase 6")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center space-x-1 ${
+                filtroEstado === "Añadido en Fase 6"
+                  ? "bg-purple-700 text-white shadow-xs"
+                  : "bg-purple-50 text-purple-800 hover:bg-purple-100 border border-purple-200"
+              }`}
+            >
+              <Plus className="w-3 h-3" />
+              <span>Subidos en F6 ({conteoAnadidos})</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setFiltroEstado("Encontrado")}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center space-x-1 ${
                 filtroEstado === "Encontrado"
@@ -785,7 +828,7 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
               }`}
             >
               <CheckCircle2 className="w-3 h-3" />
-              <span>Encontrados ({conteoEncontrados})</span>
+              <span>Encontrados ZIP ({conteoEncontrados})</span>
             </button>
             <button
               type="button"
@@ -797,7 +840,7 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
               }`}
             >
               <AlertTriangle className="w-3 h-3" />
-              <span>Pendientes ({conteoFaltantes})</span>
+              <span>No Encontrados ({conteoFaltantes})</span>
             </button>
             <button
               type="button"
@@ -832,15 +875,17 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
               <tr className="bg-slate-100/80 text-slate-700 uppercase tracking-wider text-[11px] font-bold border-b border-slate-200">
                 <th className="py-3 px-3 w-16 text-center">N°</th>
                 <th className="py-3 px-4 min-w-[260px]">Nombre del Documento</th>
-                <th className="py-3 px-3 w-32 text-center">Estado</th>
+                <th className="py-3 px-3 w-36 text-center">Estado</th>
                 <th className="py-3 px-4 min-w-[220px]">Nombre Original del Archivo</th>
                 <th className="py-3 px-4 min-w-[300px]">Observaciones / Validaciones Especiales</th>
-                <th className="py-3 px-3 w-28 text-center">Acciones</th>
+                <th className="py-3 px-3 w-36 text-center">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {itemsFiltrados.map((item) => {
-                const esEncontrado = item.estado === "Encontrado";
+                const esTraidoAnterior = item.estado === "Traído de Fase Anterior";
+                const esAnadidoF6 = item.estado === "Añadido en Fase 6";
+                const esEncontradoZip = item.estado === "Encontrado";
                 const esNoAplica = item.estado === "No Aplica";
                 const esFaltante = item.estado === "No Encontrado";
 
@@ -875,21 +920,33 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
 
                     {/* COLUMNA 3: ESTADO */}
                     <td className="py-3 px-3 text-center">
-                      {esEncontrado && (
+                      {esTraidoAnterior && (
+                        <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-blue-100 text-blue-900 border border-blue-300" title={item.faseOrigenNombre || "Fase previa"}>
+                          <Layers className="w-3.5 h-3.5 text-blue-700 shrink-0" />
+                          <span>Fase {item.faseOrigenNum || "Previa"}</span>
+                        </span>
+                      )}
+                      {esAnadidoF6 && (
+                        <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-purple-100 text-purple-900 border border-purple-300">
+                          <Plus className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                          <span>Subido en F6</span>
+                        </span>
+                      )}
+                      {esEncontradoZip && (
                         <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-900 border border-emerald-300">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
-                          <span>Encontrado</span>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                          <span>Encontrado ZIP</span>
                         </span>
                       )}
                       {esFaltante && (
                         <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
-                          <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-700 shrink-0" />
                           <span>No Encontrado</span>
                         </span>
                       )}
                       {esNoAplica && (
                         <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-300">
-                          <Info className="w-3.5 h-3.5 text-slate-500" />
+                          <Info className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                           <span>No Aplica</span>
                         </span>
                       )}
@@ -909,7 +966,7 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
                         </div>
                       ) : (
                         <span className="text-slate-400 italic text-[11px]">
-                          (Ningún archivo asociado)
+                          (Ningún archivo asignado)
                         </span>
                       )}
                     </td>
@@ -938,42 +995,61 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
                       </div>
                     </td>
 
-                    {/* COLUMNA 6: ACCIONES */}
+                    {/* COLUMNA 6: ACCIONES (ASIGNAR / REEMPLAZAR / VER) */}
                     <td className="py-3 px-3 text-center">
-                      <div className="flex items-center justify-center space-x-1">
-                        {/* BOTÓN VER DOCUMENTO */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onAbrirVisor({
-                              titulo: item.nombre,
-                              nombreArchivo: item.nombreArchivoOriginal || `${item.codigo}.pdf`,
-                              mimeType: item.mimeType || "application/pdf",
-                              sha256Hash: item.sha256Hash || `sha256-${item.codigo}`,
-                              tamanoBytes: item.tamanoBytes || 1024 * 200,
-                              archivoDataUrl: item.soporteUrl
-                            });
-                          }}
-                          className="p-1.5 rounded-lg bg-slate-100 hover:bg-blue-100 text-slate-600 hover:text-blue-700 transition-colors cursor-pointer"
-                          title="Ver documento en visor PDF"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                        </button>
-
-                        {/* BOTÓN CARGAR / REEMPLAZAR */}
-                        {puedeOperar && (
+                      <div className="flex items-center justify-center space-x-1.5">
+                        {/* BOTÓN VER DOCUMENTO SI TIENE ARCHIVO */}
+                        {(item.soporteUrl || item.nombreArchivoOriginal) && (
                           <button
                             type="button"
                             onClick={() => {
-                              setErrorAccion(null);
-                              setArchivoDocSeleccionado(null);
-                              setModalCargarDoc28(item);
+                              onAbrirVisor({
+                                titulo: item.nombre,
+                                nombreArchivo: item.nombreArchivoOriginal || `${item.codigo}.pdf`,
+                                mimeType: item.mimeType || "application/pdf",
+                                sha256Hash: item.sha256Hash || `sha256-${item.codigo}`,
+                                tamanoBytes: item.tamanoBytes || 1024 * 200,
+                                archivoDataUrl: item.soporteUrl
+                              });
                             }}
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-orange-100 text-slate-600 hover:text-orange-700 transition-colors cursor-pointer"
-                            title="Cargar o reemplazar archivo para este ítem"
+                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-blue-100 text-slate-600 hover:text-blue-700 transition-colors cursor-pointer"
+                            title="Ver documento en visor PDF"
                           >
-                            <UploadCloud className="w-3.5 h-3.5" />
+                            <Eye className="w-3.5 h-3.5" />
                           </button>
+                        )}
+
+                        {/* BOTÓN ASIGNAR (SI NO TIENE ARCHIVO) O REEMPLAZAR (SI YA TIENE) */}
+                        {puedeOperar && (
+                          esFaltante ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setErrorAccion(null);
+                                setArchivoDocSeleccionado(null);
+                                setModalCargarDoc28(item);
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs flex items-center space-x-1 transition-all cursor-pointer shadow-2xs shrink-0"
+                              title="Asignar o cargar archivo a este requisito no asignado"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>+ Asignar</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setErrorAccion(null);
+                                setArchivoDocSeleccionado(null);
+                                setModalCargarDoc28(item);
+                              }}
+                              className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-orange-100 text-slate-600 hover:text-orange-700 transition-colors cursor-pointer flex items-center space-x-1 text-[11px] font-bold shrink-0"
+                              title="Reemplazar archivo asignado para este ítem"
+                            >
+                              <UploadCloud className="w-3.5 h-3.5" />
+                              <span>Reemplazar</span>
+                            </button>
+                          )
                         )}
                       </div>
                     </td>

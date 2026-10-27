@@ -76,7 +76,7 @@ import { ModuloInformes } from "./components/ModuloInformes";
 import { ModalCambioPassword } from "./components/ModalCambioPassword";
 import { FichaTecnicaImprimible } from "./components/FichaTecnicaImprimible";
 import { CATALOGO_MUNICIPIOS } from "./data/municipios";
-import { normalizarTextoNombre, construirNombreCompleto, descomponerNombreCompleto, decodificarNombresMetadata } from "./utils/normalizacion";
+import { normalizarTextoNombre, construirNombreCompleto, descomponerNombreCompleto, decodificarNombresMetadata, generarNombreArchivoCedulaEstandar } from "./utils/normalizacion";
 import { formatearRol, formatearNombreUsuario } from "./utils/formatoRoles";
 import { convertirImagenAPdf } from "./utils/imageToPdf";
 
@@ -239,6 +239,7 @@ export default function App() {
   const [notasDelInteresado, setNotasDelInteresado] = useState<NotaConversacion[]>([]);
   const [nuevaNotaInteresadoTexto, setNuevaNotaInteresadoTexto] = useState<string>("");
   const [modalAgregarCedula, setModalAgregarCedula] = useState<boolean>(false);
+  const [archivoCedulaIntegrante, setArchivoCedulaIntegrante] = useState<File | null>(null);
   const [modalSubirArchivoReq, setModalSubirArchivoReq] = useState<RequisitoCaso | null>(null);
   const [archivoSeleccionadoSubir, setArchivoSeleccionadoSubir] = useState<File | null>(null);
   const [fotosParaRegistro, setFotosParaRegistro] = useState<{
@@ -1656,12 +1657,17 @@ export default function App() {
     if (!expedienteSeleccionadoId) return;
     setErrorAgregarCedula(null);
 
+    const numIdLimpio = formIntegrante.numeroIdentificacion.trim();
     const pNom = formIntegrante.primerNombre.trim();
     const sNom = formIntegrante.segundoNombre.trim();
     const pAp = formIntegrante.primerApellido.trim();
     const sAp = formIntegrante.segundoApellido.trim();
     const nombresCalculados = formIntegrante.nombres.trim() || [pNom, sNom].filter(Boolean).join(" ");
 
+    if (!numIdLimpio) {
+      setErrorAgregarCedula("Debe ingresar el número de identificación del integrante.");
+      return;
+    }
     if (!pNom && !nombresCalculados) {
       setErrorAgregarCedula("Debe ingresar el primer nombre del integrante.");
       return;
@@ -1671,23 +1677,94 @@ export default function App() {
       return;
     }
 
+    // VALIDACIÓN: Verificar que el número de identificación del integrante no exista previamente en el mismo hogar
+    const integranteExistente = detalleExp?.expediente.hogar?.integrantes?.find(
+      (i) => i.persona?.numeroIdentificacion?.trim() === numIdLimpio
+    );
+    const esPostulante = detalleExp?.expediente.postulante?.numeroIdentificacion?.trim() === numIdLimpio;
+
+    if (integranteExistente || esPostulante) {
+      const nombreExistente = integranteExistente
+        ? (integranteExistente.persona.nombres || `${integranteExistente.persona.primerNombre || ''} ${integranteExistente.persona.primerApellido || ''}`.trim())
+        : (detalleExp?.expediente.postulante.nombres || `${detalleExp?.expediente.postulante.primerNombre || ''} ${detalleExp?.expediente.postulante.primerApellido || ''}`.trim());
+      setErrorAgregarCedula(`El número de identificación ${numIdLimpio} ya se encuentra registrado en este hogar (${nombreExistente}).`);
+      return;
+    }
+
     try {
+      const nombreCompleto = construirNombreCompleto(pNom, sNom, pAp, sAp) || nombresCalculados;
+      let archivoDataUrl: string | undefined = undefined;
+      let nombreArchivoEstandar: string | undefined = undefined;
+      let publicStorageUrl: string | undefined = undefined;
+
+      if (archivoCedulaIntegrante) {
+        let archivoParaCargar = archivoCedulaIntegrante;
+        // Si el usuario adjuntó una imagen, convertir automáticamente a PDF
+        if (archivoCedulaIntegrante.type.startsWith("image/")) {
+          try {
+            archivoParaCargar = await convertirImagenAPdf(archivoCedulaIntegrante);
+          } catch {
+            archivoParaCargar = archivoCedulaIntegrante;
+          }
+        }
+
+        const ext = archivoParaCargar.name.split('.').pop() || 'pdf';
+        nombreArchivoEstandar = generarNombreArchivoCedulaEstandar(nombreCompleto, numIdLimpio, ext);
+
+        // Si el cliente supabase está disponible en el cliente, subir directamente al bucket
+        if (supabase) {
+          try {
+            const timestampSubida = new Date().getTime();
+            const rutaStorageFrontend = `expedientes/${expedienteSeleccionadoId}/cedulas/${nombreArchivoEstandar}`;
+            const { error: storageErr } = await supabase.storage
+              .from("expedientes-archivos")
+              .upload(rutaStorageFrontend, archivoParaCargar, {
+                upsert: true,
+                contentType: archivoParaCargar.type || "application/pdf"
+              });
+            if (!storageErr) {
+              const { data: pubData } = supabase.storage
+                .from("expedientes-archivos")
+                .getPublicUrl(rutaStorageFrontend);
+              if (pubData?.publicUrl) {
+                publicStorageUrl = `${pubData.publicUrl}?t=${timestampSubida}`;
+              }
+            }
+          } catch (storageErr) {
+            console.warn("[STORAGE CLIENT UPLOAD CEDULA]:", storageErr);
+          }
+        }
+
+        archivoDataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = (err) => reject(err);
+          reader.readAsDataURL(archivoParaCargar);
+        });
+      }
+
       const res = await authFetch(`/api/expedientes/${expedienteSeleccionadoId}/hogar/agregar-cedula`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tipoIdentificacion: formIntegrante.tipoIdentificacion,
-          numeroIdentificacion: formIntegrante.numeroIdentificacion,
+          numeroIdentificacion: numIdLimpio,
           primerNombre: pNom,
           segundoNombre: sNom,
           primerApellido: pAp,
           segundoApellido: sAp,
           nombres: nombresCalculados,
-          parentesco: formIntegrante.parentesco
+          parentesco: formIntegrante.parentesco,
+          archivoDataUrl,
+          nombreArchivo: nombreArchivoEstandar,
+          mimeType: archivoCedulaIntegrante ? archivoCedulaIntegrante.type || "application/pdf" : undefined,
+          tamanoBytes: archivoCedulaIntegrante ? archivoCedulaIntegrante.size : undefined,
+          url: publicStorageUrl
         })
       });
       if (res.ok) {
         setModalAgregarCedula(false);
+        setArchivoCedulaIntegrante(null);
         setFormIntegrante({
           tipoIdentificacion: "CC",
           numeroIdentificacion: "",
@@ -1698,10 +1775,11 @@ export default function App() {
           nombres: "",
           parentesco: "hijo"
         });
-        mostrarToast("Integrante agregado exitosamente al hogar.");
-        cargarDetalleExpediente(expedienteSeleccionadoId);
+        mostrarToast("Integrante y documento de cédula agregados exitosamente al hogar.");
+        await cargarDetalleExpediente(expedienteSeleccionadoId);
+        await cargarExpedientes();
       } else {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         setErrorAgregarCedula(err.error || "Error al agregar cédula.");
       }
     } catch {
@@ -1747,12 +1825,37 @@ export default function App() {
         }
       }
 
+      let nombreParaSubida = archivoParaCargar.name;
+      const esCedulaReq = requisito.codigoRequisito === "F1-03" || requisito.nombre.toLowerCase().includes("cédula") || requisito.nombre.toLowerCase().includes("cedula");
+
+      if (esCedulaReq) {
+        let pNombre = requisito.personaNombre || "";
+        let pId = "";
+        if (requisito.personaId) {
+          const intEnHogar = detalleExp?.expediente.hogar?.integrantes?.find((i) => i.persona?.id === requisito.personaId);
+          if (intEnHogar) {
+            pNombre = intEnHogar.persona.nombres || `${intEnHogar.persona.primerNombre || ''} ${intEnHogar.persona.primerApellido || ''}`.trim();
+            pId = intEnHogar.persona.numeroIdentificacion;
+          } else if (detalleExp?.expediente.postulante?.id === requisito.personaId) {
+            pNombre = detalleExp.expediente.postulante.nombres || `${detalleExp.expediente.postulante.primerNombre || ''} ${detalleExp.expediente.postulante.primerApellido || ''}`.trim();
+            pId = detalleExp.expediente.postulante.numeroIdentificacion;
+          }
+        }
+        if (!pNombre) pNombre = detalleExp?.expediente.postulante?.nombres || "integrante";
+        if (!pId) pId = detalleExp?.expediente.postulante?.numeroIdentificacion || "00000";
+
+        const ext = archivoParaCargar.name.split('.').pop() || 'pdf';
+        nombreParaSubida = generarNombreArchivoCedulaEstandar(pNombre, pId, ext);
+      }
+
       // Si el cliente supabase de frontend está disponible, asegurar subida directa a Storage en Supabase
       let publicStorageUrl: string | undefined = undefined;
       if (supabase) {
         try {
           const timestampSubida = new Date().getTime();
-          const rutaStorageFrontend = `expedientes/${expedienteSeleccionadoId}/${requisito.codigoRequisito}_v${timestampSubida}_${archivoParaCargar.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+          const rutaStorageFrontend = esCedulaReq
+            ? `expedientes/${expedienteSeleccionadoId}/cedulas/${nombreParaSubida}`
+            : `expedientes/${expedienteSeleccionadoId}/${requisito.codigoRequisito}_v${timestampSubida}_${archivoParaCargar.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
           const { error: storageErr } = await supabase.storage
             .from("expedientes-archivos")
             .upload(rutaStorageFrontend, archivoParaCargar, {
@@ -1791,7 +1894,7 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            nombreArchivo: archivoParaCargar.name,
+            nombreArchivo: nombreParaSubida,
             mimeType: archivoParaCargar.type || "application/pdf",
             tamanoBytes: archivoParaCargar.size,
             archivoDataUrl: dataUrl,
@@ -6578,6 +6681,12 @@ export default function App() {
             <p className="text-xs text-slate-500 mb-4">
               Agregue un integrante declarado por la familia. Esto creará el requisito documental correspondiente.
             </p>
+            {errorAgregarCedula && (
+              <div className="mb-3 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs font-medium flex items-start space-x-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <span>{errorAgregarCedula}</span>
+              </div>
+            )}
             <form onSubmit={handleAgregarCedula} className="space-y-3 text-xs">
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -6679,10 +6788,32 @@ export default function App() {
                   placeholder="ej: hijo, cónyuge, hermano..."
                 />
               </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Documento de Cédula / Identidad (Opcional - PDF o Imagen)
+                </label>
+                <input
+                  type="file"
+                  accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp"
+                  onChange={(e) => setArchivoCedulaIntegrante(e.target.files?.[0] || null)}
+                  className="w-full text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 border border-slate-200 rounded-lg p-1 bg-slate-50/50"
+                />
+                {archivoCedulaIntegrante && (
+                  <p className="text-[11px] text-blue-700 mt-1 font-mono">
+                    Se guardará como: <span className="font-semibold">{generarNombreArchivoCedulaEstandar(construirNombreCompleto(formIntegrante.primerNombre, formIntegrante.segundoNombre, formIntegrante.primerApellido, formIntegrante.segundoApellido) || formIntegrante.primerNombre || "integrante", formIntegrante.numeroIdentificacion || "0000", archivoCedulaIntegrante.name.split('.').pop() || 'pdf')}</span>
+                  </p>
+                )}
+              </div>
+
               <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setModalAgregarCedula(false)}
+                  onClick={() => {
+                    setModalAgregarCedula(false);
+                    setErrorAgregarCedula(null);
+                    setArchivoCedulaIntegrante(null);
+                  }}
                   className="px-3 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
                 >
                   Cancelar

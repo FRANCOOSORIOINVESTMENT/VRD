@@ -87,7 +87,8 @@ import {
   descomponerNombreCompleto,
   codificarNombresMetadata,
   decodificarNombresMetadata,
-  limpiarTextoMetadata
+  limpiarTextoMetadata,
+  generarNombreArchivoCedulaEstandar
 } from "./src/utils/normalizacion";
 import { generarCasosEjemploParaCadaFase } from "./src/server/seedCasosEjemplo";
 
@@ -4519,7 +4520,29 @@ export async function createApp(): Promise<express.Express> {
             : mimeType?.includes("csv")
             ? "csv"
             : "pdf");
-        const storagePath = `expedientes/${exp.id}/${reqCaso.codigoRequisito}_v${nuevaVersionNum}.${extFinal}`;
+        let nombreEstandarizado = nombreArchivo || `Documento_${reqCaso.codigoRequisito}.pdf`;
+        let storagePath = `expedientes/${exp.id}/${reqCaso.codigoRequisito}_v${nuevaVersionNum}.${extFinal}`;
+
+        // Si es cédula de integrante o titular (F1-03), aplicar formato de nombre estandarizado y guardar en bucket Supabase
+        if (reqCaso.codigoRequisito === "F1-03" || reqCaso.nombre.toLowerCase().includes("cédula") || reqCaso.nombre.toLowerCase().includes("cedula")) {
+          let personaNombre = reqCaso.personaNombre || "";
+          let personaIdent = "";
+          if (reqCaso.personaId) {
+            const intEnHogar = exp.hogar?.integrantes?.find((i) => i.persona?.id === reqCaso.personaId);
+            if (intEnHogar) {
+              personaNombre = intEnHogar.persona.nombres || `${intEnHogar.persona.primerNombre} ${intEnHogar.persona.primerApellido}`;
+              personaIdent = intEnHogar.persona.numeroIdentificacion;
+            } else if (exp.postulante?.id === reqCaso.personaId) {
+              personaNombre = exp.postulante.nombres || `${exp.postulante.primerNombre} ${exp.postulante.primerApellido}`;
+              personaIdent = exp.postulante.numeroIdentificacion;
+            }
+          }
+          if (!personaIdent) personaIdent = exp.postulante?.numeroIdentificacion || "00000";
+          if (!personaNombre) personaNombre = exp.postulante?.nombres || "integrante";
+
+          nombreEstandarizado = generarNombreArchivoCedulaEstandar(personaNombre, personaIdent, extFinal);
+          storagePath = `expedientes/${exp.id}/cedulas/${nombreEstandarizado}`;
+        }
 
         // 3. Persistir archivo de inmediato en almacenamiento resiliente (disco local + Supabase Storage)
         const tsBuster = `t=${Date.now()}`;
@@ -4570,7 +4593,7 @@ export async function createApp(): Promise<express.Express> {
           documentoId: doc.id,
           versionNumero: nuevaVersionNum,
           storagePath,
-          nombreArchivoOriginal: nombreArchivo || (fotosArr ? `Registro_Fotografico_${fotosArr.length}_fotos.jpg` : `Documento_${reqCaso.codigoRequisito}.pdf`),
+          nombreArchivoOriginal: nombreEstandarizado || nombreArchivo || (fotosArr ? `Registro_Fotografico_${fotosArr.length}_fotos.jpg` : `Documento_${reqCaso.codigoRequisito}.pdf`),
           mimeType: mimeType || (fotosArr ? "image/jpeg" : "application/pdf"),
           tamanoBytes: tamanoBytes || fotosBytes || 1024000,
           sha256Hash: sha256Hash || `sha256-${Date.now()}-${Math.random().toString(36).substring(7)}`,
@@ -5009,7 +5032,11 @@ export async function createApp(): Promise<express.Express> {
         primerApellido,
         segundoApellido,
         nombres,
-        parentesco
+        parentesco,
+        archivoDataUrl,
+        nombreArchivo,
+        mimeType,
+        tamanoBytes
       } = req.body;
 
       const pNombre = primerNombre ? normalizarTextoNombre(primerNombre) : (nombres ? normalizarTextoNombre(nombres).split(" ")[0] : "");
@@ -5017,9 +5044,22 @@ export async function createApp(): Promise<express.Express> {
       const pApellido = primerApellido ? normalizarTextoNombre(primerApellido) : "";
       const sApellido = segundoApellido ? normalizarTextoNombre(segundoApellido) : undefined;
       const nombreCompleto = construirNombreCompleto(pNombre, sNombre, pApellido, sApellido) || (nombres ? normalizarTextoNombre(nombres) : "");
+      const numIdLimpio = String(numeroIdentificacion || "").trim();
 
-      if (!numeroIdentificacion || (!pNombre && !nombres) || !pApellido || !parentesco) {
+      if (!numIdLimpio || (!pNombre && !nombres) || !pApellido || !parentesco) {
         res.status(400).json({ error: "Identificación, primer nombre, primer apellido y parentesco son obligatorios para el integrante." });
+        return;
+      }
+
+      // VALIDACIÓN: Verificar que el número de identificación del integrante no exista previamente en el mismo hogar
+      const yaExisteEnHogar = exp.hogar.integrantes.some(
+        (i) => i.persona.numeroIdentificacion?.trim() === numIdLimpio
+      ) || (exp.postulante?.numeroIdentificacion?.trim() === numIdLimpio);
+
+      if (yaExisteEnHogar) {
+        res.status(400).json({
+          error: `El número de identificación ${numIdLimpio} ya se encuentra registrado en este hogar.`
+        });
         return;
       }
 
@@ -5027,7 +5067,7 @@ export async function createApp(): Promise<express.Express> {
       const nuevaPersona = {
         id: nuevaPersonaId,
         tipoIdentificacion: tipoIdentificacion || "CC",
-        numeroIdentificacion: String(numeroIdentificacion).trim(),
+        numeroIdentificacion: numIdLimpio,
         primerNombre: pNombre,
         segundoNombre: sNombre,
         primerApellido: pApellido,
@@ -5045,6 +5085,11 @@ export async function createApp(): Promise<express.Express> {
         retiroPendiente: false
       });
 
+      // Formato de nombre estandarizado para la cédula: `cedula_integrante_[nombre]_[identificacion].pdf`
+      const extMatch = (nombreArchivo || "").match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toLowerCase() || "pdf";
+      const nombreArchivoEstandar = generarNombreArchivoCedulaEstandar(nombreCompleto, numIdLimpio, extMatch);
+      const storagePath = `expedientes/${exp.id}/cedulas/${nombreArchivoEstandar}`;
+
       // Crear requisito de cédula para este integrante en Fase 1 (F1-03)
       const nuevoReq: RequisitoCaso = {
         id: `req-f1-03-${nuevaPersonaId}`,
@@ -5055,10 +5100,62 @@ export async function createApp(): Promise<express.Express> {
         fase: 1,
         personaId: nuevaPersonaId,
         personaNombre: `${nombreCompleto} (${parentesco})`,
-        estado: "pendiente_carga",
+        estado: archivoDataUrl ? "recibido_revision" : "pendiente_carga",
         esObligatorio: true,
         esAdicional: false
       };
+
+      let docObj: Documento | undefined = undefined;
+
+      // Si el cliente adjuntó el documento de la cédula directamente
+      if (archivoDataUrl && typeof archivoDataUrl === "string") {
+        const docId = `doc-ced-${Date.now()}`;
+        let publicUrlFinal = archivoDataUrl;
+
+        (async () => {
+          try {
+            const resStorage = await persistirArchivoEnStorage(
+              storagePath,
+              archivoDataUrl,
+              mimeType || "application/pdf"
+            );
+            if (resStorage.ok && resStorage.publicUrl) {
+              publicUrlFinal = resStorage.publicUrl;
+            }
+          } catch (e: any) {
+            console.warn("[STORAGE]: Error guardando cédula en storage:", e?.message);
+          }
+        })();
+
+        const verObj: DocVersion = {
+          id: `ver-${docId}-1`,
+          documentoId: docId,
+          versionNumero: 1,
+          nombreArchivoOriginal: nombreArchivoEstandar,
+          mimeType: mimeType || "application/pdf",
+          tamanoBytes: Number(tamanoBytes) || 1048576,
+          sha256Hash: `sha256-ced-${Date.now()}`,
+          storagePath,
+          subidoPorId: req.user!.id,
+          subidoPorNombre: req.user!.nombreCompleto,
+          subidoEn: new Date().toISOString(),
+          urlFirmadaTemporal: publicUrlFinal,
+          archivoDataUrl: publicUrlFinal
+        };
+
+        docObj = {
+          id: docId,
+          expedienteId: exp.id,
+          titulo: `Cédula de Integrante: ${nombreCompleto}`,
+          categoria: "fase1",
+          esOficial: true,
+          versionActual: verObj,
+          versiones: [verObj]
+        };
+
+        mockDb.documentos.push(docObj);
+        nuevoReq.documentoAsociado = docObj;
+      }
 
       mockDb.requisitosCaso.push(nuevoReq);
       limpiarRequisitosHuerfanosExpediente(exp);
@@ -5076,7 +5173,7 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
-      // PERSISTENCIA EN SUPABASE DEL NUEVO INTEGRANTE (PostgreSQL)
+      // PERSISTENCIA EN SUPABASE DEL NUEVO INTEGRANTE (PostgreSQL + Storage)
       if (supabaseAdmin) {
         (async () => {
           try {
@@ -5125,7 +5222,7 @@ export async function createApp(): Promise<express.Express> {
                 .eq("codigo_requisito", "F1-03")
                 .maybeSingle();
 
-              await supabaseAdmin.from("requisitos_caso").insert([
+              const { data: reqInsert } = await supabaseAdmin.from("requisitos_caso").insert([
                 {
                   expediente_id: expDb.id,
                   plantilla_id: plantilla?.id || null,
@@ -5133,14 +5230,56 @@ export async function createApp(): Promise<express.Express> {
                   nombre: `Cédula de Integrante: ${nombreCompleto}`,
                   fase: 1,
                   persona_id: personaDb.id,
-                  estado: "pendiente_carga",
+                  estado: docObj ? "recibido_revision" : "pendiente_carga",
                   es_obligatorio: true,
                   es_adicional: false
                 }
-              ]);
+              ]).select("id").maybeSingle();
+
+              // Si se cargó un documento de cédula, guardarlo en tablas de documentos y versiones
+              if (docObj && reqInsert?.id) {
+                const { data: docDb } = await supabaseAdmin.from("documentos").insert([
+                  {
+                    expediente_id: expDb.id,
+                    titulo: `Cédula de Integrante: ${nombreCompleto}`,
+                    persona_id: personaDb.id
+                  }
+                ]).select("id").maybeSingle();
+
+                if (docDb?.id) {
+                  let subidoPorUuid: string | null = null;
+                  if (req.user!.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.user!.id)) {
+                    subidoPorUuid = req.user!.id;
+                  }
+
+                  const { data: verDb } = await supabaseAdmin.from("versiones_documento").insert([
+                    {
+                      documento_id: docDb.id,
+                      version_numero: 1,
+                      storage_path: storagePath,
+                      nombre_archivo_original: nombreArchivoEstandar,
+                      mime_type: mimeType || "application/pdf",
+                      tamano_bytes: Number(tamanoBytes) || 1048576,
+                      sha256_hash: `sha256-ced-${Date.now()}`,
+                      subido_por: subidoPorUuid,
+                      url_publica: docObj.versionActual?.archivoDataUrl
+                    }
+                  ]).select("id").maybeSingle();
+
+                  if (verDb?.id) {
+                    await supabaseAdmin.from("evidencias_requisito").insert([
+                      {
+                        requisito_caso_id: reqInsert.id,
+                        version_documento_id: verDb.id,
+                        vinculado_por: subidoPorUuid
+                      }
+                    ]);
+                  }
+                }
+              }
 
               console.log(
-                `[SUPABASE]: Integrante ${nombreCompleto} (${parentesco}) y su requisito Cédula F1-03 de Fase 1 persistidos en Supabase para expediente ${exp.codigoVisible}`
+                `[SUPABASE]: Integrante ${nombreCompleto} (${parentesco}) y su Cédula F1-03 (${nombreArchivoEstandar}) persistidos en Supabase para expediente ${exp.codigoVisible}`
               );
             }
           } catch (err: any) {

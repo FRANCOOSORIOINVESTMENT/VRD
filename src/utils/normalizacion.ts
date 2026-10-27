@@ -17,6 +17,27 @@ export function normalizarTextoNombre(texto: string | null | undefined): string 
 }
 
 /**
+ * Genera el nombre estandarizado de archivo para la cédula de un integrante del hogar.
+ * Formato oficial: `cedula_integrante_[nombre]_[identificacion].pdf`
+ * Ejemplo: `cedula_integrante_andres_franco_1018945678.pdf`
+ */
+export function generarNombreArchivoCedulaEstandar(
+  nombrePersona: string,
+  numeroIdentificacion: string,
+  extension: string = "pdf"
+): string {
+  const nombreLimpio = normalizarTextoNombre(nombrePersona)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const idLimpia = String(numeroIdentificacion || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9]/g, "");
+  const extLimpia = (extension || "pdf").replace(/^\.+/, "").toLowerCase();
+  return `cedula_integrante_${nombreLimpio || "integrante"}_${idLimpia || "doc"}.${extLimpia}`;
+}
+
+/**
  * Construye y normaliza el nombre completo a partir de los 4 campos independientes (Cambio 6):
  * Primer Nombre (obligatorio), Segundo Nombre (opcional), Primer Apellido (obligatorio), Segundo Apellido (opcional).
  * Devuelve la concatenación en mayúscula sostenida sin tildes.

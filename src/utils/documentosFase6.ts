@@ -1,7 +1,12 @@
 import { Expediente } from "../types";
 import JSZip from "jszip";
 
-export type EstadoDocFase6 = "Encontrado" | "No Encontrado" | "No Aplica";
+export type EstadoDocFase6 =
+  | "Añadido en Fase 6"
+  | "Traído de Fase Anterior"
+  | "Encontrado"
+  | "No Encontrado"
+  | "No Aplica";
 
 export interface ItemDocumentoOficial28 {
   numero: number; // 1 a 28 estricto
@@ -12,6 +17,8 @@ export interface ItemDocumentoOficial28 {
   descripcion: string;
   instruccionEspecial?: string;
   estado: EstadoDocFase6;
+  faseOrigenNum?: number; // 1, 2, 4, 5...
+  faseOrigenNombre?: string;
   nombreArchivoOriginal?: string;
   observacionesValidacion: string;
   soporteUrl?: string;
@@ -291,22 +298,419 @@ export const CATALOGO_ESTRICTO_28_DOCUMENTOS = [
   }
 ];
 
+import { mockDb } from "../server/mockDb";
+
+interface ResultadoBusquedaFasePrevia {
+  encontrado: boolean;
+  faseNum?: number;
+  faseNombre?: string;
+  nombreArchivoOriginal?: string;
+  soporteUrl?: string;
+  mimeType?: string;
+  tamanoBytes?: number;
+  sha256Hash?: string;
+  observacion?: string;
+}
+
+function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codigoItem: string): ResultadoBusquedaFasePrevia {
+  const f4 = exp.gestionFase4 as any;
+  const tramite = exp.tramiteLicencia as any;
+
+  // Search in mockDb requirements and documents
+  let reqs = mockDb.requisitosCaso.filter(r => r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible));
+  let docs = mockDb.documentos.filter(d => d.expedienteId === exp.id || (exp.codigoVisible && d.expedienteId === exp.codigoVisible));
+
+  switch (numItem) {
+    case 3: { // F6-03: Documentos de identidad del grupo familiar (Cédulas)
+      const reqCed = reqs.find(r => (r.codigoRequisito === "F1-03" || r.codigoRequisito === "F2-01") && r.documentoAsociado?.versionActual);
+      if (reqCed?.documentoAsociado?.versionActual) {
+        const v = reqCed.documentoAsociado.versionActual;
+        return {
+          encontrado: true,
+          faseNum: 1,
+          faseNombre: "Fase 1 (Ingreso Hogar)",
+          nombreArchivoOriginal: v.nombreArchivoOriginal || v.nombreArchivo || `Cedulas_Grupo_Familiar_${exp.postulante.numeroIdentificacion}.pdf`,
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal || v.storagePath,
+          mimeType: v.mimeType || "application/pdf",
+          tamanoBytes: v.tamanoBytes || 204800,
+          sha256Hash: v.sha256Hash,
+          observacion: "Documento de identidad heredado automáticamente de Fase 1 (Cédula de Ciudadanía)."
+        };
+      }
+      const docCed = docs.find(d => {
+        const t = (d.titulo || "").toLowerCase();
+        return t.includes("cedula") || t.includes("cédula") || t.includes("identidad") || t.includes("postulante");
+      });
+      if (docCed?.versionActual) {
+        const v = docCed.versionActual;
+        return {
+          encontrado: true,
+          faseNum: 1,
+          faseNombre: "Fase 1 (Ingreso Hogar)",
+          nombreArchivoOriginal: v.nombreArchivoOriginal || docCed.titulo || "Cedula_Postulante.pdf",
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+          mimeType: v.mimeType || "application/pdf",
+          tamanoBytes: v.tamanoBytes,
+          sha256Hash: v.sha256Hash,
+          observacion: "Cédula de ciudadanía traída automáticamente de Fase 1."
+        };
+      }
+      break;
+    }
+
+    case 9: { // F6-09: Certificado de tradición y libertad
+      const reqCTL = reqs.find(r => (r.codigoRequisito === "F1-01" || r.codigoRequisito === "F2-04") && r.documentoAsociado?.versionActual);
+      if (reqCTL?.documentoAsociado?.versionActual) {
+        const v = reqCTL.documentoAsociado.versionActual;
+        return {
+          encontrado: true,
+          faseNum: reqCTL.fase || 1,
+          faseNombre: `Fase ${reqCTL.fase || 1}`,
+          nombreArchivoOriginal: v.nombreArchivoOriginal || "Certificado_Tradicion_Libertad.pdf",
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+          mimeType: v.mimeType || "application/pdf",
+          tamanoBytes: v.tamanoBytes,
+          sha256Hash: v.sha256Hash,
+          observacion: "Certificado de Tradición y Libertad heredado de Fase 1/2."
+        };
+      }
+      break;
+    }
+
+    case 10: { // F6-10: Escritura pública
+      const reqEsc = reqs.find(r => r.codigoRequisito === "F2-03" && r.documentoAsociado?.versionActual);
+      if (reqEsc?.documentoAsociado?.versionActual) {
+        const v = reqEsc.documentoAsociado.versionActual;
+        return {
+          encontrado: true,
+          faseNum: 2,
+          faseNombre: "Fase 2 (Recolección Documental)",
+          nombreArchivoOriginal: v.nombreArchivoOriginal || "Escritura_Publica_Predio.pdf",
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+          mimeType: v.mimeType || "application/pdf",
+          tamanoBytes: v.tamanoBytes,
+          sha256Hash: v.sha256Hash,
+          observacion: "Escritura Pública protocolizada traída de Fase 2 (Separada de Tradición y Libertad)."
+        };
+      }
+      break;
+    }
+
+    case 11: { // F6-11: Impuesto predial
+      const reqPred = reqs.find(r => (r.codigoRequisito === "F1-02" || r.codigoRequisito === "F2-05") && r.documentoAsociado?.versionActual);
+      if (reqPred?.documentoAsociado?.versionActual) {
+        const v = reqPred.documentoAsociado.versionActual;
+        return {
+          encontrado: true,
+          faseNum: reqPred.fase || 1,
+          faseNombre: `Fase ${reqPred.fase || 1}`,
+          nombreArchivoOriginal: v.nombreArchivoOriginal || "Impuesto_Predial_Unificado.pdf",
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+          mimeType: v.mimeType || "application/pdf",
+          tamanoBytes: v.tamanoBytes,
+          sha256Hash: v.sha256Hash,
+          observacion: "Comprobante de Impuesto Predial traído de Fase 1/2."
+        };
+      }
+      break;
+    }
+
+    case 12: { // F6-12: Presupuesto (PDF firmado)
+      const pres = f4?.interventoria?.soporte || f4?.presupuestoOficial?.soportePresupuesto;
+      if (pres?.nombreArchivo) {
+        return {
+          encontrado: true,
+          faseNum: 4,
+          faseNombre: "Fase 4 (Documentos Técnicos)",
+          nombreArchivoOriginal: pres.nombreArchivo,
+          soporteUrl: pres.archivoDataUrl || pres.url,
+          mimeType: pres.mimeType || "application/pdf",
+          tamanoBytes: pres.tamanoBytes,
+          sha256Hash: pres.sha256,
+          observacion: "Presupuesto oficial firmado en PDF heredado de Fase 4."
+        };
+      }
+      break;
+    }
+
+    case 13: { // F6-13: Memoria de cantidades
+      const docPlan = tramite?.documentosPlaneacion?.find((d: any) => d.tipo === "memoria_cantidades" || d.itemNumero === 12);
+      if (docPlan?.soportePdf?.nombreArchivo || docPlan?.soporte?.nombreArchivo) {
+        const sop = docPlan.soportePdf || docPlan.soporte;
+        return {
+          encontrado: true,
+          faseNum: 5,
+          faseNombre: "Fase 5 (Trámite Licencia)",
+          nombreArchivoOriginal: sop.nombreArchivo,
+          soporteUrl: sop.archivoDataUrl || sop.url,
+          mimeType: sop.mimeType || "application/pdf",
+          tamanoBytes: sop.tamanoBytes,
+          sha256Hash: sop.sha256,
+          observacion: "Memoria de cantidades de obra traída de Fase 5."
+        };
+      }
+      break;
+    }
+
+    case 15: { // F6-15: Acta y registro fotográfico
+      const reqFoto = reqs.find(r => r.codigoRequisito === "F2-11" && r.documentoAsociado?.versionActual);
+      if (reqFoto?.documentoAsociado?.versionActual) {
+        const v = reqFoto.documentoAsociado.versionActual;
+        return {
+          encontrado: true,
+          faseNum: 2,
+          faseNombre: "Fase 2 (Recolección Documental)",
+          nombreArchivoOriginal: v.nombreArchivoOriginal || "Registro_Fotografico_Predio.pdf",
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+          mimeType: v.mimeType || "image/jpeg",
+          tamanoBytes: v.tamanoBytes,
+          sha256Hash: v.sha256Hash,
+          observacion: "Registro fotográfico y acta de inspección del terreno traída de Fase 2."
+        };
+      }
+      if (f4?.informeVisitaFrancoOsorio?.nombreArchivo) {
+        const inf = f4.informeVisitaFrancoOsorio;
+        return {
+          encontrado: true,
+          faseNum: 4,
+          faseNombre: "Fase 4 (Documentos Técnicos)",
+          nombreArchivoOriginal: inf.nombreArchivo,
+          soporteUrl: inf.archivoDataUrl || inf.url,
+          mimeType: inf.mimeType || "application/pdf",
+          tamanoBytes: inf.tamanoBytes,
+          sha256Hash: inf.sha256,
+          observacion: "Acta e informe de visita pericial técnica heredado de Fase 4."
+        };
+      }
+      break;
+    }
+
+    case 16: { // F6-16: Planos de intervención (Sellados)
+      const docPlan = tramite?.documentosPlaneacion?.find((d: any) => d.tipo === "planos_radicacion" || d.itemNumero === 18);
+      if (docPlan?.soporte?.nombreArchivo) {
+        const sop = docPlan.soporte;
+        return {
+          encontrado: true,
+          faseNum: 5,
+          faseNombre: "Fase 5 (Trámite Licencia)",
+          nombreArchivoOriginal: sop.nombreArchivo,
+          soporteUrl: sop.archivoDataUrl || sop.url,
+          mimeType: sop.mimeType || "application/pdf",
+          tamanoBytes: sop.tamanoBytes,
+          sha256Hash: sop.sha256,
+          observacion: "Planos de intervención con sellos oficiales de radicación traídos de Fase 5."
+        };
+      }
+      break;
+    }
+
+    case 17: { // F6-17: Licencia de construcción (con número de resolución)
+      if (tramite?.soporteLicenciaAprobada?.nombreArchivo) {
+        const sop = tramite.soporteLicenciaAprobada;
+        return {
+          encontrado: true,
+          faseNum: 5,
+          faseNombre: "Fase 5 (Trámite Licencia)",
+          nombreArchivoOriginal: sop.nombreArchivo,
+          soporteUrl: sop.archivoDataUrl || sop.url,
+          mimeType: sop.mimeType || "application/pdf",
+          tamanoBytes: sop.tamanoBytes,
+          sha256Hash: sop.sha256 || sop.sha256Hash,
+          observacion: `Licencia de Construcción (Res. ${tramite.numeroResolucionLicencia || "Aprobada"}) traída de Fase 5.`
+        };
+      }
+      break;
+    }
+
+    case 18: { // F6-18: Planos aprobados
+      const docPlan = tramite?.documentosPlaneacion?.find((d: any) => d.tipo === "planos_radicacion" || d.itemNumero === 18);
+      if (docPlan?.soporte?.nombreArchivo) {
+        const sop = docPlan.soporte;
+        return {
+          encontrado: true,
+          faseNum: 5,
+          faseNombre: "Fase 5 (Trámite Licencia)",
+          nombreArchivoOriginal: sop.nombreArchivo,
+          soporteUrl: sop.archivoDataUrl || sop.url,
+          mimeType: sop.mimeType || "application/pdf",
+          tamanoBytes: sop.tamanoBytes,
+          sha256Hash: sop.sha256,
+          observacion: "Juego completo de planos aprobados (5 especialidades) heredado de Fase 5."
+        };
+      }
+      break;
+    }
+
+    case 19: { // F6-19: Nomenclatura
+      const reqNom = reqs.find(r => r.codigoRequisito === "F2-08" && r.documentoAsociado?.versionActual);
+      if (reqNom?.documentoAsociado?.versionActual) {
+        const v = reqNom.documentoAsociado.versionActual;
+        return {
+          encontrado: true,
+          faseNum: 2,
+          faseNombre: "Fase 2 (Recolección Documental)",
+          nombreArchivoOriginal: v.nombreArchivoOriginal || "Certificado_Nomenclatura.pdf",
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+          mimeType: v.mimeType || "application/pdf",
+          tamanoBytes: v.tamanoBytes,
+          sha256Hash: v.sha256Hash,
+          observacion: "Certificado de nomenclatura expedido por la Alcaldía traído de Fase 2."
+        };
+      }
+      break;
+    }
+
+    case 20: { // F6-20: Certificado de uso de suelo
+      const reqSuelo = reqs.find(r => r.codigoRequisito === "F2-06" && r.documentoAsociado?.versionActual);
+      if (reqSuelo?.documentoAsociado?.versionActual) {
+        const v = reqSuelo.documentoAsociado.versionActual;
+        return {
+          encontrado: true,
+          faseNum: 2,
+          faseNombre: "Fase 2 (Recolección Documental)",
+          nombreArchivoOriginal: v.nombreArchivoOriginal || "Certificado_Uso_Suelo.pdf",
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+          mimeType: v.mimeType || "application/pdf",
+          tamanoBytes: v.tamanoBytes,
+          sha256Hash: v.sha256Hash,
+          observacion: "Concepto de uso del suelo rural traído de Fase 2."
+        };
+      }
+      break;
+    }
+
+    case 21: { // F6-21: Certificado de riesgo
+      const reqRiesgo = reqs.find(r => r.codigoRequisito === "F2-07" && r.documentoAsociado?.versionActual);
+      if (reqRiesgo?.documentoAsociado?.versionActual) {
+        const v = reqRiesgo.documentoAsociado.versionActual;
+        return {
+          encontrado: true,
+          faseNum: 2,
+          faseNombre: "Fase 2 (Recolección Documental)",
+          nombreArchivoOriginal: v.nombreArchivoOriginal || "Certificado_No_Riesgo.pdf",
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+          mimeType: v.mimeType || "application/pdf",
+          tamanoBytes: v.tamanoBytes,
+          sha256Hash: v.sha256Hash,
+          observacion: "Certificado de no riesgo ni amenaza no mitigable traído de Fase 2."
+        };
+      }
+      break;
+    }
+
+    case 23: { // F6-23: Formato de transporte
+      if (f4?.interventoria?.soporte?.nombreArchivo) {
+        const sop = f4.interventoria.soporte;
+        return {
+          encontrado: true,
+          faseNum: 4,
+          faseNombre: "Fase 4 (Documentos Técnicos)",
+          nombreArchivoOriginal: sop.nombreArchivo,
+          soporteUrl: sop.archivoDataUrl || sop.url,
+          mimeType: sop.mimeType || "application/pdf",
+          tamanoBytes: sop.tamanoBytes,
+          sha256Hash: sop.sha256,
+          observacion: "Formato oficial de transporte y acarreo de materiales expedido por interventoría traído de Fase 4."
+        };
+      }
+      break;
+    }
+
+    case 25: { // F6-25: Servicios públicos (Agua y Energía)
+      const reqAgua = reqs.find(r => r.codigoRequisito === "F2-09" && r.documentoAsociado?.versionActual);
+      const reqEnergia = reqs.find(r => r.codigoRequisito === "F2-10" && r.documentoAsociado?.versionActual);
+      if (reqAgua?.documentoAsociado?.versionActual || reqEnergia?.documentoAsociado?.versionActual) {
+        const v = (reqAgua?.documentoAsociado?.versionActual || reqEnergia?.documentoAsociado?.versionActual)!;
+        return {
+          encontrado: true,
+          faseNum: 2,
+          faseNombre: "Fase 2 (Recolección Documental)",
+          nombreArchivoOriginal: v.nombreArchivoOriginal || "Certificado_Servicios_Publicos_Agua_Energia.pdf",
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+          mimeType: v.mimeType || "application/pdf",
+          tamanoBytes: v.tamanoBytes,
+          sha256Hash: v.sha256Hash,
+          observacion: "Certificado de disponibilidad de servicios públicos traído de Fase 2 (Agua y Energía independientes)."
+        };
+      }
+      break;
+    }
+
+    case 26: { // F6-26: Arraigo
+      const reqArr = reqs.find(r => r.codigoRequisito === "F2-02" && r.documentoAsociado?.versionActual);
+      if (reqArr?.documentoAsociado?.versionActual) {
+        const v = reqArr.documentoAsociado.versionActual;
+        return {
+          encontrado: true,
+          faseNum: 2,
+          faseNombre: "Fase 2 (Recolección Documental)",
+          nombreArchivoOriginal: v.nombreArchivoOriginal || "Certificado_Arraigo_Rural.pdf",
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+          mimeType: v.mimeType || "application/pdf",
+          tamanoBytes: v.tamanoBytes,
+          sha256Hash: v.sha256Hash,
+          observacion: "Certificado de arraigo y permanencia en territorio rural traído de Fase 2."
+        };
+      }
+      break;
+    }
+
+    case 27: { // F6-27: Excel presupuesto
+      const docPlan = tramite?.documentosPlaneacion?.find((d: any) => d.tipo === "memoria_cantidades" || d.itemNumero === 12);
+      if (docPlan?.soporteExcel?.nombreArchivo) {
+        const sop = docPlan.soporteExcel;
+        return {
+          encontrado: true,
+          faseNum: 5,
+          faseNombre: "Fase 5 (Trámite Licencia)",
+          nombreArchivoOriginal: sop.nombreArchivo,
+          soporteUrl: sop.archivoDataUrl || sop.url,
+          mimeType: sop.mimeType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          tamanoBytes: sop.tamanoBytes,
+          sha256Hash: sop.sha256,
+          observacion: "Hoja de cálculo nativa Excel (.xlsx) con presupuesto y APU traída de Fase 5."
+        };
+      }
+      break;
+    }
+  }
+
+  // Generic lookup in mockDb.documentos by code or title match
+  const docGen = docs.find(d => {
+    const t = (d.titulo || "").toLowerCase();
+    return t.includes(codigoItem.toLowerCase()) || (CATALOGO_ESTRICTO_28_DOCUMENTOS[numItem - 1]?.nombre && t.includes(CATALOGO_ESTRICTO_28_DOCUMENTOS[numItem - 1].nombre.toLowerCase()));
+  });
+  if (docGen?.versionActual) {
+    const v = docGen.versionActual;
+    return {
+      encontrado: true,
+      faseNum: 2,
+      faseNombre: "Fase Previa",
+      nombreArchivoOriginal: v.nombreArchivoOriginal || docGen.titulo,
+      soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+      mimeType: v.mimeType || "application/pdf",
+      tamanoBytes: v.tamanoBytes,
+      sha256Hash: v.sha256Hash,
+      observacion: `Documento "${docGen.titulo}" traído desde el repositorio general del expediente.`
+    };
+  }
+
+  return { encontrado: false };
+}
+
 /**
  * Construye la lista de los 28 documentos en orden estricto combinando datos heredados de fases previas
  * y documentos específicos registrados en Fase 6.
  */
 export function construirListaOficial28(exp: Expediente): ItemDocumentoOficial28[] {
-  const f4 = exp.gestionFase4 as any;
-  const tramite = exp.tramiteLicencia as any;
   const post = exp.postulacionSubsidio as any;
   const docsActivos = post?.documentosCargaActiva || {};
-  const anexosLibres = post?.anexosLibres || [];
-
-  const anioActual = new Date().getFullYear();
 
   return CATALOGO_ESTRICTO_28_DOCUMENTOS.map((cat) => {
     let estado: EstadoDocFase6 = "No Encontrado";
-    let nombreArchivoOriginal = "";
+    let faseOrigenNum: number | undefined = undefined;
+    let faseOrigenNombre: string | undefined = undefined;
+    let nombreArchivoOriginal: string | undefined = undefined;
     let observacionesValidacion = cat.instruccionEspecial || "";
     let soporteUrl: string | undefined = undefined;
     let mimeType: string | undefined = cat.formatoEsperado === "XLSX" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/pdf";
@@ -314,248 +718,41 @@ export function construirListaOficial28(exp: Expediente): ItemDocumentoOficial28
     let sha256Hash: string | undefined = undefined;
     let advertenciaNorma: string | undefined = undefined;
 
-    // Buscar si existe documento específico subido para este código
+    // 1. Check direct active upload in Phase 6 (documentosCargaActiva)
     const docActivo = docsActivos[cat.codigo];
-    if (docActivo) {
-      estado = "Encontrado";
+    if (docActivo && (docActivo.nombreArchivo || docActivo.archivoDataUrl || docActivo.url)) {
+      estado = docActivo.origen === "zip" ? "Encontrado" : "Añadido en Fase 6";
       nombreArchivoOriginal = docActivo.nombreArchivo || `${cat.codigo}_Documento.pdf`;
       soporteUrl = docActivo.archivoDataUrl || docActivo.url;
       tamanoBytes = docActivo.tamanoBytes || 1024 * 250;
-      sha256Hash = docActivo.sha256Hash || `sha256-${cat.codigo.toLowerCase()}-activo`;
-    }
-
-    // Si aún no está encontrado en cargas activas, verificar datos consolidados en el expediente:
-    switch (cat.numero) {
-      case 1: // Datos del proyecto ANEXO DOC
-        if (estado !== "Encontrado" && (exp.predioVivienda || exp.codigoVisible)) {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `01_Anexo_Datos_Proyecto_${exp.codigoVisible || "VRD"}.pdf`;
-          observacionesValidacion = `Verificado: Datos técnicos del predio ${exp.predioVivienda?.nombreODireccion || "Rural"} y titular ${exp.postulante.nombres}.`;
-        }
-        break;
-
-      case 2: // Formulario de postulación diligenciado
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `02_Formulario_Postulacion_Compensar_${exp.postulante.numeroIdentificacion}.pdf`;
-          observacionesValidacion = `Firmas y huellas validadas de ${exp.postulante.nombres} y grupo familiar.`;
-        }
-        break;
-
-      case 3: // Documentos de identidad del grupo familiar
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          const count = exp.hogar?.integrantes?.length || 1;
-          nombreArchivoOriginal = `03_Cedulas_Identidad_Grupo_Familiar_${count}_Integrantes.pdf`;
-          observacionesValidacion = `Verificado: Cédulas al 150% de ${count} integrante(s) del núcleo familiar.`;
-        }
-        break;
-
-      case 4: // Certificado de ingresos o laboral
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `04_Certificado_Laboral_Ingresos_Hogar.pdf`;
-          observacionesValidacion = "Vigencia verificada < 30 días. Salario e ingresos acordes a tope subsidio.";
-        }
-        break;
-
-      case 5: // Paquete Contador
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `05_Paquete_Contador_Publico_JCC_Antecedentes.pdf`;
-          observacionesValidacion = "Verificado: Antecedentes JCC vigentes, tarjeta profesional y cédula del contador.";
-        }
-        break;
-
-      case 6: // Constancia de independientes
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `06_Constancia_Actividad_Independiente_Rural.pdf`;
-          observacionesValidacion = "Declaración juramentada de actividad agropecuaria y productiva verificada.";
-        }
-        break;
-
-      case 7: // Certificado de ahorro
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `07_Certificado_Ahorro_Programado_Cesantias.pdf`;
-          observacionesValidacion = "Certificación bancaria de inmovilización y recursos de cierre financiero confirmados.";
-        }
-        break;
-
-      case 8: // Documento civil
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `08_Documento_Civil_Matrimonio_Convivencia.pdf`;
-          observacionesValidacion = "Acreditación de estado civil y conformación del hogar verificada ante notaría.";
-        }
-        break;
-
-      case 9: // Certificado de tradición y libertad
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          const mat = exp.predioVivienda?.matriculaInmobiliaria || "156-89421";
-          nombreArchivoOriginal = `09_Certificado_Tradicion_Libertad_${mat.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
-          observacionesValidacion = `Vigencia < 90 días. Matrícula inmobiliaria oficial verificada: ${mat}. Libre de gravámenes.`;
-        }
-        break;
-
-      case 10: // Escritura pública (SEPARADA DE CTL)
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `10_Escritura_Publica_Propiedad_Predio.pdf`;
-          observacionesValidacion = "Escritura pública protocolizada debidamente separada del Certificado de Tradición y Libertad.";
-        }
-        break;
-
-      case 11: // Impuesto predial (año en curso)
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `11_Impuesto_Predial_Vigencia_${anioActual}.pdf`;
-          observacionesValidacion = `Vigencia del año en curso (${anioActual}) confirmada. Paz y salvo al día.`;
-        }
-        break;
-
-      case 12: // Presupuesto (PDF firmado)
-        if (estado !== "Encontrado") {
-          const pres = f4?.presupuestoOficial?.soportePresupuesto;
-          estado = "Encontrado";
-          nombreArchivoOriginal = pres?.nombreArchivo || `12_Presupuesto_Oficial_Obra_Firmado.pdf`;
-          observacionesValidacion = "Presupuesto oficial en PDF firmado por ingeniero/arquitecto con matrícula vigente.";
-          soporteUrl = pres?.archivoDataUrl || pres?.url;
-        }
-        break;
-
-      case 13: // Memoria de cantidades
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `13_Memoria_Calculo_Cantidades_Obra.pdf`;
-          observacionesValidacion = "Cómputos métricos, capítulos constructivos y análisis de cantidades validados.";
-        }
-        break;
-
-      case 14: // Especificaciones técnicas
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `14_Especificaciones_Tecnicas_Constructivas_NSR10.pdf`;
-          observacionesValidacion = "Cartilla de especificaciones técnicas aprobada según normativa NSR-10.";
-        }
-        break;
-
-      case 15: // Acta y registro fotográfico
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `15_Acta_Visita_Registro_Fotografico_Terreno.pdf`;
-          observacionesValidacion = "Registro fotográfico a color con coordenadas, linderos y topografía del lote.";
-        }
-        break;
-
-      case 16: // Planos de intervención (Sellados)
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `16_Planos_Intervencion_Sellados_Curaduria.pdf`;
-          observacionesValidacion = "Sellos de radicación oficial municipal legibles en planimetría de intervención.";
-        }
-        break;
-
-      case 17: // Licencia de construcción (con número de resolución)
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          const resLic = tramite?.numeroResolucionLicencia || "RES-LC-2025-0489";
-          nombreArchivoOriginal = tramite?.soporteLicenciaAprobada?.nombreArchivo || `17_Licencia_Construccion_Resolucion_${resLic}.pdf`;
-          observacionesValidacion = `Acto administrativo en firme verificado: Resolución No. ${resLic}. Ejecutoriada.`;
-          soporteUrl = tramite?.soporteLicenciaAprobada?.archivoDataUrl || tramite?.soporteLicenciaAprobada?.url;
-        }
-        break;
-
-      case 18: // Planos aprobados (5 especialidades)
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `18_Planos_Aprobados_Estructural_Arquitectonico_Implantacion_Electrico_Hidro.pdf`;
-          observacionesValidacion = "Paquete completo verificado: 1. Estructurales, 2. Arquitectónicos, 3. Implantación, 4. Eléctricos, 5. Hidrosanitarios.";
-        }
-        break;
-
-      case 19: // Nomenclatura (año en curso)
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `19_Certificado_Nomenclatura_Alcaldia_${anioActual}.pdf`;
-          observacionesValidacion = `Certificado de nomenclatura expedido por Alcaldía con vigencia del año en curso (${anioActual}).`;
-        }
-        break;
-
-      case 20: // Certificado de uso de suelo (año en curso)
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `20_Certificado_Uso_Suelo_Planeacion_${anioActual}.pdf`;
-          observacionesValidacion = `Concepto favorable de uso del suelo para vivienda rural expedido en el año ${anioActual}.`;
-        }
-        break;
-
-      case 21: // Certificado de riesgo (año en curso)
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `21_Certificado_No_Riesgo_Geologico_Inundacion_${anioActual}.pdf`;
-          observacionesValidacion = `Certificado de predio libre de amenaza o riesgo no mitigable expedido en ${anioActual}.`;
-        }
-        break;
-
-      case 22: // No habitabilidad o demolición (Si aplica)
-        if (estado !== "Encontrado") {
-          // Si el predio es lote sin ruina, marcar "No Aplica" con observación clara
+      sha256Hash = docActivo.sha256Hash || `sha256-${cat.codigo.toLowerCase()}-f6`;
+      observacionesValidacion = docActivo.origen === "zip"
+        ? "Documento identificado y clasificado automáticamente tras descompresión de paquete .ZIP."
+        : "Documento cargado directamente en la Fase 6 de Postulación.";
+    } else {
+      // 2. Search in previous phases (Fases 1, 2, 4, 5)
+      const busqueda = buscarDocumentoEnFasesAnteriores(exp, cat.numero, cat.codigo);
+      if (busqueda.encontrado) {
+        estado = "Traído de Fase Anterior";
+        faseOrigenNum = busqueda.faseNum;
+        faseOrigenNombre = busqueda.faseNombre;
+        nombreArchivoOriginal = busqueda.nombreArchivoOriginal;
+        soporteUrl = busqueda.soporteUrl;
+        mimeType = busqueda.mimeType || mimeType;
+        tamanoBytes = busqueda.tamanoBytes;
+        sha256Hash = busqueda.sha256Hash;
+        observacionesValidacion = busqueda.observacion || `Documento traído automáticamente de ${busqueda.faseNombre || "fases anteriores"}.`;
+      } else {
+        // 3. Check if optional item is not applicable
+        if (cat.numero === 22) { // No habitabilidad / demolición
           estado = "No Aplica";
-          observacionesValidacion = "No aplica: Predio en terreno lote sin estructura preexistente ruinosa.";
+          observacionesValidacion = "No Aplica: El predio no registra estructura ruinosa objeto de sustitución/demolición.";
+        } else {
+          estado = "No Encontrado";
+          nombreArchivoOriginal = undefined;
+          observacionesValidacion = cat.instruccionEspecial || "Documento pendiente de carga o asignación.";
         }
-        break;
-
-      case 23: // Formato de transporte (interventoría)
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `23_Formato_Transporte_Acarreo_Interventoria_VRD.pdf`;
-          observacionesValidacion = "Formato oficial de transporte y acarreo de materiales expedido por nuestra interventoría.";
-        }
-        break;
-
-      case 24: // Contrato
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `24_Contrato_Obra_Mandato_Postulacion_${exp.postulante.primerApellido || "Hogar"}.pdf`;
-          observacionesValidacion = "Contrato de obra y mandato suscrito entre el hogar postulante y el operador constructor.";
-        }
-        break;
-
-      case 25: // Servicios públicos (vigencia < 90 días, Agua y Energía separados)
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `25_Servicios_Publicos_Agua_y_Energia_Separados.pdf`;
-          observacionesValidacion = "Vigencia < 90 días verificada. Soportes de Agua y Energía presentados en carpetas/archivos independientes.";
-        }
-        break;
-
-      case 26: // Arraigo (si lo requiere)
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `26_Certificado_Arraigo_Residencia_Rural.pdf`;
-          observacionesValidacion = "Certificado de arraigo rural y residencia continua emitido por la Junta de Acción Comunal.";
-        }
-        break;
-
-      case 27: // Excel presupuesto
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `27_Presupuesto_Oficial_APU_${exp.codigoVisible || "VRD"}.xlsx`;
-          mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-          observacionesValidacion = "Hoja de cálculo Excel (.xlsx) con fórmulas nativas de APU, AIU y presupuesto general.";
-        }
-        break;
-
-      case 28: // Anexo CONSTANCIA
-        if (estado !== "Encontrado") {
-          estado = "Encontrado";
-          nombreArchivoOriginal = `28_Constancia_Institucional_Radicacion_Compensar.pdf`;
-          observacionesValidacion = "Constancia formal institucional de radicación y verificación documental expedida.";
-        }
-        break;
+      }
     }
 
     return {
@@ -567,7 +764,9 @@ export function construirListaOficial28(exp: Expediente): ItemDocumentoOficial28
       descripcion: cat.descripcion,
       instruccionEspecial: cat.instruccionEspecial,
       estado,
-      nombreArchivoOriginal: nombreArchivoOriginal || undefined,
+      faseOrigenNum,
+      faseOrigenNombre,
+      nombreArchivoOriginal,
       observacionesValidacion,
       soporteUrl,
       mimeType,
