@@ -1,15 +1,15 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import {
   X,
   FileText,
   ZoomIn,
   ZoomOut,
+  RotateCw,
   Download,
   ShieldCheck,
   Camera,
   ChevronLeft,
   ChevronRight,
-  ImageIcon,
   ExternalLink
 } from "lucide-react";
 import { FotoRegistro } from "../types";
@@ -41,10 +41,11 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
   fotoInicialIndex = 0,
   onClose
 }) => {
-  const [zoom, setZoom] = React.useState<number>(100);
-  const [fotoActivaIndex, setFotoActivaIndex] = React.useState<number>(fotoInicialIndex);
+  const [zoom, setZoom] = useState<number>(100);
+  const [rotation, setRotation] = useState<number>(0);
+  const [fotoActivaIndex, setFotoActivaIndex] = useState<number>(fotoInicialIndex);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (typeof fotoInicialIndex === "number" && fotoInicialIndex >= 0) {
       setFotoActivaIndex(fotoInicialIndex);
     }
@@ -56,10 +57,15 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
   const esPdf = !tieneGaleria && (mimeType.toLowerCase().includes("pdf") || nombreArchivo.toLowerCase().endsWith(".pdf"));
   const esImagen = tieneGaleria || mimeType.toLowerCase().startsWith("image/") || /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(nombreArchivo);
 
+  const handleRotate = () => {
+    setRotation((prev) => (prev + 90) % 360);
+  };
+
   const handlePrevFoto = () => {
     if (tieneGaleria) {
       setFotoActivaIndex((prev) => (prev > 0 ? prev - 1 : fotos.length - 1));
       setZoom(100);
+      setRotation(0);
     }
   };
 
@@ -67,11 +73,12 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
     if (tieneGaleria) {
       setFotoActivaIndex((prev) => (prev < fotos.length - 1 ? prev + 1 : 0));
       setZoom(100);
+      setRotation(0);
     }
   };
 
   // Escuchar flechas del teclado y escape
-  React.useEffect(() => {
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "ArrowLeft") handlePrevFoto();
       if (e.key === "ArrowRight") handleNextFoto();
@@ -93,6 +100,7 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
 
   const urlBase = fotoActual ? fotoActual.url : archivoDataUrl;
   const urlVisualizar = aplicarParametroAntiCache(urlBase);
+  const pdfIframeUrl = esPdf && urlVisualizar ? (urlVisualizar.includes("#") ? urlVisualizar : `${urlVisualizar}#toolbar=1&navpanes=0&view=FitH`) : urlVisualizar;
   const nombreDescargar = fotoActual ? fotoActual.nombre : nombreArchivo;
 
   return (
@@ -134,18 +142,18 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                 target="_blank"
                 rel="noopener noreferrer"
                 className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors shadow-xs"
-                title="Descargar imagen/archivo"
+                title="Descargar archivo"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Descargar</span>
               </a>
             )}
-            {esImagen && (
+            {(esImagen || esPdf) && (
               <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1 text-xs text-slate-600 space-x-1">
                 <button
                   type="button"
                   onClick={() => setZoom(Math.max(50, zoom - 25))}
-                  className="p-1 hover:bg-slate-100 rounded"
+                  className="p-1 hover:bg-slate-100 rounded cursor-pointer"
                   title="Alejar"
                 >
                   <ZoomOut className="w-4 h-4" />
@@ -154,10 +162,18 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setZoom(Math.min(200, zoom + 25))}
-                  className="p-1 hover:bg-slate-100 rounded"
+                  className="p-1 hover:bg-slate-100 rounded cursor-pointer"
                   title="Acercar"
                 >
                   <ZoomIn className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRotate}
+                  className="p-1 hover:bg-slate-100 rounded text-slate-700 cursor-pointer border-l border-slate-200 pl-1.5 ml-0.5"
+                  title="Rotar 90°"
+                >
+                  <RotateCw className="w-4 h-4" />
                 </button>
               </div>
             )}
@@ -177,23 +193,33 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
           {urlVisualizar ? (
             esPdf ? (
               <div className="w-full h-full rounded-lg overflow-hidden border border-slate-300 shadow-sm bg-white flex flex-col relative">
-                <div className="bg-slate-100 px-4 py-1.5 border-b border-slate-200 flex items-center justify-between text-xs text-slate-600 shrink-0">
+                <div className="bg-slate-100 px-4 py-1.5 border-b border-slate-200 flex items-center justify-between text-xs text-slate-600 shrink-0 z-10">
                   <span className="truncate font-medium">{nombreArchivo}</span>
                   <a
                     href={urlVisualizar}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-blue-600 hover:text-blue-800 font-semibold flex items-center space-x-1"
+                    className="text-blue-600 hover:text-blue-800 font-semibold flex items-center space-x-1 cursor-pointer"
                   >
                     <span>Abrir en ventana independiente</span>
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
-                <iframe
-                  src={urlVisualizar}
-                  title={nombreArchivo}
-                  className="w-full flex-1 border-0"
-                />
+                <div className="w-full flex-1 overflow-auto flex items-center justify-center bg-slate-200 p-2">
+                  <div
+                    className="w-full h-full transition-transform duration-200 origin-center"
+                    style={{
+                      transform: `scale(${zoom / 100}) rotate(${rotation}deg)`,
+                      minHeight: rotation % 180 !== 0 ? "80vh" : "100%"
+                    }}
+                  >
+                    <iframe
+                      src={pdfIframeUrl}
+                      title={nombreArchivo}
+                      className="w-full h-full border-0 rounded bg-white"
+                    />
+                  </div>
+                </div>
               </div>
             ) : esImagen ? (
               <div className="relative w-full h-full flex items-center justify-center overflow-auto p-4 select-none">
@@ -201,7 +227,7 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                   src={urlVisualizar}
                   alt={nombreDescargar}
                   className="max-h-full max-w-full object-contain rounded-lg shadow-2xl border border-slate-700 transition-transform duration-150"
-                  style={{ transform: `scale(${zoom / 100})`, transformOrigin: "center center" }}
+                  style={{ transform: `scale(${zoom / 100}) rotate(${rotation}deg)`, transformOrigin: "center center" }}
                 />
 
                 {/* Controles flotantes de navegación si hay múltiples fotos */}
@@ -246,7 +272,7 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                 <a
                   href={urlVisualizar}
                   download={nombreArchivo}
-                  className="inline-flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors"
+                  className="inline-flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
                 >
                   <Download className="w-4 h-4" />
                   <span>Descargar y abrir en su equipo</span>
@@ -296,6 +322,7 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                 onClick={() => {
                   setFotoActivaIndex(index);
                   setZoom(100);
+                  setRotation(0);
                 }}
                 className={`relative shrink-0 rounded-lg overflow-hidden border-2 transition-all p-0.5 cursor-pointer ${
                   fotoActivaIndex === index
@@ -331,3 +358,4 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
     </div>
   );
 };
+

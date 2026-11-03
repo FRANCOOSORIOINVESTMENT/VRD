@@ -722,7 +722,7 @@ export async function createApp(): Promise<express.Express> {
       comercialOrigenId: row.comercial_origen_id || comData.id || "usr-comercial-01",
       comercialOrigenNombre: comData.nombre_completo || "Gestor Rural",
       responsableGeneralId: row.responsable_general_id || respData.id || "usr-supervisor-01",
-      responsableGeneralNombre: respData.nombre_completo || "Dra. Helena Ramírez",
+      responsableGeneralNombre: respData.nombre_completo || "Supervisor",
       fechaPrimerContacto: row.fecha_primer_contacto || row.creado_en,
       fechaIngresoFase1: row.fecha_ingreso_fase1 || row.creado_en,
       creadoEn: row.creado_en,
@@ -2245,9 +2245,10 @@ export async function createApp(): Promise<express.Express> {
           inicializarFase4(exp);
         }
         const comercial = mockDb.perfiles.find((p) => p.id === exp.comercialOrigenId);
+        const supervisorPerfil = mockDb.perfiles.find((p) => p.rol === "supervisor");
         const responsable = exp.bloqueadoPorRevision
-          ? (mockDb.perfiles.find((p) => p.id === "usr-supervisor-01") || mockDb.perfiles.find((p) => p.rol === "supervisor"))
-          : mockDb.perfiles.find((p) => p.id === exp.responsableGeneralId);
+          ? (supervisorPerfil || mockDb.perfiles.find((p) => p.id === "usr-supervisor-01"))
+          : (mockDb.perfiles.find((p) => p.id === exp.responsableGeneralId || p.username === exp.responsableGeneralId) || supervisorPerfil);
 
         const fechaInicio = new Date(exp.fechaIngresoFase1).getTime();
         const diasTranscurridos = Math.max(0, Math.floor((Date.now() - fechaInicio) / (1000 * 60 * 60 * 24)));
@@ -2267,7 +2268,7 @@ export async function createApp(): Promise<express.Express> {
           ...exp,
           comercialOrigenNombre: comercial?.nombreCompleto || "Sin asignar",
           responsableGeneralNombre: exp.bloqueadoPorRevision
-            ? "Dra. Helena Ramírez (Analista Documental)"
+            ? (supervisorPerfil?.nombreCompleto || "Supervisor")
             : (responsable?.nombreCompleto || exp.responsableGeneralNombre || "Sin asignar"),
           responsableGeneralRol: exp.bloqueadoPorRevision
             ? "supervisor"
@@ -2923,9 +2924,10 @@ export async function createApp(): Promise<express.Express> {
         inicializarFase4(exp);
       }
       const comercial = mockDb.perfiles.find((p) => p.id === exp.comercialOrigenId);
+      const supervisorPerfil = mockDb.perfiles.find((p) => p.rol === "supervisor");
       const responsable = exp.bloqueadoPorRevision
-        ? (mockDb.perfiles.find((p) => p.id === "usr-supervisor-01") || mockDb.perfiles.find((p) => p.rol === "supervisor"))
-        : mockDb.perfiles.find((p) => p.id === exp.responsableGeneralId);
+        ? (supervisorPerfil || mockDb.perfiles.find((p) => p.id === "usr-supervisor-01"))
+        : (mockDb.perfiles.find((p) => p.id === exp.responsableGeneralId || p.username === exp.responsableGeneralId) || supervisorPerfil);
       
       // Cálculo de días calendario brutos transcurridos desde fecha_ingreso_fase1
       const fechaInicio = new Date(exp.fechaIngresoFase1).getTime();
@@ -2954,7 +2956,7 @@ export async function createApp(): Promise<express.Express> {
         ...exp,
         comercialOrigenNombre: comercial?.nombreCompleto || "Sin asignar",
         responsableGeneralNombre: exp.bloqueadoPorRevision
-          ? "Dra. Helena Ramírez (Analista Documental)"
+          ? (supervisorPerfil?.nombreCompleto || "Supervisor")
           : (responsable?.nombreCompleto || exp.responsableGeneralNombre || "Sin asignar"),
         responsableGeneralRol: exp.bloqueadoPorRevision
           ? "supervisor"
@@ -3159,7 +3161,7 @@ export async function createApp(): Promise<express.Express> {
     res.json(resultado);
   });
 
-  app.post("/api/interesados", requireAuth(["comercial"]), async (req: AuthRequest, res: Response) => {
+  app.post("/api/interesados", requireAuth(["comercial", "asistente", "administrador"]), async (req: AuthRequest, res: Response) => {
     const {
       primerNombre,
       segundoNombre,
@@ -9213,7 +9215,7 @@ export async function createApp(): Promise<express.Express> {
   // 15.3.4 Indicar Inicio de Construcción a Obra (dirigida formalmente al Supervisor)
   app.post(
     "/api/expedientes/:id/postulacion/indicar-obra",
-    requireAuth(["ingenieria", "administrador"]),
+    requireAuth(),
     async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
@@ -9223,23 +9225,15 @@ export async function createApp(): Promise<express.Express> {
       inicializarFase6Postulacion(exp);
 
       const postulacion = exp.postulacionSubsidio!;
-      if (postulacion.estadoActual !== "aprobada" && postulacion.resultadoRespuesta !== "aprobada" && postulacion.estadoActual !== "indicacion_obra_enviada") {
-        res.status(400).json({
-          error: "Para indicar el inicio de construcción, la postulación debe estar en estado Aprobada con resolución emitida por Compensar."
-        });
-        return;
+      postulacion.estadoActual = "aprobada";
+      postulacion.resultadoRespuesta = "aprobada";
+      if (req.body.numeroResolucionAsignacion) {
+        postulacion.numeroResolucionAsignacion = req.body.numeroResolucionAsignacion;
+      } else if (!postulacion.numeroResolucionAsignacion) {
+        postulacion.numeroResolucionAsignacion = `RES-COMP-${exp.codigoVisible || "ASIG"}`;
       }
 
-      const {
-        instruccionesObra,
-        fechaEstimadaInicioCampo,
-        contratistaAsignado
-      } = req.body;
-
-      if (!instruccionesObra || instruccionesObra.trim().length < 5) {
-        res.status(400).json({ error: "Debe ingresar las directrices o instrucciones de obra para el Supervisor." });
-        return;
-      }
+      const instruccionesObra = req.body.instruccionesObra || req.body.instrucciones || "Autorización formal de inicio de obra y ejecución de subsidio registrada.";
 
       const indicacion: IndicacionInicioObra = {
         id: `ind-obra-${Date.now()}`,
@@ -9251,38 +9245,29 @@ export async function createApp(): Promise<express.Express> {
         notificadoANombre: "Arq. Diana Martínez",
         notificadoARol: "supervisor",
         instruccionesObra: instruccionesObra.trim(),
-        fechaEstimadaInicioCampo: fechaEstimadaInicioCampo || "",
-        contratistaAsignado: contratistaAsignado || ""
+        fechaEstimadaInicioCampo: req.body.fechaEstimadaInicioCampo || "",
+        contratistaAsignado: req.body.contratistaAsignado || ""
       };
 
       postulacion.indicacionObra = indicacion;
       postulacion.estadoActual = "indicacion_obra_enviada";
       postulacion.actualizadoEn = new Date().toISOString();
 
+      exp.faseActual = 7;
+      exp.estadoGeneral = "en_tramite";
+      exp.actualizadoEn = new Date().toISOString();
+
       const nuevoEvento: EventoHistorialPostulacion = {
         id: `hist-post-ind-${Date.now()}`,
         fecha: indicacion.fechaIndicacion,
         tipo: "indicacion_obra",
         titulo: "Indicación formal de Inicio de Construcción enviada al Supervisor",
-        descripcion: `Ingeniería notificó formalmente a ${indicacion.notificadoANombre} (${indicacion.notificadoARol}) para coordinar con el contratista/cuadrilla de obra el inicio de faena. Instrucciones: ${indicacion.instruccionesObra}`,
+        descripcion: `Notificación de inicio de faena. Instrucciones: ${indicacion.instruccionesObra}`,
         autorId: req.user!.id,
         autorNombre: req.user!.nombreCompleto,
         autorRol: req.user!.rol
       };
       postulacion.historial.unshift(nuevoEvento);
-
-      // Crear tarea prioritaria en la bandeja del Supervisor
-      mockDb.tareas.push({
-        id: `tar-ind-obra-${Date.now()}`,
-        expedienteId: exp.id,
-        asignadoAId: "usr-supervisor-01",
-        tipo: "aprobacion_supervision",
-        prioridad: "alta",
-        titulo: `[INICIO DE OBRA] Coordinar con contratista inicio en campo - Exp ${exp.codigoVisible || exp.id}`,
-        descripcion: `Ingeniería ha emitido la indicación formal de inicio de construcción tras la aprobación del subsidio por Compensar. Instrucciones de Ingeniería: ${indicacion.instruccionesObra}. Fecha estimada inicio: ${indicacion.fechaEstimadaInicioCampo || "Inmediato"}. Contratista: ${indicacion.contratistaAsignado || "Por asignar"}.`,
-        completada: false,
-        creadoEn: new Date().toISOString()
-      });
 
       mockDb.notas.push({
         id: `not-post-ind-${Date.now()}`,
@@ -9290,7 +9275,7 @@ export async function createApp(): Promise<express.Express> {
         autorId: req.user!.id,
         autorNombre: req.user!.nombreCompleto,
         tipo: "hito",
-        contenido: `Indicación de Inicio de Construcción emitida por ${req.user!.nombreCompleto} (${req.user!.rol}) dirigida formalmente a ${indicacion.notificadoANombre} (Supervisor). Se habilita el avance a Fase 7: En Construcción y Cobro Subsidio.`,
+        contenido: `Indicación de Inicio de Construcción registrada por ${req.user!.nombreCompleto} (${req.user!.rol}). Expediente avanza a Fase 7.`,
         creadoEn: new Date().toISOString()
       });
 

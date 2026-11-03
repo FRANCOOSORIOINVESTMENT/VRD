@@ -522,10 +522,23 @@ export default function App() {
     }
   }, [currentUser, modalAprobarFase1]);
 
-  // Carga de detalle cuando cambia el ID seleccionado
+  // Carga de detalle cuando cambia el ID seleccionado con limpieza estricta de estado (previene fuga entre expedientes)
   useEffect(() => {
     if (expedienteSeleccionadoId && currentUser) {
+      setDetalleExp(null);
+      setModalRevisarReq(null);
+      setFormRevision({ resultado: "ACEPTADO", observacion: "" });
+      setTextoDevolucionFase1("");
+      setTextoDevolucionFase2("");
+      setModalSubirArchivoReq(null);
+      setArchivoSeleccionadoSubir(null);
+      setFotosParaRegistro([]);
+      setNuevaNotaTexto("");
+      setPopoverDocInteresadoId(null);
+      setNuevoDocNombre("");
       cargarDetalleExpediente(expedienteSeleccionadoId);
+    } else {
+      setDetalleExp(null);
     }
   }, [expedienteSeleccionadoId, currentUser]);
 
@@ -2506,17 +2519,34 @@ export default function App() {
     }
   };
 
-  // Lista dinámica de responsables para el selector de filtro (Cambio 7)
-  const listaResponsables = Array.from(
-    new Set([
-      "Carlos Mendoza (Gestor Rural)",
-      "Laura Castillo (Gestor Documental)",
-      "Dra. Helena Ramírez (Analista Documental)",
-      "Arq. Andrés Morales (Ingeniería y Diseños)",
-      "Ing. Claudia Vega (Ingeniería y Obra)",
-      ...expedientes.map((e) => formatearNombreUsuario(e.responsableGeneralNombre)).filter(Boolean)
-    ])
-  );
+  // Lista dinámicamente construida de responsables desde perfiles_usuario (todosUsuarios) y expedientes
+  const listaResponsables = useMemo(() => {
+    const nombresSet = new Set<string>();
+
+    // 1. Inclusión dinámica desde la tabla perfiles_usuario (todosUsuarios)
+    if (Array.isArray(todosUsuarios) && todosUsuarios.length > 0) {
+      todosUsuarios
+        .filter((u) => u.activo !== false)
+        .forEach((u) => {
+          if (u.nombreCompleto) {
+            nombresSet.add(formatearNombreUsuario(u.nombreCompleto));
+          }
+        });
+    }
+
+    // 2. Inclusión desde los expedientes cargados resolviendo perfiles dinámicos
+    expedientes.forEach((e) => {
+      const respUser = todosUsuarios.find(
+        (u) => u.id === e.responsableGeneralId || u.username === e.responsableGeneralId
+      );
+      const nombreEfectivo = respUser?.nombreCompleto || e.responsableGeneralNombre;
+      if (nombreEfectivo) {
+        nombresSet.add(formatearNombreUsuario(nombreEfectivo));
+      }
+    });
+
+    return Array.from(nombresSet).sort();
+  }, [todosUsuarios, expedientes]);
 
   // Contadores para pestañas de expedientes (Activos vs Retirados / Histórico)
   const conteoExpedientesActivos = useMemo(() => {
@@ -2527,7 +2557,7 @@ export default function App() {
     return expedientes.filter((e) => e.estadoGeneral === "salida_definitiva").length;
   }, [expedientes]);
 
-  // Filtrado de expedientes (Cambio 1: Filtro Fase, Cambio 7: Filtro Responsable y Tiempo, Flujo de Retiro)
+  // Filtrado de expedientes (Filtro Fase, Filtro Responsable dinámico y Tiempo)
   const expedientesFiltrados = expedientes.filter((exp) => {
     // 1. Filtrado estricto por pestaña de navegación: Activos excluye 'salida_definitiva'
     if (tabExpedientes === "activos" && exp.estadoGeneral === "salida_definitiva") {
@@ -2557,10 +2587,23 @@ export default function App() {
     const coincideMunicipio = !filtroMunicipio || exp.predioVivienda.municipioCodigo === filtroMunicipio;
     const coincideEstado = !filtroEstado || exp.estadoGeneral === filtroEstado;
     const coincideFase = !filtroFase || String(exp.faseActual) === filtroFase;
+
+    // Resolución dinámica de responsable desde todosUsuarios (perfiles_usuario)
+    const respUser = todosUsuarios.find(
+      (u) => u.id === exp.responsableGeneralId || u.username === exp.responsableGeneralId
+    );
+    const supervisorUser = todosUsuarios.find((u) => u.rol === "supervisor");
+    const nombreRespEfectivo = (exp.bloqueadoPorRevision && supervisorUser)
+      ? supervisorUser.nombreCompleto
+      : (respUser?.nombreCompleto || exp.responsableGeneralNombre || "");
+
     const coincideResponsable =
       !filtroResponsable ||
       exp.responsableGeneralNombre === filtroResponsable ||
-      exp.responsableGeneralId === filtroResponsable;
+      exp.responsableGeneralId === filtroResponsable ||
+      formatearNombreUsuario(exp.responsableGeneralNombre) === filtroResponsable ||
+      formatearNombreUsuario(nombreRespEfectivo) === filtroResponsable ||
+      nombreRespEfectivo === filtroResponsable;
 
     let coincideTiempo = true;
     const dias = exp.diasTranscurridos ?? 0;
@@ -3466,10 +3509,29 @@ export default function App() {
                             )}
                           </td>
                           <td className="px-4 py-3">
-                            <div className="font-medium text-slate-800">{formatearNombreUsuario(exp.responsableGeneralNombre)}</div>
-                            <div className="text-[10px] text-slate-400">
-                              Rol: {formatearRol(exp.responsableGeneralRol || "comercial")}
-                            </div>
+                            {(() => {
+                              // Extracción dinámica del nombre_completo y rol directamente de perfiles_usuario (todosUsuarios) por ID
+                              let respUser = todosUsuarios.find(
+                                (u) => u.id === exp.responsableGeneralId || u.username === exp.responsableGeneralId
+                              );
+                              if (!respUser || exp.bloqueadoPorRevision) {
+                                const supervisorUser = todosUsuarios.find((u) => u.rol === "supervisor");
+                                if (supervisorUser) respUser = supervisorUser;
+                              }
+                              const nombreMostrar = respUser?.nombreCompleto || exp.responsableGeneralNombre || "Sin asignar";
+                              const rolMostrar = respUser?.rol || exp.responsableGeneralRol || "supervisor";
+
+                              return (
+                                <>
+                                  <div className="font-medium text-slate-800">
+                                    {formatearNombreUsuario(nombreMostrar)}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400">
+                                    Rol: {formatearRol(rolMostrar)}
+                                  </div>
+                                </>
+                              );
+                            })()}
                           </td>
                           <td className="px-4 py-3 font-medium">
                             {exp.diasTranscurridos > 90 ? (
@@ -3559,16 +3621,16 @@ export default function App() {
                   <Printer className="w-4 h-4 text-slate-600" />
                   <span>Imprimir Vista / PDF</span>
                 </button>
-                {currentUser.rol === "comercial" && (
-                  <button
-                    type="button"
-                    onClick={() => setModalNuevoInteresado(true)}
-                    className="inline-flex items-center space-x-2 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer"
-                  >
-                    <PlusCircle className="w-4 h-4" />
-                    <span>Registrar Hogar Interesado</span>
-                  </button>
-                )}
+                  {(currentUser.rol === "comercial" || currentUser.rol === "asistente" || currentUser.rol === "administrador") && (
+                    <button
+                      type="button"
+                      onClick={() => setModalNuevoInteresado(true)}
+                      className="inline-flex items-center space-x-2 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer"
+                    >
+                      <PlusCircle className="w-4 h-4" />
+                      <span>Registrar Hogar Interesado</span>
+                    </button>
+                  )}
               </div>
             </div>
 
@@ -3717,7 +3779,7 @@ export default function App() {
                           : "No se encontraron hogares interesados con los criterios de búsqueda y filtros seleccionados."}
                       </p>
                     </div>
-                    {currentUser.rol === "comercial" && (
+                    {(currentUser.rol === "comercial" || currentUser.rol === "asistente" || currentUser.rol === "administrador") && (
                       <button
                         type="button"
                         onClick={() => setModalNuevoInteresado(true)}
@@ -3968,7 +4030,7 @@ export default function App() {
                                       <span>Gestionar Vencimiento</span>
                                     </button>
                                   ) : (
-                                    currentUser.rol === "comercial" && (
+                                    (currentUser.rol === "comercial" || currentUser.rol === "asistente" || currentUser.rol === "administrador") && (
                                       <button
                                         type="button"
                                         onClick={() => handleAbrirConversion(item)}
@@ -4969,30 +5031,56 @@ export default function App() {
                                 )}
 
                                 {/* Observación activa si existe */}
-                                {(req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.ultimaRevision?.observacion) || Boolean(req.observaciones)) && (
-                                  <div className="mt-2.5 p-3 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-900 shadow-2xs">
-                                    <div className="flex items-center justify-between gap-2 mb-1">
-                                      <div className="flex items-center space-x-1.5 font-bold text-amber-900">
-                                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                                        <span>Observación de Análisis Documental:</span>
+                                {(() => {
+                                  const esAceptado = req.estado === "aceptado";
+                                  const obsTexto = (req.ultimaRevision?.observacion || req.observaciones || "").trim();
+                                  const esObsTrivial = !obsTexto || ["ok", "ok.", "aceptado", "cumple", "aprobado", "sin observaciones", "conforme", "correcto", "revisado"].includes(obsTexto.toLowerCase());
+
+                                  if (esAceptado && esObsTrivial) return null;
+
+                                  const tieneObsActiva = req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || (obsTexto && !esObsTrivial);
+
+                                  if (!tieneObsActiva) return null;
+
+                                  if (esAceptado) {
+                                    return (
+                                      <div className="mt-2.5 p-3 bg-emerald-50/90 border border-emerald-200 rounded-lg text-xs text-emerald-900 shadow-2xs">
+                                        <div className="flex items-center justify-between gap-2 mb-1">
+                                          <div className="flex items-center space-x-1.5 font-bold text-emerald-900">
+                                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                                            <span>Nota / Observación Registrada:</span>
+                                          </div>
+                                        </div>
+                                        <p className="text-slate-700 pl-5 leading-relaxed">{obsTexto}</p>
                                       </div>
-                                      {(currentUser.rol === "comercial" || currentUser.rol === "asistente" || currentUser.rol === "administrador") && (
-                                        <button
-                                          type="button"
-                                          onClick={() => handleAbrirModalSubir(req)}
-                                          className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold transition-colors cursor-pointer shrink-0 shadow-2xs"
-                                          title="Subir archivo corregido para subsanar esta observación"
-                                        >
-                                          <Upload className="w-3 h-3" />
-                                          <span>Subir Corrección</span>
-                                        </button>
-                                      )}
+                                    );
+                                  }
+
+                                  return (
+                                    <div className="mt-2.5 p-3 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-900 shadow-2xs">
+                                      <div className="flex items-center justify-between gap-2 mb-1">
+                                        <div className="flex items-center space-x-1.5 font-bold text-amber-900">
+                                          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                                          <span>Observación de Análisis Documental:</span>
+                                        </div>
+                                        {(currentUser.rol === "comercial" || currentUser.rol === "asistente" || currentUser.rol === "administrador") && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleAbrirModalSubir(req)}
+                                            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold transition-colors cursor-pointer shrink-0 shadow-2xs"
+                                            title="Subir archivo corregido para subsanar esta observación"
+                                          >
+                                            <Upload className="w-3 h-3" />
+                                            <span>Subir Corrección</span>
+                                          </button>
+                                        )}
+                                      </div>
+                                      <p className="text-slate-700 pl-5 leading-relaxed">
+                                        {obsTexto || "Por favor subsanar la observación indicada por el supervisor."}
+                                      </p>
                                     </div>
-                                    <p className="text-slate-700 pl-5 leading-relaxed">
-                                      {req.ultimaRevision?.observacion || req.observaciones || "Por favor subsanar la observación indicada por el supervisor."}
-                                    </p>
-                                  </div>
-                                )}
+                                  );
+                                })()}
                               </div>
                             </div>
 
@@ -5420,30 +5508,56 @@ export default function App() {
                                       )}
 
                                       {/* Observación activa si existe */}
-                                      {(req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) && (
-                                        <div className="mt-2.5 p-3 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-900 shadow-2xs">
-                                          <div className="flex items-center justify-between gap-2 mb-1">
-                                            <div className="flex items-center space-x-1.5 font-bold text-amber-900">
-                                              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                                              <span>Observación de Análisis Documental:</span>
+                                      {(() => {
+                                        const esAceptado = req.estado === "aceptado";
+                                        const obsTexto = (req.ultimaRevision?.observacion || req.observaciones || "").trim();
+                                        const esObsTrivial = !obsTexto || ["ok", "ok.", "aceptado", "cumple", "aprobado", "sin observaciones", "conforme", "correcto", "revisado"].includes(obsTexto.toLowerCase());
+
+                                        if (esAceptado && esObsTrivial) return null;
+
+                                        const tieneObsActiva = req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || (obsTexto && !esObsTrivial);
+
+                                        if (!tieneObsActiva) return null;
+
+                                        if (esAceptado) {
+                                          return (
+                                            <div className="mt-2.5 p-3 bg-emerald-50/90 border border-emerald-200 rounded-lg text-xs text-emerald-900 shadow-2xs">
+                                              <div className="flex items-center justify-between gap-2 mb-1">
+                                                <div className="flex items-center space-x-1.5 font-bold text-emerald-900">
+                                                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                                                  <span>Nota / Observación Registrada:</span>
+                                                </div>
+                                              </div>
+                                              <p className="text-slate-700 pl-5 leading-relaxed">{obsTexto}</p>
                                             </div>
-                                            {(currentUser.rol === "asistente" || currentUser.rol === "comercial" || currentUser.rol === "administrador") && (
-                                              <button
-                                                type="button"
-                                                onClick={() => handleAbrirModalSubir(req)}
-                                                className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold transition-colors cursor-pointer shrink-0 shadow-2xs"
-                                                title="Subir archivo corregido para subsanar esta observación"
-                                              >
-                                                <Upload className="w-3 h-3" />
-                                                <span>Subir Corrección</span>
-                                              </button>
-                                            )}
+                                          );
+                                        }
+
+                                        return (
+                                          <div className="mt-2.5 p-3 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-900 shadow-2xs">
+                                            <div className="flex items-center justify-between gap-2 mb-1">
+                                              <div className="flex items-center space-x-1.5 font-bold text-amber-900">
+                                                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                                                <span>Observación de Análisis Documental:</span>
+                                              </div>
+                                              {(currentUser.rol === "asistente" || currentUser.rol === "comercial" || currentUser.rol === "administrador") && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleAbrirModalSubir(req)}
+                                                  className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold transition-colors cursor-pointer shrink-0 shadow-2xs"
+                                                  title="Subir archivo corregido para subsanar esta observación"
+                                                >
+                                                  <Upload className="w-3 h-3" />
+                                                  <span>Subir Corrección</span>
+                                                </button>
+                                              )}
+                                            </div>
+                                            <p className="text-slate-700 pl-5 leading-relaxed">
+                                              {obsTexto || "Por favor subsanar la observación indicada por el supervisor."}
+                                            </p>
                                           </div>
-                                          <p className="text-slate-700 pl-5 leading-relaxed">
-                                            {req.ultimaRevision?.observacion || req.observaciones || "Por favor subsanar la observación indicada por el supervisor."}
-                                          </p>
-                                        </div>
-                                      )}
+                                        );
+                                      })()}
                                     </div>
                                   </div>
 

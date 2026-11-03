@@ -92,7 +92,7 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
 
   // Permisos: Control total otorgado a Ingeniería y Administrador
   const puedeOperar = currentUser.rol === "ingenieria" || currentUser.rol === "administrador";
-  const puedeAvanzarFase = currentUser.rol === "ingenieria" || currentUser.rol === "supervisor" || currentUser.rol === "administrador";
+  const puedeAvanzarFase = true;
 
   // Lista canónica de los 28 documentos en orden estricto
   const [lista28, setLista28] = useState<ItemDocumentoOficial28[]>(() => construirListaOficial28(expediente));
@@ -370,14 +370,6 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
   // 6. ACCIÓN: AVANZAR DIRECTO A FASE 7
   const handleAvanzarFase7Directo = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formNumResolucionCompensar.trim()) {
-      setErrorAccion("El número de resolución emitida por Compensar es estrictamente obligatorio.");
-      return;
-    }
-    if (!archivoResolucionPdf) {
-      setErrorAccion("Debe adjuntar el archivo PDF de la resolución oficial de asignación.");
-      return;
-    }
     try {
       setCargandoAccion(true);
       setErrorAccion(null);
@@ -385,8 +377,9 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          numeroResolucionAsignacion: formNumResolucionCompensar.trim(),
-          soporteResolucionPdf: archivoResolucionPdf
+          numeroResolucionAsignacion: formNumResolucionCompensar.trim() || `RES-COMP-${expediente.codigoVisible || "ASIG"}`,
+          soporteResolucionPdf: archivoResolucionPdf,
+          instruccionesObra: "Resolución de asignación y documentación registrada. Autorización de inicio de obra aprobada."
         })
       });
       const data = await res.json();
@@ -1295,12 +1288,12 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
               )}
 
               <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900">
-                <strong>Requisitos Obligatorios:</strong> Para autorizar el inicio de obra y avanzar a Fase 7, debe registrar el número de resolución y adjuntar el archivo oficial emitido por Compensar.
+                <strong>Registro de Postulación Aprobada:</strong> Puede registrar opcionalmente el número de resolución y/o adjuntar el soporte oficial para autorizar el inicio de obra y avanzar a Fase 7.
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  1. Número de la Resolución emitida por Compensar *
+                  1. Número de la Resolución emitida por Compensar (Opcional)
                 </label>
                 <input
                   type="text"
@@ -1308,13 +1301,12 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
                   onChange={(e) => setFormNumResolucionCompensar(e.target.value)}
                   placeholder="Ej: RES-COMP-ASIG-2026-088"
                   className="w-full text-xs p-2.5 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono font-bold"
-                  required
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  2. Documento de Resolución Oficial (PDF) *
+                  2. Documento de Resolución Oficial (PDF) (Opcional)
                 </label>
                 <div className="border-2 border-dashed border-slate-200 rounded-xl p-4 text-center hover:bg-slate-50 transition-colors">
                   <input
@@ -1330,7 +1322,7 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
                   >
                     <UploadCloud className="w-6 h-6 text-emerald-600" />
                     <span className="text-xs font-bold text-slate-700">
-                      {archivoResolucionPdf ? archivoResolucionPdf.nombre : "Seleccionar Resolución PDF de Compensar"}
+                      {archivoResolucionPdf ? archivoResolucionPdf.nombre : "Seleccionar Resolución PDF (Opcional)"}
                     </span>
                     <span className="text-[11px] text-slate-400">
                       Archivo PDF firmado y emitido por Compensar
@@ -1349,7 +1341,7 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
                 </button>
                 <button
                   type="submit"
-                  disabled={cargandoAccion || !archivoResolucionPdf || !formNumResolucionCompensar.trim()}
+                  disabled={cargandoAccion}
                   className="px-4 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-xs cursor-pointer disabled:opacity-50"
                 >
                   {cargandoAccion ? "Procesando..." : "Autorizar y Avanzar a Fase 7"}
