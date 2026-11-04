@@ -5291,9 +5291,8 @@ export default function App() {
                                     );
                                   }
 
-                                  // Si se subió una corrección o el estado ya no es con_observaciones, ocultar la observación previa
-                                  const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
-                                  const tieneCorrSubida = vNum > 1 || req.estado === "actualizado" || req.estado === "corregido" || req.estado === "recibido_revision";
+                                  // Si se subió una corrección (estado actualizado/corregido) o el estado ya no es con_observaciones, ocultar la observación previa
+                                  const tieneCorrSubida = req.estado === "actualizado" || req.estado === "corregido" || req.estado === "recibido_revision";
 
                                   if (tieneCorrSubida || req.estado !== "con_observaciones") {
                                     return null;
@@ -5335,22 +5334,14 @@ export default function App() {
                             <div className="flex items-center space-x-2 self-end md:self-center">
                               {(() => {
                                 const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
-                                const tieneCorrSubida = vNum > 1 || req.estado === "actualizado" || req.estado === "corregido";
                                 const esAceptado = req.estado === "aceptado";
-                                const tieneObsPura = (req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) && !tieneCorrSubida;
+                                const tieneCorrSubida = req.estado === "actualizado" || req.estado === "corregido";
+                                const tieneObsPura = req.estado === "con_observaciones" && !tieneCorrSubida;
 
                                 if (esAceptado) {
                                   return (
                                     <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                                       Aceptado
-                                    </span>
-                                  );
-                                }
-
-                                if (tieneCorrSubida) {
-                                  return (
-                                    <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                                      {req.estado === "corregido" || vNum > 1 ? "Corrección Subida (En Revisión)" : "En Revisión"}
                                     </span>
                                   );
                                 }
@@ -5363,10 +5354,18 @@ export default function App() {
                                   );
                                 }
 
+                                if (tieneCorrSubida) {
+                                  return (
+                                    <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                      Corrección Subida (En Revisión)
+                                    </span>
+                                  );
+                                }
+
                                 if (req.estado === "recibido_revision") {
                                   return (
                                     <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                                      En Revisión
+                                      {vNum > 1 ? "Corrección Subida (En Revisión)" : "En Revisión"}
                                     </span>
                                   );
                                 }
@@ -5418,9 +5417,8 @@ export default function App() {
 
                               {/* Cargar / Reemplazar en Fase 1 según Rol y Estado de Revisión (Supervisor strictly excluded) */}
                               {!esSalidaDefinitiva && currentUser.rol !== "planeacion" && currentUser.rol !== "supervisor" && (() => {
-                                const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
-                                const tieneCorrSubida = vNum > 1 || req.estado === "actualizado" || req.estado === "corregido";
-                                const tieneObsPura = (req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) && !tieneCorrSubida;
+                                const tieneCorrSubida = req.estado === "actualizado" || req.estado === "corregido";
+                                const tieneObsPura = req.estado === "con_observaciones" && !tieneCorrSubida;
                                 const estaBloqueado = Boolean(detalleExp.expediente.bloqueadoPorRevision);
 
                                 if (estaBloqueado && !tieneObsPura && (currentUser.rol === "comercial" || currentUser.rol === "asistente")) {
@@ -5785,9 +5783,8 @@ export default function App() {
                                           );
                                         }
 
-                                        // Si se subió una corrección o el estado ya no es con_observaciones, ocultar la observación previa
-                                        const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
-                                        const tieneCorrSubida = vNum > 1 || req.estado === "actualizado" || req.estado === "corregido" || req.estado === "recibido_revision";
+                                        // Si se subió una corrección (estado actualizado/corregido) o el estado ya no es con_observaciones, ocultar la observación previa
+                                        const tieneCorrSubida = req.estado === "actualizado" || req.estado === "corregido" || req.estado === "recibido_revision";
 
                                         if (tieneCorrSubida || req.estado !== "con_observaciones") {
                                           return null;
@@ -5829,22 +5826,14 @@ export default function App() {
                                   <div className="flex items-center space-x-2 self-end md:self-center">
                                     {(() => {
                                       const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
-                                      const tieneCorrSubida = vNum > 1 || req.estado === "actualizado" || req.estado === "corregido";
                                       const esAceptado = req.estado === "aceptado";
-                                      const tieneObsPura = (req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) && !tieneCorrSubida;
+                                      const tieneCorrSubida = req.estado === "actualizado" || req.estado === "corregido";
+                                      const tieneObsPura = req.estado === "con_observaciones" && !tieneCorrSubida;
 
                                       if (esAceptado) {
                                         return (
                                           <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                                             Aceptado
-                                          </span>
-                                        );
-                                      }
-
-                                      if (tieneCorrSubida) {
-                                        return (
-                                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                                            {req.estado === "corregido" || vNum > 1 ? "Corrección Subida (En Revisión)" : "En Revisión"}
                                           </span>
                                         );
                                       }
@@ -5857,10 +5846,18 @@ export default function App() {
                                         );
                                       }
 
+                                      if (tieneCorrSubida) {
+                                        return (
+                                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                            Corrección Subida (En Revisión)
+                                          </span>
+                                        );
+                                      }
+
                                       if (req.estado === "recibido_revision") {
                                         return (
                                           <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                                            En Revisión
+                                            {vNum > 1 ? "Corrección Subida (En Revisión)" : "En Revisión"}
                                           </span>
                                         );
                                       }
@@ -5912,9 +5909,8 @@ export default function App() {
 
                                     {/* ASISTENTE O ADMIN: CARGAR / REEMPLAZAR DOCUMENTO (Supervisor strictly excluded) */}
                                     {!esSalidaDefinitiva && currentUser.rol !== "planeacion" && currentUser.rol !== "supervisor" && (() => {
-                                      const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
-                                      const tieneCorrSubida = vNum > 1 || req.estado === "actualizado" || req.estado === "corregido";
-                                      const tieneObsPura = (req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) && !tieneCorrSubida;
+                                      const tieneCorrSubida = req.estado === "actualizado" || req.estado === "corregido";
+                                      const tieneObsPura = req.estado === "con_observaciones" && !tieneCorrSubida;
                                       const estaBloqueado = Boolean(detalleExp.expediente.bloqueadoPorRevision);
 
                                       if (estaBloqueado && !tieneObsPura && (currentUser.rol === "asistente" || currentUser.rol === "comercial")) {
@@ -6302,9 +6298,8 @@ export default function App() {
 
                                       {/* Observación activa si existe (oculta si se subió corrección) */}
                                       {(() => {
-                                        const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
-                                        const tieneCorrSubida = vNum > 1 || req.estado === "actualizado" || req.estado === "corregido" || req.estado === "recibido_revision";
-                                        const tieneObsActiva = (req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) && !tieneCorrSubida;
+                                        const tieneCorrSubida = req.estado === "actualizado" || req.estado === "corregido" || req.estado === "recibido_revision";
+                                        const tieneObsActiva = req.estado === "con_observaciones" && !tieneCorrSubida;
                                         if (!tieneObsActiva || req.estado === "aceptado") return null;
 
                                         return (
@@ -6338,7 +6333,7 @@ export default function App() {
                                   <div className="flex items-center space-x-2 self-end md:self-center">
                                     {(() => {
                                       const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
-                                      const tieneCorrSubida = vNum > 1 || req.estado === "actualizado" || req.estado === "corregido";
+                                      const tieneCorrSubida = req.estado === "actualizado" || req.estado === "corregido";
                                       if (req.estado === "aceptado") {
                                         return (
                                           <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -6346,17 +6341,24 @@ export default function App() {
                                           </span>
                                         );
                                       }
-                                      if (tieneCorrSubida) {
-                                        return (
-                                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                                            {req.estado === "corregido" || vNum > 1 ? "Corrección Subida (En Revisión)" : "En Revisión"}
-                                          </span>
-                                        );
-                                      }
-                                      if (req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) {
+                                      if (req.estado === "con_observaciones") {
                                         return (
                                           <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
                                             Devuelto con Observaciones
+                                          </span>
+                                        );
+                                      }
+                                      if (tieneCorrSubida) {
+                                        return (
+                                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                            Corrección Subida (En Revisión)
+                                          </span>
+                                        );
+                                      }
+                                      if (req.estado === "recibido_revision") {
+                                        return (
+                                          <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                                            {vNum > 1 ? "Corrección Subida (En Revisión)" : "En Revisión"}
                                           </span>
                                         );
                                       }

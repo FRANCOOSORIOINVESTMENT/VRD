@@ -657,6 +657,39 @@ export async function createApp(): Promise<express.Express> {
 
     const integrantes = exp.hogar?.integrantes || [];
 
+    // Helper para identificar si un documento es estrictamente de predio (F1-01 Tradición o F1-02 Predial)
+    const esDocumentoPredial = (doc: Documento): boolean => {
+      const dt = (doc.titulo || "").toLowerCase();
+      const an = (doc.versionActual?.nombreArchivoOriginal || "").toLowerCase();
+      return (
+        dt.includes("tradición") ||
+        dt.includes("tradicion") ||
+        dt.includes("libertad") ||
+        dt.includes("impuesto predial") ||
+        dt.includes("predial unificado") ||
+        dt.startsWith("f1-01") ||
+        dt.startsWith("f1-02") ||
+        an.startsWith("f1-01") ||
+        an.startsWith("f1-02")
+      );
+    };
+
+    // Helper para identificar si un documento es genuinamente una Cédula / Documento de Identidad (F1-03)
+    const esDocumentoCedula = (doc: Documento): boolean => {
+      if (esDocumentoPredial(doc)) return false;
+      const dt = (doc.titulo || "").toLowerCase();
+      const an = (doc.versionActual?.nombreArchivoOriginal || "").toLowerCase();
+      return (
+        dt.includes("cedula") ||
+        dt.includes("cédula") ||
+        dt.includes("identidad") ||
+        dt.includes("f1-03") ||
+        an.includes("cedula") ||
+        an.includes("cédula") ||
+        an.includes("f1-03")
+      );
+    };
+
     // Documentos asociados al expediente
     const docsExp = mockDb.documentos.filter(
       (d) =>
@@ -665,20 +698,20 @@ export async function createApp(): Promise<express.Express> {
         d.versiones.length > 0
     );
 
-    // 1. Clasificar y etiquetar cada documento con su personaId correspondiente
+    // 1. Clasificar y etiquetar cada documento con su personaId correspondiente (solo si es cédula)
     docsExp.forEach((doc) => {
+      if (esDocumentoPredial(doc)) {
+        // Los documentos prediales (F1-01, F1-02) nunca deben tener personaId de titular/integrante
+        doc.personaId = undefined;
+        return;
+      }
+
       const docTit = (doc.titulo || "").toLowerCase();
       const ver = doc.versionActual || doc.versiones[doc.versiones.length - 1];
       const archNom = (ver?.nombreArchivoOriginal || "").toLowerCase();
 
       // Es cédula de identidad
-      if (
-        docTit.includes("cedula") ||
-        docTit.includes("cédula") ||
-        archNom.includes("cedula") ||
-        docTit.includes("f1-03") ||
-        archNom.includes("f1-03")
-      ) {
+      if (esDocumentoCedula(doc)) {
         // Verificar si coincide con algún integrante que no sea el titular
         const matchInteg = integrantes.find((integ) => {
           if (!integ.persona || integ.esPostulantePrincipal) return false;
@@ -710,15 +743,83 @@ export async function createApp(): Promise<express.Express> {
       }
     });
 
-    // 2. Reconciliar requisitos de Fase 1 (F1-03)
-    const reqsF1_03 = mockDb.requisitosCaso.filter(
-      (r) =>
-        (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
-        r.codigoRequisito === "F1-03"
+    // Todos los requisitos del expediente
+    const reqsExp = mockDb.requisitosCaso.filter(
+      (r) => r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)
     );
+
+    // 1.5. Desvincular inmediatamente cualquier documento predial (F1-01 / F1-02) que se haya ligado por error a F1-03 o viceversa
+    const reqF1_01 = reqsExp.find((r) => r.codigoRequisito === "F1-01");
+    const reqF1_02 = reqsExp.find((r) => r.codigoRequisito === "F1-02");
+    const idsDocsPrediales = new Set<string>();
+    if (reqF1_01?.documentoAsociado?.id) idsDocsPrediales.add(reqF1_01.documentoAsociado.id);
+    if (reqF1_02?.documentoAsociado?.id) idsDocsPrediales.add(reqF1_02.documentoAsociado.id);
+
+    // Asegurar que F1-01 y F1-02 tengan únicamente su propio documento específico si existe en docsExp
+    if (reqF1_01) {
+      if (reqF1_01.documentoAsociado && !(reqF1_01.documentoAsociado.titulo || "").toLowerCase().includes("tradici") && !(reqF1_01.documentoAsociado.titulo || "").toLowerCase().includes("f1-01")) {
+        const docPropioF101 = docsExp.find((d) => {
+          const dt = (d.titulo || "").toLowerCase();
+          return dt.includes("tradición") || dt.includes("tradicion") || dt.includes("f1-01");
+        });
+        reqF1_01.documentoAsociado = docPropioF101 || undefined;
+        if (!reqF1_01.documentoAsociado && reqF1_01.estado !== "con_observaciones") {
+          reqF1_01.estado = "pendiente_carga";
+        }
+      } else if (!reqF1_01.documentoAsociado) {
+        const docPropioF101 = docsExp.find((d) => {
+          const dt = (d.titulo || "").toLowerCase();
+          return dt.includes("tradición") || dt.includes("tradicion") || dt.includes("f1-01");
+        });
+        if (docPropioF101) {
+          reqF1_01.documentoAsociado = docPropioF101;
+          idsDocsPrediales.add(docPropioF101.id);
+          if (reqF1_01.estado === "pendiente_carga") reqF1_01.estado = "recibido_revision";
+        }
+      }
+    }
+
+    if (reqF1_02) {
+      if (reqF1_02.documentoAsociado && !(reqF1_02.documentoAsociado.titulo || "").toLowerCase().includes("predial") && !(reqF1_02.documentoAsociado.titulo || "").toLowerCase().includes("f1-02")) {
+        const docPropioF102 = docsExp.find((d) => {
+          const dt = (d.titulo || "").toLowerCase();
+          return dt.includes("impuesto predial") || dt.includes("predial unificado") || dt.includes("f1-02");
+        });
+        reqF1_02.documentoAsociado = docPropioF102 || undefined;
+        if (!reqF1_02.documentoAsociado && reqF1_02.estado !== "con_observaciones") {
+          reqF1_02.estado = "pendiente_carga";
+        }
+      } else if (!reqF1_02.documentoAsociado) {
+        const docPropioF102 = docsExp.find((d) => {
+          const dt = (d.titulo || "").toLowerCase();
+          return dt.includes("impuesto predial") || dt.includes("predial unificado") || dt.includes("f1-02");
+        });
+        if (docPropioF102) {
+          reqF1_02.documentoAsociado = docPropioF102;
+          idsDocsPrediales.add(docPropioF102.id);
+          if (reqF1_02.estado === "pendiente_carga") reqF1_02.estado = "recibido_revision";
+        }
+      }
+    }
+
+    // 2. Reconciliar requisitos de Fase 1 (F1-03)
+    const reqsF1_03 = reqsExp.filter((r) => r.codigoRequisito === "F1-03");
 
     reqsF1_03.forEach((r) => {
       const esDelTitular = r.personaId === titularPersonaId || r.nombre.toLowerCase().includes("postulante");
+
+      // Si F1-03 tiene asociado un documento predial (ej. Certificado de Tradición F1-01 o Predial F1-02), DESVINCULARLO de inmediato
+      if (
+        r.documentoAsociado &&
+        (idsDocsPrediales.has(r.documentoAsociado.id) ||
+          esDocumentoPredial(r.documentoAsociado) ||
+          !esDocumentoCedula(r.documentoAsociado))
+      ) {
+        r.documentoAsociado = undefined;
+        if (r.estado !== "con_observaciones") {
+          r.estado = "pendiente_carga";
+        }
+      }
 
       if (esDelTitular) {
         // Si el requisito del titular tiene asignado un documento de integrante, DESVINCULARLO
@@ -737,9 +838,10 @@ export async function createApp(): Promise<express.Express> {
           }
         }
 
-        // Si no tiene documento, buscar si hay uno genuino del titular
+        // Si no tiene documento, buscar SOLO si hay una cédula genuina del titular
         if (!r.documentoAsociado) {
           const docTitular = docsExp.find((d) => {
+            if (idsDocsPrediales.has(d.id) || !esDocumentoCedula(d)) return false;
             const dt = (d.titulo || "").toLowerCase();
             const an = (d.versionActual?.nombreArchivoOriginal || "").toLowerCase();
             if (dt.includes("integrante") || an.includes("integrante")) return false;
@@ -767,8 +869,9 @@ export async function createApp(): Promise<express.Express> {
             : r.personaNombre || ""
         ).toLowerCase();
 
-        // Buscar documento que le pertenezca a este integrante
+        // Buscar documento de cédula que le pertenezca a este integrante
         const docInteg = docsExp.find((d) => {
+          if (idsDocsPrediales.has(d.id) || !esDocumentoCedula(d)) return false;
           if (pId && d.personaId === pId) return true;
           const dt = (d.titulo || "").toLowerCase();
           const an = (d.versionActual?.nombreArchivoOriginal || "").toLowerCase();
@@ -793,6 +896,30 @@ export async function createApp(): Promise<express.Express> {
       }
     });
 
+    // 2.5. Garantizar que ningún par de requisitos distintos comparta la misma instancia de Documento
+    const mapaDocAReq = new Map<string, RequisitoCaso>();
+    reqsExp.forEach((r) => {
+      const doc = r.documentoAsociado;
+      if (!doc || !doc.id) return;
+      const prevReq = mapaDocAReq.get(doc.id);
+      if (!prevReq) {
+        mapaDocAReq.set(doc.id, r);
+      } else if (prevReq.id !== r.id) {
+        // Determinar cuál de los dos requisitos es el dueño legítimo según el título del documento
+        const docTit = (doc.titulo || "").toLowerCase();
+        const prevMatch = docTit.includes((prevReq.nombre || "").toLowerCase()) || docTit.includes((prevReq.codigoRequisito || "").toLowerCase());
+        const currMatch = docTit.includes((r.nombre || "").toLowerCase()) || docTit.includes((r.codigoRequisito || "").toLowerCase());
+        if (currMatch && !prevMatch) {
+          prevReq.documentoAsociado = undefined;
+          if (prevReq.estado !== "con_observaciones") prevReq.estado = "pendiente_carga";
+          mapaDocAReq.set(doc.id, r);
+        } else {
+          r.documentoAsociado = undefined;
+          if (r.estado !== "con_observaciones") r.estado = "pendiente_carga";
+        }
+      }
+    });
+
     // 3. Sincronización relacional asíncrona de corrección en Supabase
     if (supabaseAdmin) {
       (async () => {
@@ -810,20 +937,27 @@ export async function createApp(): Promise<express.Express> {
           }
 
           if (expUuid) {
-            // Actualizar persona_id en documentos de Supabase
+            // Actualizar persona_id en documentos de Supabase (limpiar persona_id si es documento predial)
             for (const doc of docsExp) {
-              if (esUuidValido(doc.id) && doc.personaId && esUuidValido(doc.personaId)) {
-                await supabaseAdmin
-                  .from("documentos")
-                  .update({ persona_id: doc.personaId })
-                  .eq("id", doc.id);
+              if (esUuidValido(doc.id)) {
+                if (esDocumentoPredial(doc)) {
+                  await supabaseAdmin
+                    .from("documentos")
+                    .update({ persona_id: null })
+                    .eq("id", doc.id);
+                } else if (doc.personaId && esUuidValido(doc.personaId)) {
+                  await supabaseAdmin
+                    .from("documentos")
+                    .update({ persona_id: doc.personaId })
+                    .eq("id", doc.id);
+                }
               }
             }
 
             // Consultar requisitos_caso de Supabase
             const { data: dbReqs } = await supabaseAdmin
               .from("requisitos_caso")
-              .select("id, codigo_requisito, nombre, persona_id, evidencias:evidencias_requisito(id, version_documento_id)")
+              .select("id, codigo_requisito, nombre, persona_id, estado, evidencias:evidencias_requisito(id, version_documento_id)")
               .eq("expediente_id", expUuid);
 
             if (Array.isArray(dbReqs) && dbReqs.length > 0) {
@@ -844,6 +978,16 @@ export async function createApp(): Promise<express.Express> {
                       const archNom = (docConVer.versionActual?.nombreArchivoOriginal || "").toLowerCase();
                       const docTit = (docConVer.titulo || "").toLowerCase();
                       const esDeIntegrante = docTit.includes("integrante") || archNom.includes("integrante");
+
+                      // Si F1-03 tiene vinculada una evidencia de un documento predial (F1-01 o F1-02), eliminar esa evidencia errónea
+                      if (rDb.codigo_requisito === "F1-03" && esDocumentoPredial(docConVer)) {
+                        await supabaseAdmin.from("evidencias_requisito").delete().eq("id", ev.id);
+                        const otrasEvs = rDb.evidencias.filter((e: any) => e.id !== ev.id);
+                        if (otrasEvs.length === 0) {
+                          await supabaseAdmin.from("requisitos_caso").update({ estado: "pendiente_carga" }).eq("id", rDb.id);
+                        }
+                        continue;
+                      }
 
                       if (rDb.id === reqPostulanteDb?.id && esDeIntegrante) {
                         // Desvincular evidencia del postulante en Supabase
@@ -1192,25 +1336,28 @@ export async function createApp(): Promise<express.Express> {
           if (Array.isArray(dbDocs) && dbDocs.length > 0) {
             dbDocs.forEach((dRow: any) => {
               let existingDoc = mockDb.documentos.find((d) => d.id === dRow.id || (d.expedienteId === exp.id && d.titulo === dRow.titulo));
-              const versionesMapeadas: DocVersion[] = (dRow.versiones || []).map((v: any) => {
-                const pubUrl = v.url_publica || (v.storage_path ? `${supabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET_NAME}/${v.storage_path}` : `/uploads/${v.storage_path}`);
-                return {
-                  id: v.id,
-                  documentoId: dRow.id,
-                  versionNumero: v.version_numero || 1,
-                  storagePath: v.storage_path,
-                  nombreArchivoOriginal: v.nombre_archivo_original,
-                  mimeType: v.mime_type || "application/pdf",
-                  tamanoBytes: Number(v.tamano_bytes) || 1024,
-                  sha256Hash: v.sha256_hash || "",
-                  subidoPorId: v.subido_por || "",
-                  subidoEn: v.subido_en || new Date().toISOString(),
-                  urlFirmadaTemporal: pubUrl,
-                  archivoDataUrl: pubUrl
-                };
-              });
+              const versionesMapeadas: DocVersion[] = (dRow.versiones || [])
+                .map((v: any) => {
+                  const pubUrl = v.url_publica || (v.storage_path ? `${supabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET_NAME}/${v.storage_path}` : `/uploads/${v.storage_path}`);
+                  return {
+                    id: v.id,
+                    documentoId: dRow.id,
+                    versionNumero: v.version_numero || 1,
+                    storagePath: v.storage_path,
+                    nombreArchivoOriginal: v.nombre_archivo_original,
+                    mimeType: v.mime_type || "application/pdf",
+                    tamanoBytes: Number(v.tamano_bytes) || 1024,
+                    sha256Hash: v.sha256_hash || "",
+                    subidoPorId: v.subido_por || "",
+                    subidoEn: v.subido_en || new Date().toISOString(),
+                    urlFirmadaTemporal: pubUrl,
+                    archivoDataUrl: pubUrl
+                  };
+                })
+                .sort((a: DocVersion, b: DocVersion) => (a.versionNumero || 1) - (b.versionNumero || 1));
 
               if (existingDoc) {
+                existingDoc.id = dRow.id;
                 if (dRow.persona_id) existingDoc.personaId = dRow.persona_id;
                 if (versionesMapeadas.length > 0) {
                   existingDoc.versiones = versionesMapeadas;
@@ -1272,15 +1419,21 @@ export async function createApp(): Promise<express.Express> {
                 if (rRow.id) reqExistente.id = rRow.id;
                 if (rRow.estado) reqExistente.estado = rRow.estado;
                 if (Array.isArray(rRow.evidencias) && rRow.evidencias.length > 0) {
-                  const verId = rRow.evidencias[0].version_documento_id;
-                  const docConVer = mockDb.documentos.find((d) => d.versiones?.some((v) => v.id === verId));
+                  const verIds = new Set(rRow.evidencias.map((ev: any) => ev.version_documento_id));
+                  const docsCandidatos = mockDb.documentos.filter((d) => d.versiones?.some((v) => verIds.has(v.id)));
+                  const docConVer =
+                    docsCandidatos.find((d) => (d.titulo || "").toLowerCase().includes((reqExistente.nombre || "").toLowerCase())) ||
+                    docsCandidatos[docsCandidatos.length - 1];
                   if (docConVer) {
                     const docTit = (docConVer.titulo || "").toLowerCase();
                     const docArch = (docConVer.versionActual?.nombreArchivoOriginal || "").toLowerCase();
                     const esDocInteg = docTit.includes("integrante") || docArch.includes("integrante");
                     const esReqPostulante = reqExistente.nombre.toLowerCase().includes("postulante");
+                    const esDocPredialEnCedula =
+                      reqExistente.codigoRequisito === "F1-03" &&
+                      (docTit.includes("tradición") || docTit.includes("tradicion") || docTit.includes("predial") || docTit.includes("f1-01") || docTit.includes("f1-02"));
 
-                    if (!(esDocInteg && esReqPostulante)) {
+                    if (!(esDocInteg && esReqPostulante) && !esDocPredialEnCedula) {
                       reqExistente.documentoAsociado = docConVer;
                       if (reqExistente.estado === "pendiente_carga") {
                         reqExistente.estado = "recibido_revision";
@@ -4313,25 +4466,28 @@ export async function createApp(): Promise<express.Express> {
           if (Array.isArray(dbDocs) && dbDocs.length > 0) {
             dbDocs.forEach((dRow: any) => {
               let existingDoc = mockDb.documentos.find((d) => d.id === dRow.id || (d.expedienteId === exp.id && d.titulo === dRow.titulo));
-              const versionesMapeadas: DocVersion[] = (dRow.versiones || []).map((v: any) => {
-                const pubUrl = v.url_publica || (v.storage_path ? `${supabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET_NAME}/${v.storage_path}` : `/uploads/${v.storage_path}`);
-                return {
-                  id: v.id,
-                  documentoId: dRow.id,
-                  versionNumero: v.version_numero || 1,
-                  storagePath: v.storage_path,
-                  nombreArchivoOriginal: v.nombre_archivo_original,
-                  mimeType: v.mime_type || "application/pdf",
-                  tamanoBytes: Number(v.tamano_bytes) || 1024,
-                  sha256Hash: v.sha256_hash || "",
-                  subidoPorId: v.subido_por || "",
-                  subidoEn: v.subido_en || new Date().toISOString(),
-                  urlFirmadaTemporal: pubUrl,
-                  archivoDataUrl: pubUrl
-                };
-              });
+              const versionesMapeadas: DocVersion[] = (dRow.versiones || [])
+                .map((v: any) => {
+                  const pubUrl = v.url_publica || (v.storage_path ? `${supabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET_NAME}/${v.storage_path}` : `/uploads/${v.storage_path}`);
+                  return {
+                    id: v.id,
+                    documentoId: dRow.id,
+                    versionNumero: v.version_numero || 1,
+                    storagePath: v.storage_path,
+                    nombreArchivoOriginal: v.nombre_archivo_original,
+                    mimeType: v.mime_type || "application/pdf",
+                    tamanoBytes: Number(v.tamano_bytes) || 1024,
+                    sha256Hash: v.sha256_hash || "",
+                    subidoPorId: v.subido_por || "",
+                    subidoEn: v.subido_en || new Date().toISOString(),
+                    urlFirmadaTemporal: pubUrl,
+                    archivoDataUrl: pubUrl
+                  };
+                })
+                .sort((a: DocVersion, b: DocVersion) => (a.versionNumero || 1) - (b.versionNumero || 1));
 
               if (existingDoc) {
+                existingDoc.id = dRow.id;
                 if (dRow.persona_id) existingDoc.personaId = dRow.persona_id;
                 if (versionesMapeadas.length > 0) {
                   existingDoc.versiones = versionesMapeadas;
@@ -4377,15 +4533,21 @@ export async function createApp(): Promise<express.Express> {
                 if (rRow.id) reqExistente.id = rRow.id;
                 if (rRow.estado) reqExistente.estado = rRow.estado;
                 if (Array.isArray(rRow.evidencias) && rRow.evidencias.length > 0) {
-                  const verId = rRow.evidencias[0].version_documento_id;
-                  const docConVer = mockDb.documentos.find((d) => d.versiones?.some((v) => v.id === verId));
+                  const verIds = new Set(rRow.evidencias.map((ev: any) => ev.version_documento_id));
+                  const docsCandidatos = mockDb.documentos.filter((d) => d.versiones?.some((v) => verIds.has(v.id)));
+                  const docConVer =
+                    docsCandidatos.find((d) => (d.titulo || "").toLowerCase().includes((reqExistente.nombre || "").toLowerCase())) ||
+                    docsCandidatos[docsCandidatos.length - 1];
                   if (docConVer) {
                     const docTit = (docConVer.titulo || "").toLowerCase();
                     const docArch = (docConVer.versionActual?.nombreArchivoOriginal || "").toLowerCase();
                     const esDocInteg = docTit.includes("integrante") || docArch.includes("integrante");
                     const esReqPostulante = reqExistente.nombre.toLowerCase().includes("postulante");
+                    const esDocPredialEnCedula =
+                      reqExistente.codigoRequisito === "F1-03" &&
+                      (docTit.includes("tradición") || docTit.includes("tradicion") || docTit.includes("predial") || docTit.includes("f1-01") || docTit.includes("f1-02"));
 
-                    if (!(esDocInteg && esReqPostulante)) {
+                    if (!(esDocInteg && esReqPostulante) && !esDocPredialEnCedula) {
                       reqExistente.documentoAsociado = docConVer;
                       if (reqExistente.estado === "pendiente_carga") {
                         reqExistente.estado = "recibido_revision";
@@ -4407,6 +4569,7 @@ export async function createApp(): Promise<express.Express> {
                     requisito_caso_id,
                     version_documento_id,
                     supervisor_id,
+                    ciclo_revision,
                     resultado,
                     observacion,
                     fecha_revision,
@@ -4423,7 +4586,7 @@ export async function createApp(): Promise<express.Express> {
                       versionDocumentoId: revRow.version_documento_id,
                       supervisorId: revRow.supervisor_id,
                       supervisorNombre: revRow.supervisor?.nombre_completo || "Analista Documental",
-                      cicloRevision: 1,
+                      cicloRevision: revRow.ciclo_revision || 1,
                       resultado: revRow.resultado,
                       observacion: revRow.observacion || "",
                       fechaRevision: revRow.fecha_revision
@@ -4462,9 +4625,9 @@ export async function createApp(): Promise<express.Express> {
       .map((r) => {
         let doc = mockDb.documentos.find((d) => d.id === r.documentoAsociado?.id) || r.documentoAsociado;
         if (doc && doc.versiones && doc.versiones.length > 0) {
-          if (!doc.versionActual) {
-            doc.versionActual = doc.versiones[doc.versiones.length - 1];
-          }
+          doc.versiones.sort((a, b) => (a.versionNumero || 1) - (b.versionNumero || 1));
+          doc.versionActual = doc.versiones[doc.versiones.length - 1];
+
           // Asegurar que si alguna versión tenía fotos y la actual no, se conserven
           if (doc.versionActual && (!doc.versionActual.fotos || doc.versionActual.fotos.length === 0)) {
             const todasFotos: any[] = [];
@@ -4501,23 +4664,55 @@ export async function createApp(): Promise<express.Express> {
           };
         }
 
-        const estadoStr = String(r.estado || "");
-        const esCorreccionSubida =
-          estadoStr === "actualizado" ||
-          estadoStr === "corregido" ||
-          Boolean(
-            doc?.versionActual?.subidoEn &&
-            ultimaRevision?.fechaRevision &&
-            new Date(doc.versionActual.subidoEn).getTime() > new Date(ultimaRevision.fechaRevision).getTime()
-          ) ||
-          Boolean((doc?.versionActual?.versionNumero || 0) > 1 && r.estado !== "con_observaciones");
+        // Determinar con precisión si la versión actual del documento ya fue dictaminada por la última revisión,
+        // o si se subió una nueva versión después de dicha revisión.
+        const versionActualYaRevisada = Boolean(
+          ultimaRevision &&
+            doc?.versionActual &&
+            (ultimaRevision.versionDocumentoId === doc.versionActual.id ||
+              (ultimaRevision.fechaRevision &&
+                doc.versionActual.subidoEn &&
+                new Date(ultimaRevision.fechaRevision).getTime() >= new Date(doc.versionActual.subidoEn).getTime() - 1000))
+        );
 
-        if (ultimaRevision && ultimaRevision.resultado === "OBSERVADO" && !esCorreccionSubida) {
-          r.estado = "con_observaciones";
-          r.observaciones = ultimaRevision.observacion;
-        } else if (esCorreccionSubida) {
+        const subidoDespuesDeRevision = Boolean(
+          ultimaRevision &&
+            doc?.versionActual &&
+            !versionActualYaRevisada &&
+            doc.versionActual.subidoEn &&
+            ultimaRevision.fechaRevision &&
+            new Date(doc.versionActual.subidoEn).getTime() > new Date(ultimaRevision.fechaRevision).getTime()
+        );
+
+        const estadoPrevio = r.estado;
+        const estadoActualStr = String(r.estado || "");
+        if (versionActualYaRevisada && ultimaRevision) {
+          if (ultimaRevision.resultado === "ACEPTADO") {
+            r.estado = "aceptado";
+            r.observaciones = ultimaRevision.observacion || undefined;
+          } else if (ultimaRevision.resultado === "OBSERVADO") {
+            r.estado = "con_observaciones";
+            r.observaciones = ultimaRevision.observacion;
+          }
+        } else if (subidoDespuesDeRevision || estadoActualStr === "actualizado" || estadoActualStr === "corregido") {
           r.estado = "actualizado";
           r.observaciones = undefined;
+        } else if (ultimaRevision) {
+          if (ultimaRevision.resultado === "ACEPTADO") {
+            r.estado = "aceptado";
+            r.observaciones = ultimaRevision.observacion || undefined;
+          } else if (ultimaRevision.resultado === "OBSERVADO") {
+            r.estado = "con_observaciones";
+            r.observaciones = ultimaRevision.observacion;
+          }
+        }
+
+        if (supabaseAdmin && r.estado !== estadoPrevio && esUuidValido(r.id)) {
+          supabaseAdmin
+            .from("requisitos_caso")
+            .update({ estado: r.estado, actualizado_en: new Date().toISOString() })
+            .eq("id", r.id)
+            .then(() => {});
         }
 
         return {
@@ -4795,22 +4990,47 @@ export async function createApp(): Promise<express.Express> {
           return;
         }
 
-        // 1. Obtener o crear entidad Documento con título sincronizado
+        // 1. Obtener o crear entidad Documento dedicada exclusivamente a este requisito (sin compartir referencia con otro requisito)
         let doc = mockDb.documentos.find((d) => d.id === reqCaso.documentoAsociado?.id);
+        const esCompartidoConOtroRequisito = Boolean(
+          doc &&
+            mockDb.requisitosCaso.some(
+              (otroReq) =>
+                otroReq.id !== reqCaso.id &&
+                (otroReq.expedienteId === exp.id || (exp.codigoVisible && otroReq.expedienteId === exp.codigoVisible)) &&
+                otroReq.documentoAsociado?.id === doc!.id
+            )
+        );
+        if (esCompartidoConOtroRequisito) {
+          doc = undefined;
+        }
+
+        const esReqPersonal =
+          reqCaso.codigoRequisito === "F1-03" ||
+          Boolean(reqCaso.personaId) ||
+          reqCaso.nombre.toLowerCase().includes("cédula") ||
+          reqCaso.nombre.toLowerCase().includes("cedula");
+
         const nombreSujeto = reqCaso.personaNombre || exp.postulante?.nombres || exp.postulante?.primerApellido || exp.codigoVisible || "Titular";
+        const tituloEsperado = `${reqCaso.nombre} - ${nombreSujeto}`;
+
         if (!doc) {
           doc = {
             id: `doc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
             expedienteId: exp.id,
-            titulo: `${reqCaso.nombre} - ${nombreSujeto}`,
-            personaId: reqCaso.personaId || exp.postulante?.id || `per-${exp.id}`,
-            predioId: reqCaso.predioId || exp.predioVivienda?.id || `pre-${exp.id}`,
+            titulo: tituloEsperado,
+            personaId: esReqPersonal ? (reqCaso.personaId || exp.postulante?.id || `per-${exp.id}`) : undefined,
+            predioId: !esReqPersonal ? (reqCaso.predioId || exp.predioVivienda?.id || `pre-${exp.id}`) : undefined,
             versiones: []
           };
           mockDb.documentos.push(doc);
           reqCaso.documentoAsociado = doc;
         } else {
-          doc.titulo = `${reqCaso.nombre} - ${nombreSujeto}`;
+          doc.titulo = tituloEsperado;
+          if (!esReqPersonal) {
+            doc.personaId = undefined;
+          }
+          reqCaso.documentoAsociado = doc;
         }
         if (!Array.isArray(doc.versiones)) {
           doc.versiones = [];
@@ -5002,33 +5222,122 @@ export async function createApp(): Promise<express.Express> {
             }
 
             if (expUuid && subidoPorUuid) {
-              let docDbId: string | null = null;
-              const { data: docExistente } = await supabaseAdmin
-                .from("documentos")
-                .select("id")
-                .eq("expediente_id", expUuid)
-                .eq("titulo", doc.titulo)
-                .maybeSingle();
+              // 1. Resolver o crear primero el requisito específico en requisitos_caso
+              let reqDbId: string | null = null;
+              if (reqCaso.id && esUuidValido(reqCaso.id)) {
+                const { data: reqPorId } = await supabaseAdmin
+                  .from("requisitos_caso")
+                  .select("id")
+                  .eq("id", reqCaso.id)
+                  .maybeSingle();
+                if (reqPorId?.id) reqDbId = reqPorId.id;
+              }
 
-              if (docExistente?.id) {
-                docDbId = docExistente.id;
-              } else {
-                const { data: docDb } = await supabaseAdmin
-                  .from("documentos")
+              if (!reqDbId && reqCaso.personaId && esUuidValido(reqCaso.personaId)) {
+                const { data: reqPorPersona } = await supabaseAdmin
+                  .from("requisitos_caso")
+                  .select("id")
+                  .eq("expediente_id", expUuid)
+                  .eq("codigo_requisito", reqCaso.codigoRequisito)
+                  .eq("persona_id", reqCaso.personaId)
+                  .limit(1)
+                  .maybeSingle();
+                if (reqPorPersona?.id) reqDbId = reqPorPersona.id;
+              }
+
+              if (!reqDbId) {
+                const { data: reqPorNombre } = await supabaseAdmin
+                  .from("requisitos_caso")
+                  .select("id")
+                  .eq("expediente_id", expUuid)
+                  .eq("codigo_requisito", reqCaso.codigoRequisito)
+                  .eq("nombre", reqCaso.nombre)
+                  .limit(1)
+                  .maybeSingle();
+                if (reqPorNombre?.id) reqDbId = reqPorNombre.id;
+              }
+
+              if (!reqDbId && reqCaso.codigoRequisito !== "F1-03") {
+                const { data: reqPorCodigo } = await supabaseAdmin
+                  .from("requisitos_caso")
+                  .select("id")
+                  .eq("expediente_id", expUuid)
+                  .eq("codigo_requisito", reqCaso.codigoRequisito)
+                  .limit(1)
+                  .maybeSingle();
+                if (reqPorCodigo?.id) reqDbId = reqPorCodigo.id;
+              }
+
+              if (!reqDbId) {
+                const faseNum = Math.min(Math.max(Number(reqCaso.fase) || 1, 1), 7);
+                const { data: nuevoReqDb } = await supabaseAdmin
+                  .from("requisitos_caso")
                   .insert([
                     {
                       expediente_id: expUuid,
-                      titulo: doc.titulo,
-                      persona_id: null,
-                      predio_id: null
+                      codigo_requisito: reqCaso.codigoRequisito,
+                      nombre: reqCaso.nombre,
+                      descripcion: reqCaso.descripcion || null,
+                      persona_id: reqCaso.personaId && esUuidValido(reqCaso.personaId) ? reqCaso.personaId : null,
+                      fase: faseNum,
+                      estado: reqCaso.estado,
+                      es_obligatorio: reqCaso.esObligatorio ?? true
                     }
                   ])
                   .select("id")
                   .maybeSingle();
-                docDbId = docDb?.id;
+                reqDbId = nuevoReqDb?.id || null;
+              }
+
+              if (reqDbId) {
+                reqCaso.id = reqDbId;
+              }
+
+              // 2. Resolver o crear el Documento exclusivo para este requisito en documentos
+              let docDbId: string | null = null;
+              if (doc.id && esUuidValido(doc.id)) {
+                const { data: docPorId } = await supabaseAdmin
+                  .from("documentos")
+                  .select("id")
+                  .eq("id", doc.id)
+                  .maybeSingle();
+                if (docPorId?.id) {
+                  docDbId = docPorId.id;
+                }
+              }
+
+              if (!docDbId) {
+                const { data: docExistente } = await supabaseAdmin
+                  .from("documentos")
+                  .select("id")
+                  .eq("expediente_id", expUuid)
+                  .eq("titulo", doc.titulo)
+                  .limit(1)
+                  .maybeSingle();
+
+                if (docExistente?.id) {
+                  docDbId = docExistente.id;
+                } else {
+                  const { data: docDb } = await supabaseAdmin
+                    .from("documentos")
+                    .insert([
+                      {
+                        expediente_id: expUuid,
+                        titulo: doc.titulo,
+                        persona_id: doc.personaId && esUuidValido(doc.personaId) ? doc.personaId : null,
+                        predio_id: null
+                      }
+                    ])
+                    .select("id")
+                    .maybeSingle();
+                  docDbId = docDb?.id || null;
+                }
               }
 
               if (docDbId) {
+                doc.id = docDbId;
+                nuevaVersion.documentoId = docDbId;
+
                 const { data: verDb } = await supabaseAdmin
                   .from("versiones_documento")
                   .insert([
@@ -5047,34 +5356,8 @@ export async function createApp(): Promise<express.Express> {
                   .select("id")
                   .maybeSingle();
 
-                let reqDbId: string | null = null;
-                const { data: reqDb } = await supabaseAdmin
-                  .from("requisitos_caso")
-                  .select("id")
-                  .eq("expediente_id", expUuid)
-                  .eq("codigo_requisito", reqCaso.codigoRequisito)
-                  .maybeSingle();
-
-                if (reqDb?.id) {
-                  reqDbId = reqDb.id;
-                } else {
-                  const faseNum = Math.min(Math.max(Number(reqCaso.fase) || 1, 1), 7);
-                  const { data: nuevoReqDb } = await supabaseAdmin
-                    .from("requisitos_caso")
-                    .insert([
-                      {
-                        expediente_id: expUuid,
-                        codigo_requisito: reqCaso.codigoRequisito,
-                        nombre: reqCaso.nombre,
-                        descripcion: reqCaso.descripcion || null,
-                        fase: faseNum,
-                        estado: "recibido_revision",
-                        es_obligatorio: reqCaso.esObligatorio ?? true
-                      }
-                    ])
-                    .select("id")
-                    .maybeSingle();
-                  reqDbId = nuevoReqDb?.id || null;
+                if (verDb?.id) {
+                  nuevaVersion.id = verDb.id;
                 }
 
                 if (reqDbId && verDb?.id) {
@@ -6258,6 +6541,8 @@ export async function createApp(): Promise<express.Express> {
       }
 
       const versionId = reqCaso.documentoAsociado.versionActual.id;
+      const revisionesPrevias = mockDb.revisiones.filter((rv) => rv.requisitoCasoId === reqCaso!.id);
+      const nuevoCicloRevision = revisionesPrevias.length + 1;
 
       const nuevaRevision: RevisionHumana = {
         id: `rev-${Date.now()}`,
@@ -6265,7 +6550,7 @@ export async function createApp(): Promise<express.Express> {
         versionDocumentoId: versionId,
         supervisorId: req.user!.id,
         supervisorNombre: req.user!.nombreCompleto,
-        cicloRevision: 1,
+        cicloRevision: nuevoCicloRevision,
         resultado,
         observacion: observacion ? String(observacion).trim() : "",
         fechaRevision: new Date().toISOString()
@@ -6320,32 +6605,44 @@ export async function createApp(): Promise<express.Express> {
 
       if (supabaseAdmin) {
         try {
-          const esUuid = (str?: string) => str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+          const esUuid = (str?: string) => Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
+          let expUuid: string | null = esUuid(exp.id) ? exp.id : null;
+          if (!expUuid && exp.codigoVisible) {
+            const { data: expDb } = await supabaseAdmin
+              .from("expedientes")
+              .select("id")
+              .eq("codigo_visible", exp.codigoVisible)
+              .maybeSingle();
+            if (expDb?.id) expUuid = expDb.id;
+          }
+
           let reqUuid = esUuid(reqCaso.id) ? reqCaso.id : null;
-          if (!reqUuid && reqCaso.personaId) {
+          if (!reqUuid && expUuid && reqCaso.personaId && esUuid(reqCaso.personaId)) {
             const { data: rRow } = await supabaseAdmin
               .from("requisitos_caso")
               .select("id")
-              .eq("expediente_id", exp.id)
+              .eq("expediente_id", expUuid)
               .eq("codigo_requisito", reqCaso.codigoRequisito)
               .eq("persona_id", reqCaso.personaId)
+              .limit(1)
               .maybeSingle();
             if (rRow?.id) reqUuid = rRow.id;
           }
-          if (!reqUuid) {
+          if (!reqUuid && expUuid) {
             const { data: rRow } = await supabaseAdmin
               .from("requisitos_caso")
               .select("id")
-              .eq("expediente_id", exp.id)
+              .eq("expediente_id", expUuid)
               .eq("nombre", reqCaso.nombre)
+              .limit(1)
               .maybeSingle();
             if (rRow?.id) reqUuid = rRow.id;
           }
-          if (!reqUuid) {
+          if (!reqUuid && expUuid && reqCaso.codigoRequisito !== "F1-03") {
             const { data: rRow } = await supabaseAdmin
               .from("requisitos_caso")
               .select("id")
-              .eq("expediente_id", exp.id)
+              .eq("expediente_id", expUuid)
               .eq("codigo_requisito", reqCaso.codigoRequisito)
               .limit(1)
               .maybeSingle();
@@ -6353,15 +6650,37 @@ export async function createApp(): Promise<express.Express> {
           }
 
           if (reqUuid) {
+            reqCaso.id = reqUuid;
+            nuevaRevision.requisitoCasoId = reqUuid;
             await supabaseAdmin
               .from("requisitos_caso")
               .update({
-                estado: resultado === "ACEPTADO" ? "aceptado" : "con_observaciones"
+                estado: resultado === "ACEPTADO" ? "aceptado" : "con_observaciones",
+                actualizado_en: new Date().toISOString()
               })
               .eq("id", reqUuid);
           }
 
           let verUuid = esUuid(versionId) ? versionId : null;
+          if (!verUuid && reqCaso.documentoAsociado?.id && esUuid(reqCaso.documentoAsociado.id)) {
+            const { data: vRow } = await supabaseAdmin
+              .from("versiones_documento")
+              .select("id")
+              .eq("documento_id", reqCaso.documentoAsociado.id)
+              .order("version_numero", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (vRow?.id) verUuid = vRow.id;
+          }
+          if (!verUuid && reqUuid) {
+            const { data: evRow } = await supabaseAdmin
+              .from("evidencias_requisito")
+              .select("version_documento_id")
+              .eq("requisito_caso_id", reqUuid)
+              .limit(1)
+              .maybeSingle();
+            if (evRow?.version_documento_id) verUuid = evRow.version_documento_id;
+          }
           if (!verUuid) {
             const { data: vRow } = await supabaseAdmin
               .from("versiones_documento")
@@ -6384,17 +6703,25 @@ export async function createApp(): Promise<express.Express> {
           }
 
           if (reqUuid && verUuid && supUuid) {
-            await supabaseAdmin.from("revisiones_humanas").insert([
-              {
-                requisito_caso_id: reqUuid,
-                version_documento_id: verUuid,
-                supervisor_id: supUuid,
-                ciclo_revision: 1,
-                resultado,
-                observacion: observacion ? String(observacion).trim() : "",
-                fecha_revision: nuevaRevision.fechaRevision
-              }
-            ]);
+            nuevaRevision.versionDocumentoId = verUuid;
+            const { data: revInsertada } = await supabaseAdmin
+              .from("revisiones_humanas")
+              .insert([
+                {
+                  requisito_caso_id: reqUuid,
+                  version_documento_id: verUuid,
+                  supervisor_id: supUuid,
+                  ciclo_revision: nuevoCicloRevision,
+                  resultado,
+                  observacion: observacion ? String(observacion).trim() : "",
+                  fecha_revision: nuevaRevision.fechaRevision
+                }
+              ])
+              .select("id")
+              .maybeSingle();
+            if (revInsertada?.id) {
+              nuevaRevision.id = revInsertada.id;
+            }
           }
         } catch (sbErr: any) {
           console.warn("[SUPABASE REVISION ERROR]:", sbErr?.message);
