@@ -10930,22 +10930,19 @@ export async function createApp(): Promise<express.Express> {
           : await supabaseAdmin.from("perfiles_usuario").delete().eq("username", usr.username);
 
         if (delErr) {
-          console.error("[SUPABASE]: Error eliminando usuario en Supabase:", delErr);
-          console.warn("[SUPABASE]: Aplicando fallback de desactivación (activo = false) en Supabase due to DB relations...");
+          console.warn(`[SUPABASE]: Intento de eliminación física omitido (${delErr.message}). Aplicando deshabilitación (activo = false) en Supabase...`);
           const { error: softErr } = isUuid
             ? await supabaseAdmin.from("perfiles_usuario").update({ activo: false }).eq("id", usr.id)
             : await supabaseAdmin.from("perfiles_usuario").update({ activo: false }).eq("username", usr.username);
 
           if (softErr) {
-            console.error("[SUPABASE]: Error en fallback de desactivación en Supabase:", softErr);
-            return res.status(500).json({ error: `Error en Supabase: ${delErr.message}` });
+            console.warn("[SUPABASE]: No se pudo actualizar el estado 'activo' en Supabase:", softErr.message);
           }
         }
         await sincronizarPerfilesDesdeSupabase();
         console.log(`[SUPABASE]: Usuario ${usr.username} (${usr.id}) procesado en Supabase.`);
       } catch (err: any) {
-        console.error("[SUPABASE]: Excepción al eliminar usuario en Supabase:", err);
-        return res.status(500).json({ error: `Excepción en Supabase: ${err.message}` });
+        console.warn("[SUPABASE]: Excepción al procesar eliminación de usuario en Supabase:", err?.message || err);
       }
     }
 

@@ -2626,21 +2626,21 @@ export default function App() {
   if (loadingAuth) {
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center">
-        <div className="text-slate-500 font-medium">Cargando CRM Vivienda Rural Digna...</div>
+        <div className="text-slate-500 font-medium">Cargando RuralIA...</div>
       </div>
     );
   }
 
-  // PANTALLA DE ACCESO (SCR-01: REDISEÑO INSTITUCIONAL MODERNO CRM VRD)
+  // PANTALLA DE ACCESO (SCR-01: REDISEÑO INSTITUCIONAL MODERNO RURALIA)
   if (!currentUser) {
     return (
       <div className="min-h-screen w-full flex flex-col lg:flex-row bg-[#F8FAF8] text-slate-800 selection:bg-[#3F7D58]/20 selection:text-[#285943]">
         {/* SECCIÓN VISUAL IZQUIERDA (55% EN ESCRITORIO CON IMAGEN REALISTA DE VIVIENDA RURAL) */}
         <div className="w-full lg:w-[55%] min-h-[360px] sm:min-h-[440px] lg:min-h-screen relative flex flex-col justify-between p-6 sm:p-10 lg:p-14 overflow-hidden bg-[#1E3A5F]">
-          {/* Fotografía realista de alta definición de vivienda rural en paisaje natural */}
+          {/* Fotografía realizada por Franco Osorio para el proyecto de vivienda rural digna */}
           <img
-            src="https://images.unsplash.com/photo-1518780664697-55e3ad937233?auto=format&fit=crop&w=1800&q=85"
-            alt="Vivienda Rural Digna"
+            src="/assets/aistudio/WhatsApp_Image_2026-11-03_at_12.01.12_PM_107f8f67.jpeg"
+            alt="Vivienda Rural Digna — Franco Osorio"
             className="absolute inset-0 w-full h-full object-cover object-center transform scale-105 motion-safe:transition-transform motion-safe:duration-1000"
           />
 
@@ -2656,8 +2656,8 @@ export default function App() {
               <Building2 className="w-5 h-5 text-emerald-300" />
             </div>
             <div>
-              <span className="font-bold text-white text-base tracking-tight block">FRANCO OSORIO</span>
-              <span className="text-[11px] text-emerald-200/80 font-medium block">Vivienda Rural Digna</span>
+              <span className="font-bold text-white text-base tracking-tight block">RuralIA</span>
+              <span className="text-[11px] text-emerald-200/80 font-medium block">FRANCO OSORIO • Vivienda Rural Digna</span>
             </div>
           </div>
 
@@ -2668,7 +2668,7 @@ export default function App() {
               Sistema de Gestión Integral
             </span>
             <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black text-white tracking-tight leading-tight">
-              CRM VRD
+              RuralIA
             </h1>
             <p className="text-lg sm:text-xl font-medium text-emerald-100/90 mt-1.5">
               Vivienda Rural Digna
@@ -2715,7 +2715,7 @@ export default function App() {
               </div>
               <div className="flex items-center space-x-2">
                 <span className="text-xs font-bold tracking-wider uppercase text-[#3F7D58]">
-                  CRM VRD
+                  RuralIA
                 </span>
                 <span className="text-slate-300">·</span>
                 <span className="text-xs font-medium text-slate-500">
@@ -2821,14 +2821,14 @@ export default function App() {
 
             <div className="pt-2 text-center">
               <span className="text-[11px] text-slate-400">
-                Acceso restringido a personal autorizado de VRD.
+                Acceso restringido a personal autorizado de RuralIA.
               </span>
             </div>
           </div>
 
           {/* Pie de página del panel derecho */}
           <div className="pt-6 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-400">
-            <span>© 2026 CRM VRD · FRANCO OSORIO INVESTMENT S.A.S.</span>
+            <span>© 2026 RuralIA · FRANCO OSORIO INVESTMENT S.A.S.</span>
             <span className="text-slate-400 font-mono text-[10px]">v1.2 · Producción</span>
           </div>
         </div>
@@ -2883,8 +2883,8 @@ export default function App() {
               <Building2 className="w-5 h-5 text-emerald-200" />
             </div>
             <div>
-              <span className="font-bold text-slate-900 text-sm tracking-tight block">FRANCO OSORIO VRD</span>
-              <span className="text-[10px] text-[#3F7D58] font-bold uppercase tracking-wider block">Vivienda Rural Digna</span>
+              <span className="font-bold text-slate-900 text-sm tracking-tight block">RuralIA</span>
+              <span className="text-[10px] text-[#3F7D58] font-bold uppercase tracking-wider block">FRANCO OSORIO • Vivienda Rural Digna</span>
             </div>
           </div>
 

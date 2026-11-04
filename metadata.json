@@ -1,6 +1,6 @@
 {
-  "name": "CRM Vivienda Rural Digna",
-  "description": "CRM para el programa Vivienda Rural Digna (VRD) de FRANCO OSORIO INVESTMENT S.A.S.",
+  "name": "RuralIA — Vivienda Rural Digna",
+  "description": "Plataforma RuralIA para el programa Vivienda Rural Digna (VRD) de FRANCO OSORIO INVESTMENT S.A.S.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
