@@ -5014,7 +5014,7 @@ export async function createApp(): Promise<express.Express> {
   app.post(
     "/api/expedientes/:id/hogar/agregar-cedula",
     requireAuth(["comercial", "asistente", "administrador"]),
-    (req: AuthRequest, res: Response) => {
+    async (req: AuthRequest, res: Response) => {
       const exp = mockDb.expedientes.find((e) => e.id === req.params.id);
       if (!exp) {
         res.status(404).json({ error: "Expediente no encontrado." });
@@ -5036,6 +5036,8 @@ export async function createApp(): Promise<express.Express> {
         nombres,
         parentesco,
         archivoDataUrl,
+        url: reqUrl,
+        archivoUrl,
         nombreArchivo,
         mimeType,
         tamanoBytes
@@ -5092,42 +5094,26 @@ export async function createApp(): Promise<express.Express> {
       const nombreArchivoEstandar = generarNombreArchivoCedulaEstandar(nombreCompleto, numIdLimpio, extMatch);
       const storagePath = `expedientes/${exp.id}/cedulas/${nombreArchivoEstandar}`;
 
-      // Crear requisito de cédula para este integrante en Fase 1 (F1-03)
-      const nuevoReq: RequisitoCaso = {
-        id: `req-f1-03-${nuevaPersonaId}`,
-        expedienteId: exp.id,
-        codigoRequisito: "F1-03",
-        nombre: `Cédula de Integrante: ${nombreCompleto}`,
-        descripcion: `Documento de identidad de integrante del hogar (${parentesco}).`,
-        fase: 1,
-        personaId: nuevaPersonaId,
-        personaNombre: `${nombreCompleto} (${parentesco})`,
-        estado: archivoDataUrl ? "recibido_revision" : "pendiente_carga",
-        esObligatorio: true,
-        esAdicional: false
-      };
-
+      const dataUrlOUrl = archivoDataUrl || reqUrl || archivoUrl;
       let docObj: Documento | undefined = undefined;
 
-      // Si el cliente adjuntó el documento de la cédula directamente
-      if (archivoDataUrl && typeof archivoDataUrl === "string") {
+      // Si el cliente adjuntó el documento de la cédula directamente o como URL
+      if (dataUrlOUrl && typeof dataUrlOUrl === "string") {
         const docId = `doc-ced-${Date.now()}`;
-        let publicUrlFinal = archivoDataUrl;
+        let publicUrlFinal = dataUrlOUrl;
 
-        (async () => {
-          try {
-            const resStorage = await persistirArchivoEnStorage(
-              storagePath,
-              archivoDataUrl,
-              mimeType || "application/pdf"
-            );
-            if (resStorage.ok && resStorage.publicUrl) {
-              publicUrlFinal = resStorage.publicUrl;
-            }
-          } catch (e: any) {
-            console.warn("[STORAGE]: Error guardando cédula en storage:", e?.message);
+        try {
+          const resStorage = await persistirArchivoEnStorage(
+            storagePath,
+            dataUrlOUrl,
+            mimeType || "application/pdf"
+          );
+          if (resStorage.ok && resStorage.publicUrl) {
+            publicUrlFinal = resStorage.publicUrl;
           }
-        })();
+        } catch (e: any) {
+          console.warn("[STORAGE]: Error guardando cédula en storage:", e?.message);
+        }
 
         const verObj: DocVersion = {
           id: `ver-${docId}-1`,
@@ -5156,8 +5142,23 @@ export async function createApp(): Promise<express.Express> {
         };
 
         mockDb.documentos.push(docObj);
-        nuevoReq.documentoAsociado = docObj;
       }
+
+      // Crear requisito de cédula para este integrante en Fase 1 (F1-03)
+      const nuevoReq: RequisitoCaso = {
+        id: `req-f1-03-${nuevaPersonaId}`,
+        expedienteId: exp.id,
+        codigoRequisito: "F1-03",
+        nombre: `Cédula de Integrante: ${nombreCompleto}`,
+        descripcion: `Documento de identidad de integrante del hogar (${parentesco}).`,
+        fase: 1,
+        personaId: nuevaPersonaId,
+        personaNombre: `${nombreCompleto} (${parentesco})`,
+        estado: docObj ? "recibido_revision" : "pendiente_carga",
+        esObligatorio: true,
+        esAdicional: false,
+        documentoAsociado: docObj
+      };
 
       mockDb.requisitosCaso.push(nuevoReq);
       limpiarRequisitosHuerfanosExpediente(exp);
@@ -5177,117 +5178,115 @@ export async function createApp(): Promise<express.Express> {
 
       // PERSISTENCIA EN SUPABASE DEL NUEVO INTEGRANTE (PostgreSQL + Storage)
       if (supabaseAdmin) {
-        (async () => {
-          try {
-            // 1. Insertar o reutilizar persona en Supabase
-            const { data: personaDb } = await supabaseAdmin
-              .from("personas")
-              .upsert(
-                [
-                  {
-                    tipo_identificacion: nuevaPersona.tipoIdentificacion,
-                    numero_identificacion: nuevaPersona.numeroIdentificacion,
-                    nombres:
-                      nuevaPersona.primerNombre +
-                      (nuevaPersona.segundoNombre ? " " + nuevaPersona.segundoNombre : ""),
-                    primer_apellido: nuevaPersona.primerApellido,
-                    segundo_apellido: nuevaPersona.segundoApellido || null
-                  }
-                ],
-                { onConflict: "tipo_identificacion,numero_identificacion" }
-              )
-              .select("id")
-              .maybeSingle();
-
-            // 2. Buscar el expediente correspondiente en Supabase
-            const { data: expDb } = await supabaseAdmin
-              .from("expedientes")
-              .select("id, hogar_id")
-              .eq("codigo_visible", exp.codigoVisible)
-              .maybeSingle();
-
-            if (personaDb?.id && expDb?.hogar_id) {
-              // 3. Vincular a integrantes_hogar
-              await supabaseAdmin.from("integrantes_hogar").insert([
+        try {
+          // 1. Insertar o reutilizar persona en Supabase
+          const { data: personaDb } = await supabaseAdmin
+            .from("personas")
+            .upsert(
+              [
                 {
-                  hogar_id: expDb.hogar_id,
-                  persona_id: personaDb.id,
-                  parentesco,
-                  es_postulante_principal: false
+                  tipo_identificacion: nuevaPersona.tipoIdentificacion,
+                  numero_identificacion: nuevaPersona.numeroIdentificacion,
+                  nombres:
+                    nuevaPersona.primerNombre +
+                    (nuevaPersona.segundoNombre ? " " + nuevaPersona.segundoNombre : ""),
+                  primer_apellido: nuevaPersona.primerApellido,
+                  segundo_apellido: nuevaPersona.segundoApellido || null
                 }
-              ]);
+              ],
+              { onConflict: "tipo_identificacion,numero_identificacion" }
+            )
+            .select("id")
+            .maybeSingle();
 
-              // 4. Crear requisito documental de cédula para este integrante en Fase 1 (F1-03)
-              const { data: plantilla } = await supabaseAdmin
-                .from("plantillas_requisito")
-                .select("id")
-                .eq("codigo_requisito", "F1-03")
-                .maybeSingle();
+          // 2. Buscar el expediente correspondiente en Supabase
+          const { data: expDb } = await supabaseAdmin
+            .from("expedientes")
+            .select("id, hogar_id")
+            .eq("codigo_visible", exp.codigoVisible)
+            .maybeSingle();
 
-              const { data: reqInsert } = await supabaseAdmin.from("requisitos_caso").insert([
+          if (personaDb?.id && expDb?.hogar_id) {
+            // 3. Vincular a integrantes_hogar
+            await supabaseAdmin.from("integrantes_hogar").insert([
+              {
+                hogar_id: expDb.hogar_id,
+                persona_id: personaDb.id,
+                parentesco,
+                es_postulante_principal: false
+              }
+            ]);
+
+            // 4. Crear requisito documental de cédula para este integrante en Fase 1 (F1-03)
+            const { data: plantilla } = await supabaseAdmin
+              .from("plantillas_requisito")
+              .select("id")
+              .eq("codigo_requisito", "F1-03")
+              .maybeSingle();
+
+            const { data: reqInsert } = await supabaseAdmin.from("requisitos_caso").insert([
+              {
+                expediente_id: expDb.id,
+                plantilla_id: plantilla?.id || null,
+                codigo_requisito: "F1-03",
+                nombre: `Cédula de Integrante: ${nombreCompleto}`,
+                fase: 1,
+                persona_id: personaDb.id,
+                estado: docObj ? "recibido_revision" : "pendiente_carga",
+                es_obligatorio: true,
+                es_adicional: false
+              }
+            ]).select("id").maybeSingle();
+
+            // Si se cargó un documento de cédula, guardarlo en tablas de documentos y versiones
+            if (docObj && reqInsert?.id) {
+              const { data: docDb } = await supabaseAdmin.from("documentos").insert([
                 {
                   expediente_id: expDb.id,
-                  plantilla_id: plantilla?.id || null,
-                  codigo_requisito: "F1-03",
-                  nombre: `Cédula de Integrante: ${nombreCompleto}`,
-                  fase: 1,
-                  persona_id: personaDb.id,
-                  estado: docObj ? "recibido_revision" : "pendiente_carga",
-                  es_obligatorio: true,
-                  es_adicional: false
+                  titulo: `Cédula de Integrante: ${nombreCompleto}`,
+                  persona_id: personaDb.id
                 }
               ]).select("id").maybeSingle();
 
-              // Si se cargó un documento de cédula, guardarlo en tablas de documentos y versiones
-              if (docObj && reqInsert?.id) {
-                const { data: docDb } = await supabaseAdmin.from("documentos").insert([
+              if (docDb?.id) {
+                let subidoPorUuid: string | null = null;
+                if (req.user!.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.user!.id)) {
+                  subidoPorUuid = req.user!.id;
+                }
+
+                const { data: verDb } = await supabaseAdmin.from("versiones_documento").insert([
                   {
-                    expediente_id: expDb.id,
-                    titulo: `Cédula de Integrante: ${nombreCompleto}`,
-                    persona_id: personaDb.id
+                    documento_id: docDb.id,
+                    version_numero: 1,
+                    storage_path: storagePath,
+                    nombre_archivo_original: nombreArchivoEstandar,
+                    mime_type: mimeType || "application/pdf",
+                    tamano_bytes: Number(tamanoBytes) || 1048576,
+                    sha256_hash: `sha256-ced-${Date.now()}`,
+                    subido_por: subidoPorUuid,
+                    url_publica: docObj.versionActual?.archivoDataUrl
                   }
                 ]).select("id").maybeSingle();
 
-                if (docDb?.id) {
-                  let subidoPorUuid: string | null = null;
-                  if (req.user!.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.user!.id)) {
-                    subidoPorUuid = req.user!.id;
-                  }
-
-                  const { data: verDb } = await supabaseAdmin.from("versiones_documento").insert([
+                if (verDb?.id) {
+                  await supabaseAdmin.from("evidencias_requisito").insert([
                     {
-                      documento_id: docDb.id,
-                      version_numero: 1,
-                      storage_path: storagePath,
-                      nombre_archivo_original: nombreArchivoEstandar,
-                      mime_type: mimeType || "application/pdf",
-                      tamano_bytes: Number(tamanoBytes) || 1048576,
-                      sha256_hash: `sha256-ced-${Date.now()}`,
-                      subido_por: subidoPorUuid,
-                      url_publica: docObj.versionActual?.archivoDataUrl
+                      requisito_caso_id: reqInsert.id,
+                      version_documento_id: verDb.id,
+                      vinculado_por: subidoPorUuid
                     }
-                  ]).select("id").maybeSingle();
-
-                  if (verDb?.id) {
-                    await supabaseAdmin.from("evidencias_requisito").insert([
-                      {
-                        requisito_caso_id: reqInsert.id,
-                        version_documento_id: verDb.id,
-                        vinculado_por: subidoPorUuid
-                      }
-                    ]);
-                  }
+                  ]);
                 }
               }
-
-              console.log(
-                `[SUPABASE]: Integrante ${nombreCompleto} (${parentesco}) y su Cédula F1-03 (${nombreArchivoEstandar}) persistidos en Supabase para expediente ${exp.codigoVisible}`
-              );
             }
-          } catch (err: any) {
-            console.error("[SUPABASE]: Error al guardar integrante en Supabase:", err?.message);
+
+            console.log(
+              `[SUPABASE]: Integrante ${nombreCompleto} (${parentesco}) y su Cédula F1-03 (${nombreArchivoEstandar}) persistidos en Supabase para expediente ${exp.codigoVisible}`
+            );
           }
-        })();
+        } catch (err: any) {
+          console.error("[SUPABASE]: Error al guardar integrante en Supabase:", err?.message);
+        }
       }
 
       res.status(201).json({
