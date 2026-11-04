@@ -711,6 +711,7 @@ export interface RequisitoCaso {
   documentoAsociado?: Documento;
   ultimaRevision?: RevisionHumana;
   observaciones?: string;
+  motivoDevolucionIndividual?: string;
   creadoEn?: string;
 }
 

@@ -1967,6 +1967,8 @@ export default function App() {
                 return {
                   ...r,
                   estado: (prev.expediente.faseActual >= 3 || r.documentoAsociado?.versionActual) ? ("actualizado" as const) : ("recibido_revision" as const),
+                  observaciones: undefined,
+                  ultimaRevision: undefined,
                   documentoAsociado: respJson.documento
                 };
               }
@@ -2319,8 +2321,6 @@ export default function App() {
           if (!prev) return prev;
           const expActualizado = data.expediente
             ? { ...prev.expediente, ...data.expediente }
-            : dictamenFinal === "OBSERVADO"
-            ? { ...prev.expediente, bloqueadoPorRevision: false, estadoFase1: "devuelto" }
             : prev.expediente;
 
           return {
@@ -5114,7 +5114,7 @@ export default function App() {
                                       <div className="flex items-center justify-between gap-2 mb-1">
                                         <div className="flex items-center space-x-1.5 font-bold text-amber-900">
                                           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                                          <span>Observación de Análisis Documental:</span>
+                                          <span>Razón de devolución del documento:</span>
                                         </div>
                                         {(currentUser.rol === "comercial" || currentUser.rol === "asistente" || currentUser.rol === "administrador") && (
                                           <button
@@ -5128,8 +5128,8 @@ export default function App() {
                                           </button>
                                         )}
                                       </div>
-                                      <p className="text-slate-700 pl-5 leading-relaxed">
-                                        {obsTexto || "Por favor subsanar la observación indicada por el supervisor."}
+                                      <p className="text-slate-700 pl-5 leading-relaxed font-medium">
+                                        {obsTexto || "Documento devuelto para subsanación o corrección individual."}
                                       </p>
                                     </div>
                                   );
@@ -5164,7 +5164,7 @@ export default function App() {
                                 if (tieneObsPura) {
                                   return (
                                     <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                                      Con Observaciones
+                                      Devuelto con Observaciones
                                     </span>
                                   );
                                 }
@@ -5229,7 +5229,7 @@ export default function App() {
                                 const tieneObsPura = (req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) && !tieneCorrSubida;
                                 const estaBloqueado = Boolean(detalleExp.expediente.bloqueadoPorRevision);
 
-                                if (estaBloqueado && (currentUser.rol === "comercial" || currentUser.rol === "asistente")) {
+                                if (estaBloqueado && !tieneObsPura && (currentUser.rol === "comercial" || currentUser.rol === "asistente")) {
                                   return (
                                     <span
                                       title={
@@ -5249,7 +5249,7 @@ export default function App() {
                                   );
                                 }
 
-                                const puedeCargar = currentUser.rol === "administrador" || (!estaBloqueado && (currentUser.rol === "comercial" || currentUser.rol === "asistente"));
+                                const puedeCargar = currentUser.rol === "administrador" || ((!estaBloqueado || tieneObsPura) && (currentUser.rol === "comercial" || currentUser.rol === "asistente"));
 
                                 if (puedeCargar) {
                                   if (tieneObsPura && (currentUser.rol === "comercial" || currentUser.rol === "asistente")) {
@@ -5608,7 +5608,7 @@ export default function App() {
                                             <div className="flex items-center justify-between gap-2 mb-1">
                                               <div className="flex items-center space-x-1.5 font-bold text-amber-900">
                                                 <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                                                <span>Observación de Análisis Documental:</span>
+                                                <span>Razón de devolución del documento:</span>
                                               </div>
                                               {(currentUser.rol === "asistente" || currentUser.rol === "comercial" || currentUser.rol === "administrador") && (
                                                 <button
@@ -5622,8 +5622,8 @@ export default function App() {
                                                 </button>
                                               )}
                                             </div>
-                                            <p className="text-slate-700 pl-5 leading-relaxed">
-                                              {obsTexto || "Por favor subsanar la observación indicada por el supervisor."}
+                                            <p className="text-slate-700 pl-5 leading-relaxed font-medium">
+                                              {obsTexto || "Documento devuelto para subsanación o corrección individual."}
                                             </p>
                                           </div>
                                         );
@@ -5658,7 +5658,7 @@ export default function App() {
                                       if (tieneObsPura) {
                                         return (
                                           <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                                            Con Observaciones
+                                            Devuelto con Observaciones
                                           </span>
                                         );
                                       }
@@ -5723,7 +5723,7 @@ export default function App() {
                                       const tieneObsPura = (req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) && !tieneCorrSubida;
                                       const estaBloqueado = Boolean(detalleExp.expediente.bloqueadoPorRevision);
 
-                                      if (estaBloqueado && (currentUser.rol === "asistente" || currentUser.rol === "comercial")) {
+                                      if (estaBloqueado && !tieneObsPura && (currentUser.rol === "asistente" || currentUser.rol === "comercial")) {
                                         return (
                                           <span
                                             title="Expediente en evaluación de Análisis Documental"
@@ -5735,7 +5735,7 @@ export default function App() {
                                         );
                                       }
 
-                                      const puedeCargarF2 = currentUser.rol === "administrador" || (!estaBloqueado && (currentUser.rol === "asistente" || currentUser.rol === "comercial"));
+                                      const puedeCargarF2 = currentUser.rol === "administrador" || ((!estaBloqueado || tieneObsPura) && (currentUser.rol === "asistente" || currentUser.rol === "comercial"));
 
                                       if (puedeCargarF2) {
                                         if (tieneObsPura && (currentUser.rol === "asistente" || currentUser.rol === "comercial")) {
@@ -6106,50 +6106,72 @@ export default function App() {
                                         </div>
                                       )}
 
-                                      {/* Observación activa si existe */}
-                                      {(req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) && (
-                                        <div className="mt-2.5 p-3 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-900 shadow-2xs">
-                                          <div className="flex items-center justify-between gap-2 mb-1">
-                                            <div className="flex items-center space-x-1.5 font-bold text-amber-900">
-                                              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                                              <span>Observación de Análisis Documental:</span>
+                                      {/* Observación activa si existe (oculta si se subió corrección) */}
+                                      {(() => {
+                                        const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
+                                        const tieneCorrSubida = vNum > 1 || req.estado === "actualizado" || req.estado === "corregido" || req.estado === "recibido_revision";
+                                        const tieneObsActiva = (req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) && !tieneCorrSubida;
+                                        if (!tieneObsActiva || req.estado === "aceptado") return null;
+
+                                        return (
+                                          <div className="mt-2.5 p-3 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-900 shadow-2xs">
+                                            <div className="flex items-center justify-between gap-2 mb-1">
+                                              <div className="flex items-center space-x-1.5 font-bold text-amber-900">
+                                                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                                                <span>Razón de devolución del documento:</span>
+                                              </div>
+                                              {(currentUser.rol === "asistente" || currentUser.rol === "ingenieria" || currentUser.rol === "administrador" || currentUser.rol === "comercial") && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleAbrirModalSubir(req)}
+                                                  className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold transition-colors cursor-pointer shrink-0 shadow-2xs"
+                                                  title="Subir archivo corregido para subsanar esta observación"
+                                                >
+                                                  <Upload className="w-3 h-3" />
+                                                  <span>Subir Corrección</span>
+                                                </button>
+                                              )}
                                             </div>
-                                            {(currentUser.rol === "asistente" || currentUser.rol === "ingenieria" || currentUser.rol === "administrador" || currentUser.rol === "comercial") && (
-                                              <button
-                                                type="button"
-                                                onClick={() => handleAbrirModalSubir(req)}
-                                                className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold transition-colors cursor-pointer shrink-0 shadow-2xs"
-                                                title="Subir archivo corregido para subsanar esta observación"
-                                              >
-                                                <Upload className="w-3 h-3" />
-                                                <span>Subir Corrección</span>
-                                              </button>
-                                            )}
+                                            <p className="text-slate-700 pl-5 leading-relaxed font-medium">
+                                              {req.ultimaRevision?.observacion || req.observaciones || "Documento devuelto para subsanación o corrección individual."}
+                                            </p>
                                           </div>
-                                          <p className="text-slate-700 pl-5 leading-relaxed">
-                                            {req.ultimaRevision?.observacion || req.observaciones || "Por favor subsanar la observación indicada por el supervisor."}
-                                          </p>
-                                        </div>
-                                      )}
+                                        );
+                                      })()}
                                     </div>
                                   </div>
 
                                   <div className="flex items-center space-x-2 self-end md:self-center">
-                                    <span
-                                      className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                        req.estado === "aceptado"
-                                          ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                          : req.estado === "con_observaciones"
-                                          ? "bg-amber-50 text-amber-700 border border-amber-200"
-                                          : "bg-slate-100 text-slate-600"
-                                      }`}
-                                    >
-                                      {req.estado === "aceptado"
-                                        ? "Aceptado"
-                                        : req.estado === "con_observaciones"
-                                        ? "Con Observaciones"
-                                        : "Pendiente Carga"}
-                                    </span>
+                                    {(() => {
+                                      const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
+                                      const tieneCorrSubida = vNum > 1 || req.estado === "actualizado" || req.estado === "corregido";
+                                      if (req.estado === "aceptado") {
+                                        return (
+                                          <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                            Aceptado
+                                          </span>
+                                        );
+                                      }
+                                      if (tieneCorrSubida) {
+                                        return (
+                                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                            {req.estado === "corregido" || vNum > 1 ? "Corrección Subida (En Revisión)" : "En Revisión"}
+                                          </span>
+                                        );
+                                      }
+                                      if (req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || Boolean(req.observaciones)) {
+                                        return (
+                                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                            Devuelto con Observaciones
+                                          </span>
+                                        );
+                                      }
+                                      return (
+                                        <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">
+                                          Pendiente Carga
+                                        </span>
+                                      );
+                                    })()}
 
                                     {req.documentoAsociado?.versionActual && (
                                       <button

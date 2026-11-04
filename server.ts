@@ -4438,9 +4438,23 @@ export async function createApp(): Promise<express.Express> {
           };
         }
 
-        if (ultimaRevision && ultimaRevision.resultado === "OBSERVADO") {
+        const estadoStr = String(r.estado || "");
+        const esCorreccionSubida =
+          estadoStr === "actualizado" ||
+          estadoStr === "corregido" ||
+          Boolean(
+            doc?.versionActual?.subidoEn &&
+            ultimaRevision?.fechaRevision &&
+            new Date(doc.versionActual.subidoEn).getTime() > new Date(ultimaRevision.fechaRevision).getTime()
+          ) ||
+          Boolean((doc?.versionActual?.versionNumero || 0) > 1 && r.estado !== "con_observaciones");
+
+        if (ultimaRevision && ultimaRevision.resultado === "OBSERVADO" && !esCorreccionSubida) {
           r.estado = "con_observaciones";
           r.observaciones = ultimaRevision.observacion;
+        } else if (esCorreccionSubida) {
+          r.estado = "actualizado";
+          r.observaciones = undefined;
         }
 
         return {
@@ -6206,35 +6220,19 @@ export async function createApp(): Promise<express.Express> {
         }
       }
 
-      // Si se observó con comentarios, desbloquear el expediente para permitir subsanación y corrección
+      // Si se observó con comentarios, generar tarea y nota individual para subsanación del documento
       const tieneComentariosObs = resultado === "OBSERVADO" || Boolean(observacion && String(observacion).trim().length > 0);
       if (tieneComentariosObs) {
-        exp.bloqueadoPorRevision = false;
-        if (reqCaso.fase === 1 || !reqCaso.fase) {
-          exp.estadoFase1 = "devuelto";
-        } else if (reqCaso.fase === 2) {
-          exp.estadoFase2 = "devuelto";
-        } else {
-          exp.revisionFases = exp.revisionFases || {};
-          exp.revisionFases[reqCaso.fase] = {
-            ...exp.revisionFases[reqCaso.fase],
-            estado: "devuelto",
-            fechaDecisionSupervisor: new Date().toISOString(),
-            supervisorId: req.user!.id,
-            supervisorNombre: req.user!.nombreCompleto
-          };
-        }
-
+        // NOTA: La devolución es estrictamente individual por documento/archivo.
+        // No altera el estado general de la fase (estadoFase1 / estadoFase2) ni el motivo general de devolución del expediente.
         const responsableDestino = reqCaso.fase === 1
           ? (exp.comercialOrigenId || "usr-comercial-01")
           : (exp.asistenteAsignadoId || exp.responsableGeneralId || exp.comercialOrigenId || "usr-asistente-01");
-        
-        exp.responsableGeneralId = responsableDestino;
 
         mockDb.tareas.push({
           id: `tar-${Date.now()}`,
           expedienteId: exp.id,
-          descripcion: `Subsanar observación en requisito: ${reqCaso.nombre} - ${observacion}`,
+          descripcion: `Subsanar devolución individual en documento: ${reqCaso.nombre} - ${observacion}`,
           asignadoAId: responsableDestino,
           creadoPorId: req.user!.id,
           estado: "pendiente",
@@ -6248,7 +6246,7 @@ export async function createApp(): Promise<express.Express> {
           autorNombre: req.user!.nombreCompleto,
           personaContactada: "Responsable de Gestión",
           canal: "sistema",
-          contenido: `Observación registrada en requisito '${reqCaso.nombre}': ${nuevaRevision.observacion}. Documento habilitado para corrección y subsanación.`,
+          contenido: `Devolución individual del documento '${reqCaso.nombre}': ${nuevaRevision.observacion}. Documento habilitado para su corrección.`,
           fechaGestion: new Date().toISOString(),
           creadoEn: new Date().toISOString()
         });
@@ -6259,23 +6257,45 @@ export async function createApp(): Promise<express.Express> {
 
       if (supabaseAdmin) {
         try {
-          await supabaseAdmin
-            .from("requisitos_caso")
-            .update({
-              estado: resultado === "ACEPTADO" ? "aceptado" : "con_observaciones"
-            })
-            .eq("id", reqCaso.id);
-
           const esUuid = (str?: string) => str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
           let reqUuid = esUuid(reqCaso.id) ? reqCaso.id : null;
+          if (!reqUuid && reqCaso.personaId) {
+            const { data: rRow } = await supabaseAdmin
+              .from("requisitos_caso")
+              .select("id")
+              .eq("expediente_id", exp.id)
+              .eq("codigo_requisito", reqCaso.codigoRequisito)
+              .eq("persona_id", reqCaso.personaId)
+              .maybeSingle();
+            if (rRow?.id) reqUuid = rRow.id;
+          }
+          if (!reqUuid) {
+            const { data: rRow } = await supabaseAdmin
+              .from("requisitos_caso")
+              .select("id")
+              .eq("expediente_id", exp.id)
+              .eq("nombre", reqCaso.nombre)
+              .maybeSingle();
+            if (rRow?.id) reqUuid = rRow.id;
+          }
           if (!reqUuid) {
             const { data: rRow } = await supabaseAdmin
               .from("requisitos_caso")
               .select("id")
               .eq("expediente_id", exp.id)
               .eq("codigo_requisito", reqCaso.codigoRequisito)
+              .limit(1)
               .maybeSingle();
             if (rRow?.id) reqUuid = rRow.id;
+          }
+
+          if (reqUuid) {
+            await supabaseAdmin
+              .from("requisitos_caso")
+              .update({
+                estado: resultado === "ACEPTADO" ? "aceptado" : "con_observaciones"
+              })
+              .eq("id", reqUuid);
           }
 
           let verUuid = esUuid(versionId) ? versionId : null;
