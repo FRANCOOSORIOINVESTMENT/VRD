@@ -5349,9 +5349,9 @@ export default function App() {
                             {/* ESTADO Y BOTONES DE ACCIÓN */}
                             <div className="flex items-center space-x-2 self-end md:self-center">
                               {(() => {
-                                const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
+                                const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 1;
                                 const esAceptado = req.estado === "aceptado";
-                                const tieneCorrSubida = req.estado === "actualizado" || req.estado === "corregido";
+                                const tieneCorrSubida = (req.estado === "actualizado" || req.estado === "corregido") && vNum > 1;
                                 const tieneObsPura = req.estado === "con_observaciones" && !tieneCorrSubida;
 
                                 if (esAceptado) {
@@ -5378,7 +5378,7 @@ export default function App() {
                                   );
                                 }
 
-                                if (req.estado === "recibido_revision") {
+                                if (req.estado === "recibido_revision" || req.estado === "actualizado" || req.estado === "corregido") {
                                   return (
                                     <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
                                       {vNum > 1 ? "Corrección Subida (En Revisión)" : "En Revisión"}
@@ -5838,12 +5838,12 @@ export default function App() {
                                     </div>
                                   </div>
 
-                                   {/* ESTADO Y BOTONES DE ACCIÓN */}
+                                    {/* ESTADO Y BOTONES DE ACCIÓN */}
                                   <div className="flex items-center space-x-2 self-end md:self-center">
                                     {(() => {
-                                      const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
+                                      const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 1;
                                       const esAceptado = req.estado === "aceptado";
-                                      const tieneCorrSubida = req.estado === "actualizado" || req.estado === "corregido";
+                                      const tieneCorrSubida = (req.estado === "actualizado" || req.estado === "corregido") && vNum > 1;
                                       const tieneObsPura = req.estado === "con_observaciones" && !tieneCorrSubida;
 
                                       if (esAceptado) {
@@ -5870,7 +5870,7 @@ export default function App() {
                                         );
                                       }
 
-                                      if (req.estado === "recibido_revision") {
+                                      if (req.estado === "recibido_revision" || req.estado === "actualizado" || req.estado === "corregido") {
                                         return (
                                           <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
                                             {vNum > 1 ? "Corrección Subida (En Revisión)" : "En Revisión"}
@@ -6348,8 +6348,8 @@ export default function App() {
 
                                   <div className="flex items-center space-x-2 self-end md:self-center">
                                     {(() => {
-                                      const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
-                                      const tieneCorrSubida = req.estado === "actualizado" || req.estado === "corregido";
+                                      const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 1;
+                                      const tieneCorrSubida = (req.estado === "actualizado" || req.estado === "corregido") && vNum > 1;
                                       if (req.estado === "aceptado") {
                                         return (
                                           <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -6371,7 +6371,7 @@ export default function App() {
                                           </span>
                                         );
                                       }
-                                      if (req.estado === "recibido_revision") {
+                                      if (req.estado === "recibido_revision" || req.estado === "actualizado" || req.estado === "corregido") {
                                         return (
                                           <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
                                             {vNum > 1 ? "Corrección Subida (En Revisión)" : "En Revisión"}

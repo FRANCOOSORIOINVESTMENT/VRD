@@ -5160,9 +5160,10 @@ export async function createApp(): Promise<express.Express> {
         doc.versiones.push(nuevaVersion);
         doc.versionActual = nuevaVersion;
 
-        // Actualizar estado del requisito automáticamente a 'actualizado' si ya contaba con documento previo o en Fase 3
-        const teniaVersionPrevia = (doc.versiones?.length || 0) > 1 || Boolean(reqCaso.documentoAsociado?.versionActual);
-        if (teniaVersionPrevia || exp.faseActual >= 3) {
+        // Actualizar estado del requisito: 'actualizado' (Corrección Subida) solo si es versión > 1 o tenía observaciones previas
+        const teniaObservacionesPrevias = reqCaso.estado === "con_observaciones" || Boolean(reqCaso.observaciones) || reqCaso.ultimaRevision?.resultado === "OBSERVADO";
+        const esCorreccionSubida = nuevaVersionNum > 1 || teniaObservacionesPrevias;
+        if (esCorreccionSubida) {
           reqCaso.estado = "actualizado";
         } else {
           reqCaso.estado = "recibido_revision";
