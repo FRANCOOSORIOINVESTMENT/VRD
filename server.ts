@@ -647,6 +647,246 @@ export async function createApp(): Promise<express.Express> {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim());
   }
 
+  // Reconciliador y auditor universal de vinculación documento-requisito
+  // Evita estrictamente que la cédula de un integrante adicional se asigne al postulante principal
+  function reconciliarDocumentosConRequisitos(exp: Expediente) {
+    if (!exp || !exp.id) return;
+
+    const titularPersonaId = exp.postulante?.id || `per-${exp.id}`;
+    const titularNumId = String(exp.postulante?.numeroIdentificacion || "").trim();
+
+    const integrantes = exp.hogar?.integrantes || [];
+
+    // Documentos asociados al expediente
+    const docsExp = mockDb.documentos.filter(
+      (d) =>
+        (d.expedienteId === exp.id || (exp.codigoVisible && d.expedienteId === exp.codigoVisible)) &&
+        d.versiones &&
+        d.versiones.length > 0
+    );
+
+    // 1. Clasificar y etiquetar cada documento con su personaId correspondiente
+    docsExp.forEach((doc) => {
+      const docTit = (doc.titulo || "").toLowerCase();
+      const ver = doc.versionActual || doc.versiones[doc.versiones.length - 1];
+      const archNom = (ver?.nombreArchivoOriginal || "").toLowerCase();
+
+      // Es cédula de identidad
+      if (
+        docTit.includes("cedula") ||
+        docTit.includes("cédula") ||
+        archNom.includes("cedula") ||
+        docTit.includes("f1-03") ||
+        archNom.includes("f1-03")
+      ) {
+        // Verificar si coincide con algún integrante que no sea el titular
+        const matchInteg = integrantes.find((integ) => {
+          if (!integ.persona || integ.esPostulantePrincipal) return false;
+          const pId = integ.persona.id;
+          const pNum = String(integ.persona.numeroIdentificacion || "").trim();
+          const pNom = normalizarTextoNombre(
+            `${integ.persona.primerNombre || integ.persona.nombres || ""} ${integ.persona.primerApellido || ""} ${integ.persona.segundoApellido || ""}`.trim()
+          ).toLowerCase();
+
+          if (doc.personaId && doc.personaId === pId) return true;
+          if (pNum && (archNom.includes(pNum) || docTit.includes(pNum))) return true;
+
+          const partesNom = pNom.split(" ").filter((p) => p.length >= 3);
+          const coincidencias = partesNom.filter((p) => archNom.includes(p) || docTit.includes(p));
+          return coincidencias.length >= 2 || (partesNom.length === 1 && coincidencias.length === 1);
+        });
+
+        if (matchInteg && matchInteg.persona?.id) {
+          doc.personaId = matchInteg.persona.id;
+          const nomComp = `${matchInteg.persona.primerNombre || matchInteg.persona.nombres || "Integrante"} ${matchInteg.persona.primerApellido || ""}`.trim();
+          doc.titulo = `Cédula de Integrante: ${nomComp}`;
+        } else if (
+          archNom.includes("postulante") ||
+          docTit.includes("postulante") ||
+          (titularNumId && (archNom.includes(titularNumId) || docTit.includes(titularNumId)))
+        ) {
+          doc.personaId = titularPersonaId;
+        }
+      }
+    });
+
+    // 2. Reconciliar requisitos de Fase 1 (F1-03)
+    const reqsF1_03 = mockDb.requisitosCaso.filter(
+      (r) =>
+        (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
+        r.codigoRequisito === "F1-03"
+    );
+
+    reqsF1_03.forEach((r) => {
+      const esDelTitular = r.personaId === titularPersonaId || r.nombre.toLowerCase().includes("postulante");
+
+      if (esDelTitular) {
+        // Si el requisito del titular tiene asignado un documento de integrante, DESVINCULARLO
+        if (r.documentoAsociado) {
+          const docAsoc = r.documentoAsociado;
+          const docTit = (docAsoc.titulo || "").toLowerCase();
+          const archNom = (docAsoc.versionActual?.nombreArchivoOriginal || "").toLowerCase();
+          const esDeIntegrante =
+            (docAsoc.personaId && docAsoc.personaId !== titularPersonaId) ||
+            docTit.includes("integrante") ||
+            archNom.includes("integrante");
+
+          if (esDeIntegrante) {
+            r.documentoAsociado = undefined;
+            r.estado = "pendiente_carga";
+          }
+        }
+
+        // Si no tiene documento, buscar si hay uno genuino del titular
+        if (!r.documentoAsociado) {
+          const docTitular = docsExp.find((d) => {
+            const dt = (d.titulo || "").toLowerCase();
+            const an = (d.versionActual?.nombreArchivoOriginal || "").toLowerCase();
+            if (dt.includes("integrante") || an.includes("integrante")) return false;
+            if (d.personaId && d.personaId !== titularPersonaId) return false;
+            return (
+              d.personaId === titularPersonaId ||
+              dt.includes("postulante") ||
+              an.includes("postulante") ||
+              (titularNumId && (dt.includes(titularNumId) || an.includes(titularNumId)))
+            );
+          });
+          if (docTitular) {
+            r.documentoAsociado = docTitular;
+            if (r.estado === "pendiente_carga") r.estado = "recibido_revision";
+          }
+        }
+      } else {
+        // Requisito de un integrante
+        const pId = r.personaId;
+        const integ = integrantes.find((i) => i.persona?.id === pId);
+        const pNum = String(integ?.persona?.numeroIdentificacion || "").trim();
+        const pNom = normalizarTextoNombre(
+          integ?.persona
+            ? `${integ.persona.primerNombre || integ.persona.nombres || ""} ${integ.persona.primerApellido || ""}`.trim()
+            : r.personaNombre || ""
+        ).toLowerCase();
+
+        // Buscar documento que le pertenezca a este integrante
+        const docInteg = docsExp.find((d) => {
+          if (pId && d.personaId === pId) return true;
+          const dt = (d.titulo || "").toLowerCase();
+          const an = (d.versionActual?.nombreArchivoOriginal || "").toLowerCase();
+          if (pNum && (an.includes(pNum) || dt.includes(pNum))) return true;
+
+          const partesNom = pNom.split(" ").filter((p) => p.length >= 3);
+          const coincidencias = partesNom.filter((p) => an.includes(p) || dt.includes(p));
+          if (coincidencias.length >= 2 || (partesNom.length === 1 && coincidencias.length === 1)) return true;
+
+          // Si el archivo dice 'cedula_integrante_' y ningún otro integrante lo ha reclamado
+          if (an.includes("integrante") && (!d.personaId || d.personaId === pId)) return true;
+          return false;
+        });
+
+        if (docInteg) {
+          r.documentoAsociado = docInteg;
+          docInteg.personaId = pId;
+          if (r.estado === "pendiente_carga") {
+            r.estado = "recibido_revision";
+          }
+        }
+      }
+    });
+
+    // 3. Sincronización relacional asíncrona de corrección en Supabase
+    if (supabaseAdmin) {
+      (async () => {
+        try {
+          let expUuid: string | null = null;
+          if (exp.id && esUuidValido(exp.id)) {
+            expUuid = exp.id;
+          } else if (exp.codigoVisible) {
+            const { data: expRow } = await supabaseAdmin
+              .from("expedientes")
+              .select("id")
+              .eq("codigo_visible", exp.codigoVisible)
+              .maybeSingle();
+            if (expRow?.id) expUuid = expRow.id;
+          }
+
+          if (expUuid) {
+            // Actualizar persona_id en documentos de Supabase
+            for (const doc of docsExp) {
+              if (esUuidValido(doc.id) && doc.personaId && esUuidValido(doc.personaId)) {
+                await supabaseAdmin
+                  .from("documentos")
+                  .update({ persona_id: doc.personaId })
+                  .eq("id", doc.id);
+              }
+            }
+
+            // Consultar requisitos_caso de Supabase
+            const { data: dbReqs } = await supabaseAdmin
+              .from("requisitos_caso")
+              .select("id, codigo_requisito, nombre, persona_id, evidencias:evidencias_requisito(id, version_documento_id)")
+              .eq("expediente_id", expUuid);
+
+            if (Array.isArray(dbReqs) && dbReqs.length > 0) {
+              const reqPostulanteDb = dbReqs.find(
+                (r) =>
+                  r.codigo_requisito === "F1-03" &&
+                  (r.persona_id === titularPersonaId || r.nombre?.toLowerCase().includes("postulante"))
+              );
+              const reqsIntegrantesDb = dbReqs.filter(
+                (r) => r.codigo_requisito === "F1-03" && r.id !== reqPostulanteDb?.id
+              );
+
+              for (const rDb of dbReqs) {
+                if (Array.isArray(rDb.evidencias) && rDb.evidencias.length > 0) {
+                  for (const ev of rDb.evidencias) {
+                    const docConVer = docsExp.find((d) => d.versiones?.some((v) => v.id === ev.version_documento_id));
+                    if (docConVer) {
+                      const archNom = (docConVer.versionActual?.nombreArchivoOriginal || "").toLowerCase();
+                      const docTit = (docConVer.titulo || "").toLowerCase();
+                      const esDeIntegrante = docTit.includes("integrante") || archNom.includes("integrante");
+
+                      if (rDb.id === reqPostulanteDb?.id && esDeIntegrante) {
+                        // Desvincular evidencia del postulante en Supabase
+                        await supabaseAdmin.from("evidencias_requisito").delete().eq("id", ev.id);
+                        console.log(`[SUPABASE AUTO-CORRECT]: Evidencia ${ev.id} desvinculada del requisito del postulante.`);
+
+                        // Reasignar al requisito de integrante en Supabase
+                        let targetIntegReq = reqsIntegrantesDb.find((ri) => {
+                          if (docConVer.personaId && ri.persona_id === docConVer.personaId) return true;
+                          const nomPartes = (docConVer.titulo || "").toLowerCase();
+                          return ri.nombre?.toLowerCase().includes(nomPartes.substring(0, 10));
+                        }) || reqsIntegrantesDb[0];
+
+                        if (targetIntegReq) {
+                          await supabaseAdmin.from("evidencias_requisito").insert([
+                            {
+                              requisito_caso_id: targetIntegReq.id,
+                              version_documento_id: ev.version_documento_id
+                            }
+                          ]);
+                          await supabaseAdmin.from("requisitos_caso").update({ estado: "recibido_revision" }).eq("id", targetIntegReq.id);
+                          console.log(`[SUPABASE AUTO-CORRECT]: Evidencia reasignada a requisito integrante ${targetIntegReq.id}.`);
+                        }
+
+                        // Si el postulante no tiene más evidencias, dejarlo en pendiente_carga
+                        const otrasEvs = rDb.evidencias.filter((e: any) => e.id !== ev.id);
+                        if (otrasEvs.length === 0) {
+                          await supabaseAdmin.from("requisitos_caso").update({ estado: "pendiente_carga" }).eq("id", reqPostulanteDb.id);
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch (sbErr: any) {
+          console.warn("[SUPABASE RECONCILIACIÓN WARN]:", sbErr?.message);
+        }
+      })();
+    }
+  }
+
   // Mapeador robusto de filas de Supabase a modelo canónico de Expediente
   function mapearFilaSupabaseAExpediente(row: any): Expediente {
     const postData = row.postulante || {};
@@ -926,6 +1166,7 @@ export async function createApp(): Promise<express.Express> {
               id,
               titulo,
               expediente_id,
+              persona_id,
               versiones:versiones_documento(*)
             `)
             .eq("expediente_id", expUuid);
@@ -952,6 +1193,7 @@ export async function createApp(): Promise<express.Express> {
               });
 
               if (existingDoc) {
+                if (dRow.persona_id) existingDoc.personaId = dRow.persona_id;
                 if (versionesMapeadas.length > 0) {
                   existingDoc.versiones = versionesMapeadas;
                   existingDoc.versionActual = versionesMapeadas[versionesMapeadas.length - 1];
@@ -960,6 +1202,7 @@ export async function createApp(): Promise<express.Express> {
                 mockDb.documentos.push({
                   id: dRow.id,
                   expedienteId: exp.id,
+                  personaId: dRow.persona_id || undefined,
                   categoria: "general",
                   titulo: dRow.titulo,
                   esOficial: true,
@@ -976,6 +1219,7 @@ export async function createApp(): Promise<express.Express> {
               id,
               codigo_requisito,
               nombre,
+              persona_id,
               fase,
               estado,
               es_obligatorio,
@@ -988,18 +1232,41 @@ export async function createApp(): Promise<express.Express> {
 
           if (Array.isArray(dbReqs) && dbReqs.length > 0) {
             dbReqs.forEach((rRow: any) => {
-              const reqExistente = mockDb.requisitosCaso.find(
-                (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && r.codigoRequisito === rRow.codigo_requisito
-              );
+              const reqExistente = mockDb.requisitosCaso.find((r) => {
+                const pertenece = r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible);
+                if (!pertenece) return false;
+                if (r.id === rRow.id) return true;
+                if (r.codigoRequisito !== rRow.codigo_requisito) return false;
+                if (rRow.persona_id && r.personaId) {
+                  return r.personaId === rRow.persona_id;
+                }
+                if (rRow.codigo_requisito === "F1-03") {
+                  if (rRow.nombre?.toLowerCase().includes("postulante") && r.nombre.toLowerCase().includes("postulante")) return true;
+                  if (rRow.nombre?.toLowerCase().includes("integrante") && r.nombre.toLowerCase().includes("integrante")) {
+                    return r.personaNombre && rRow.nombre.toLowerCase().includes(r.personaNombre.toLowerCase());
+                  }
+                  return false;
+                }
+                return true;
+              });
+
               if (reqExistente) {
+                if (rRow.id) reqExistente.id = rRow.id;
                 if (rRow.estado) reqExistente.estado = rRow.estado;
                 if (Array.isArray(rRow.evidencias) && rRow.evidencias.length > 0) {
                   const verId = rRow.evidencias[0].version_documento_id;
                   const docConVer = mockDb.documentos.find((d) => d.versiones?.some((v) => v.id === verId));
                   if (docConVer) {
-                    reqExistente.documentoAsociado = docConVer;
-                    if (reqExistente.estado === "pendiente_carga") {
-                      reqExistente.estado = "recibido_revision";
+                    const docTit = (docConVer.titulo || "").toLowerCase();
+                    const docArch = (docConVer.versionActual?.nombreArchivoOriginal || "").toLowerCase();
+                    const esDocInteg = docTit.includes("integrante") || docArch.includes("integrante");
+                    const esReqPostulante = reqExistente.nombre.toLowerCase().includes("postulante");
+
+                    if (!(esDocInteg && esReqPostulante)) {
+                      reqExistente.documentoAsociado = docConVer;
+                      if (reqExistente.estado === "pendiente_carga") {
+                        reqExistente.estado = "recibido_revision";
+                      }
                     }
                   }
                 }
@@ -1012,45 +1279,8 @@ export async function createApp(): Promise<express.Express> {
       }
     }
 
-    // Vincular documentos existentes al requisito correspondiente por coincidencia de código o título
-    const docsExp = mockDb.documentos.filter(
-      (d) => (d.expedienteId === exp.id || (exp.codigoVisible && d.expedienteId === exp.codigoVisible)) && d.versiones && d.versiones.length > 0
-    );
-
-    docsExp.forEach((doc) => {
-      const docTit = (doc.titulo || "").toLowerCase();
-      const reqMatch = mockDb.requisitosCaso.find(
-        (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
-          (docTit.includes(r.codigoRequisito.toLowerCase()) ||
-           docTit.includes(r.nombre.toLowerCase()) ||
-           r.nombre.toLowerCase().includes(docTit) ||
-           (r.codigoRequisito === "F1-01" && (docTit.includes("tradicion") || docTit.includes("tradición") || docTit.includes("libertad"))) ||
-           (r.codigoRequisito === "F1-02" && (docTit.includes("predial") || docTit.includes("impuesto"))) ||
-           (r.codigoRequisito === "F1-03" && (docTit.includes("cedula") || docTit.includes("cédula") || docTit.includes("identidad") || docTit.includes("postulante"))) ||
-           doc.versiones?.some((v) => v.storagePath?.includes(r.codigoRequisito)))
-      );
-      if (reqMatch) {
-        reqMatch.documentoAsociado = doc;
-        if (reqMatch.estado === "pendiente_carga") {
-          reqMatch.estado = "recibido_revision";
-        }
-      }
-    });
-
-    // Si aún quedan requisitos de Fase 1 sin vincular pero hay documentos cargados del expediente
-    const reqsF1 = mockDb.requisitosCaso.filter(
-      (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && (r.fase === 1 || !r.fase)
-    );
-    if (docsExp.length >= reqsF1.length) {
-      reqsF1.forEach((r, idx) => {
-        if (!r.documentoAsociado && docsExp[idx]) {
-          r.documentoAsociado = docsExp[idx];
-          if (r.estado === "pendiente_carga") {
-            r.estado = "recibido_revision";
-          }
-        }
-      });
-    }
+    // Reconciliación definitiva universal
+    reconciliarDocumentosConRequisitos(exp);
   }
 
   // Helper para inicializar la Fase 4: 3 Frentes en Paralelo (Arquitectura, Interventoría, Suelos)
@@ -1977,6 +2207,7 @@ export async function createApp(): Promise<express.Express> {
             id,
             titulo,
             expediente_id,
+            persona_id,
             versiones:versiones_documento(*)
           `);
 
@@ -2002,6 +2233,7 @@ export async function createApp(): Promise<express.Express> {
             });
 
             if (existingDoc) {
+              if (dRow.persona_id) existingDoc.personaId = dRow.persona_id;
               if (versionesMapeadas.length > 0) {
                 existingDoc.versiones = versionesMapeadas;
                 existingDoc.versionActual = versionesMapeadas[versionesMapeadas.length - 1];
@@ -2010,6 +2242,7 @@ export async function createApp(): Promise<express.Express> {
               mockDb.documentos.push({
                 id: dRow.id,
                 expedienteId: dRow.expediente_id,
+                personaId: dRow.persona_id || undefined,
                 categoria: "general",
                 titulo: dRow.titulo,
                 esOficial: true,
@@ -2234,10 +2467,11 @@ export async function createApp(): Promise<express.Express> {
         }
       }
 
-      // 4. Sanitizar y limpiar requisitos huérfanos en todos los expedientes
+      // 4. Sanitizar y limpiar requisitos huérfanos y reconciliar documentos en todos los expedientes
       mockDb.expedientes.forEach((exp) => {
         inicializarRequisitosFase1(exp);
         limpiarRequisitosHuerfanosExpediente(exp);
+        reconciliarDocumentosConRequisitos(exp);
       });
 
       // 5. Preparar listado enriquecido de expedientes
@@ -3526,49 +3760,56 @@ export async function createApp(): Promise<express.Express> {
   });
 
   // 5.2 TRANSFORMAR INTERESADO EN EXPEDIENTE VRD (Sin duplicación)
-  app.post("/api/interesados/:id/convertir", requireAuth(["comercial"]), async (req: AuthRequest, res: Response) => {
-    const interesado = mockDb.interesados.find((i) => i.id === req.params.id);
-    if (!interesado) {
-      res.status(404).json({ error: "Interesado no encontrado." });
-      return;
-    }
+  app.post(
+    "/api/interesados/:id/convertir",
+    requireAuth(["comercial", "asistente", "administrador", "supervisor"]),
+    async (req: AuthRequest, res: Response) => {
+      const interesado = mockDb.interesados.find((i) => i.id === req.params.id);
+      if (!interesado) {
+        res.status(404).json({ error: "Interesado no encontrado." });
+        return;
+      }
 
-    if (interesado.convertidoAExpedienteId) {
-      res.status(400).json({
-        error: "Este interesado ya fue transformado en expediente. No se permite duplicar.",
-        expedienteId: interesado.convertidoAExpedienteId
-      });
-      return;
-    }
+      if (interesado.convertidoAExpedienteId) {
+        res.status(400).json({
+          error: "Este interesado ya fue transformado en expediente. No se permite duplicar.",
+          expedienteId: interesado.convertidoAExpedienteId
+        });
+        return;
+      }
 
-    const {
-      tipoIdentificacion,
-      numeroIdentificacion,
-      primerNombre,
-      segundoNombre,
-      primerApellido,
-      segundoApellido,
-      nombres,
-      municipioCodigo,
-      vereda,
-      nombreODireccionPredio
-    } = req.body;
+      const {
+        tipoIdentificacion,
+        numeroIdentificacion,
+        primerNombre,
+        segundoNombre,
+        primerApellido,
+        segundoApellido,
+        nombres,
+        municipioCodigo,
+        vereda,
+        nombreODireccionPredio
+      } = req.body;
 
-    const pNombre = primerNombre ? normalizarTextoNombre(primerNombre) : (nombres ? normalizarTextoNombre(nombres).split(" ")[0] : "");
-    const sNombre = segundoNombre ? normalizarTextoNombre(segundoNombre) : (nombres && normalizarTextoNombre(nombres).split(" ").length > 1 ? normalizarTextoNombre(nombres).split(" ").slice(1).join(" ") : undefined);
-    const pApellido = primerApellido ? normalizarTextoNombre(primerApellido) : "";
-    const sApellido = segundoApellido ? normalizarTextoNombre(segundoApellido) : undefined;
-    const nombreCompleto = construirNombreCompleto(pNombre, sNombre, pApellido, sApellido) || (nombres ? normalizarTextoNombre(nombres) : "");
+      const pNombre = primerNombre ? normalizarTextoNombre(primerNombre) : (nombres ? normalizarTextoNombre(nombres).split(" ")[0] : "");
+      const sNombre = segundoNombre ? normalizarTextoNombre(segundoNombre) : (nombres && normalizarTextoNombre(nombres).split(" ").length > 1 ? normalizarTextoNombre(nombres).split(" ").slice(1).join(" ") : undefined);
+      const pApellido = primerApellido ? normalizarTextoNombre(primerApellido) : "";
+      const sApellido = segundoApellido ? normalizarTextoNombre(segundoApellido) : undefined;
+      const nombreCompleto = construirNombreCompleto(pNombre, sNombre, pApellido, sApellido) || (nombres ? normalizarTextoNombre(nombres) : "");
 
-    const numIdFinal = String(numeroIdentificacion || interesado.numeroIdentificacion || interesado.cedula || "").trim();
-    const tipoIdFinal = (tipoIdentificacion || interesado.tipoIdentificacion || "CC") as TipoIdentificacion;
+      let numIdFinal = String(numeroIdentificacion || interesado.numeroIdentificacion || interesado.cedula || "").trim();
+      if (!numIdFinal) {
+        numIdFinal = `PENDIENTE-${Date.now().toString().slice(-6)}`;
+      }
+      const tipoIdFinal = (tipoIdentificacion || interesado.tipoIdentificacion || "CC") as TipoIdentificacion;
+      const munCodigoFinal = municipioCodigo || interesado.municipioCodigo || "25151";
 
-    if (!numIdFinal || (!pNombre && !nombres) || !pApellido || !municipioCodigo) {
-      res.status(400).json({
-        error: "Número de identificación, nombres (primer nombre), primer apellido y municipio son obligatorios para abrir el expediente."
-      });
-      return;
-    }
+      if ((!pNombre && !nombres) || !pApellido) {
+        res.status(400).json({
+          error: "Nombres (primer nombre) y primer apellido son obligatorios para abrir el expediente."
+        });
+        return;
+      }
 
     const nuevoExpId = `exp-${Date.now()}`;
     const personaId = `per-${Date.now()}`;
@@ -3971,6 +4212,7 @@ export async function createApp(): Promise<express.Express> {
               id,
               titulo,
               expediente_id,
+              persona_id,
               versiones:versiones_documento(
                 id,
                 documento_id,
@@ -3994,6 +4236,7 @@ export async function createApp(): Promise<express.Express> {
               id,
               codigo_requisito,
               nombre,
+              persona_id,
               fase,
               estado,
               es_obligatorio,
@@ -4026,6 +4269,7 @@ export async function createApp(): Promise<express.Express> {
               });
 
               if (existingDoc) {
+                if (dRow.persona_id) existingDoc.personaId = dRow.persona_id;
                 if (versionesMapeadas.length > 0) {
                   existingDoc.versiones = versionesMapeadas;
                   existingDoc.versionActual = versionesMapeadas[versionesMapeadas.length - 1];
@@ -4034,6 +4278,7 @@ export async function createApp(): Promise<express.Express> {
                 const newDoc: Documento = {
                   id: dRow.id,
                   expedienteId: exp.id,
+                  personaId: dRow.persona_id || undefined,
                   categoria: "general",
                   titulo: dRow.titulo,
                   esOficial: true,
@@ -4047,9 +4292,24 @@ export async function createApp(): Promise<express.Express> {
 
           if (Array.isArray(dbReqs) && dbReqs.length > 0) {
             dbReqs.forEach((rRow: any) => {
-              const reqExistente = mockDb.requisitosCaso.find(
-                (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && r.codigoRequisito === rRow.codigo_requisito
-              );
+              const reqExistente = mockDb.requisitosCaso.find((r) => {
+                const pertenece = r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible);
+                if (!pertenece) return false;
+                if (r.id === rRow.id) return true;
+                if (r.codigoRequisito !== rRow.codigo_requisito) return false;
+                if (rRow.persona_id && r.personaId) {
+                  return r.personaId === rRow.persona_id;
+                }
+                if (rRow.codigo_requisito === "F1-03") {
+                  if (rRow.nombre?.toLowerCase().includes("postulante") && r.nombre.toLowerCase().includes("postulante")) return true;
+                  if (rRow.nombre?.toLowerCase().includes("integrante") && r.nombre.toLowerCase().includes("integrante")) {
+                    return r.personaNombre && rRow.nombre.toLowerCase().includes(r.personaNombre.toLowerCase());
+                  }
+                  return false;
+                }
+                return true;
+              });
+
               if (reqExistente) {
                 if (rRow.id) reqExistente.id = rRow.id;
                 if (rRow.estado) reqExistente.estado = rRow.estado;
@@ -4057,9 +4317,16 @@ export async function createApp(): Promise<express.Express> {
                   const verId = rRow.evidencias[0].version_documento_id;
                   const docConVer = mockDb.documentos.find((d) => d.versiones?.some((v) => v.id === verId));
                   if (docConVer) {
-                    reqExistente.documentoAsociado = docConVer;
-                    if (reqExistente.estado === "pendiente_carga") {
-                      reqExistente.estado = "recibido_revision";
+                    const docTit = (docConVer.titulo || "").toLowerCase();
+                    const docArch = (docConVer.versionActual?.nombreArchivoOriginal || "").toLowerCase();
+                    const esDocInteg = docTit.includes("integrante") || docArch.includes("integrante");
+                    const esReqPostulante = reqExistente.nombre.toLowerCase().includes("postulante");
+
+                    if (!(esDocInteg && esReqPostulante)) {
+                      reqExistente.documentoAsociado = docConVer;
+                      if (reqExistente.estado === "pendiente_carga") {
+                        reqExistente.estado = "recibido_revision";
+                      }
                     }
                   }
                 }
@@ -4115,29 +4382,16 @@ export async function createApp(): Promise<express.Express> {
             }
           }
 
-          // Vincular documentos existentes al requisito correspondiente por coincidencia de código o título
-          mockDb.documentos
-            .filter((d) => d.expedienteId === exp.id && d.versiones && d.versiones.length > 0)
-            .forEach((doc) => {
-              const reqMatch = mockDb.requisitosCaso.find(
-                (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
-                  (doc.titulo?.toLowerCase().includes(r.codigoRequisito.toLowerCase()) ||
-                   doc.titulo?.toLowerCase().includes(r.nombre.toLowerCase()) ||
-                   r.nombre.toLowerCase().includes(doc.titulo?.toLowerCase()) ||
-                   doc.versiones?.some((v) => v.storagePath?.includes(r.codigoRequisito)))
-              );
-              if (reqMatch) {
-                reqMatch.documentoAsociado = doc;
-                if (reqMatch.estado === "pendiente_carga") {
-                  reqMatch.estado = "recibido_revision";
-                }
-              }
-            });
+          // Reconciliar y asegurar asignación precisa de documentos a sus titulares o integrantes
+          reconciliarDocumentosConRequisitos(exp);
         }
       } catch (hErr: any) {
         console.warn("[HYDRATION WARNING]: Error hidratando documentos de Supabase:", hErr?.message);
       }
     }
+
+    // Reconciliación final obligatoria antes de armar la respuesta del expediente
+    reconciliarDocumentosConRequisitos(exp);
 
     // Requisitos asociados al expediente con sus documentos y versiones
     const requisitos = mockDb.requisitosCaso
@@ -5135,6 +5389,7 @@ export async function createApp(): Promise<express.Express> {
         docObj = {
           id: docId,
           expedienteId: exp.id,
+          personaId: nuevaPersonaId,
           titulo: `Cédula de Integrante: ${nombreCompleto}`,
           categoria: "fase1",
           esOficial: true,

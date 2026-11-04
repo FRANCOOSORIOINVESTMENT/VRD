@@ -906,6 +906,37 @@ export default function App() {
       })
       .then((data) => {
         if (!data) return;
+        if (data?.requisitos && Array.isArray(data.requisitos)) {
+          const reqs = data.requisitos;
+          const reqPostulante = reqs.find(
+            (r: any) => r.codigoRequisito === "F1-03" && r.nombre?.toLowerCase().includes("postulante")
+          );
+          const reqsIntegrantes = reqs.filter(
+            (r: any) => r.codigoRequisito === "F1-03" && r.nombre?.toLowerCase().includes("integrante")
+          );
+
+          if (reqPostulante?.documentoAsociado) {
+            const archNom = (reqPostulante.documentoAsociado.versionActual?.nombreArchivoOriginal || "").toLowerCase();
+            const docTit = (reqPostulante.documentoAsociado.titulo || "").toLowerCase();
+            if (archNom.includes("integrante") || docTit.includes("integrante")) {
+              const docMover = reqPostulante.documentoAsociado;
+              reqPostulante.documentoAsociado = undefined;
+              reqPostulante.estado = "pendiente_carga";
+
+              const targetInteg =
+                reqsIntegrantes.find((ri: any) => {
+                  const nomInteg = (ri.personaNombre || ri.nombre || "").toLowerCase();
+                  const partes = nomInteg.split(" ").filter((p: string) => p.length >= 3);
+                  return partes.some((p: string) => archNom.includes(p) || docTit.includes(p));
+                }) || reqsIntegrantes[0];
+
+              if (targetInteg) {
+                targetInteg.documentoAsociado = docMover;
+                targetInteg.estado = "recibido_revision";
+              }
+            }
+          }
+        }
         if (data && data.expediente) {
           setDetalleExp({ ...data });
         } else {
@@ -7805,19 +7836,31 @@ export default function App() {
                 </div>
               </div>
 
+              {errorConvertir && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-center space-x-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>{errorConvertir}</span>
+                </div>
+              )}
+
               <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setModalConvertirInteresado(null)}
-                  className="px-3 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
+                  onClick={() => {
+                    setModalConvertirInteresado(null);
+                    setErrorConvertir(null);
+                  }}
+                  className="px-3 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold shadow-sm"
+                  disabled={guardandoConvertir}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white rounded-lg font-bold shadow-xs flex items-center space-x-1.5 cursor-pointer transition-colors"
                 >
-                  Crear Expediente VRD
+                  {guardandoConvertir && <Loader2 className="w-4 h-4 animate-spin text-white" />}
+                  <span>{guardandoConvertir ? "Creando Expediente..." : "Crear Expediente VRD"}</span>
                 </button>
               </div>
             </form>
