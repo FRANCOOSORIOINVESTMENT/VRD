@@ -1963,10 +1963,7 @@ export default function App() {
           setDetalleExp((prev) => {
             if (!prev) return prev;
             const reqsActualizados = prev.requisitos.map((r) => {
-              if (
-                r.id === requisito.id ||
-                (r.codigoRequisito === requisito.codigoRequisito && (!requisito.personaId || r.personaId === requisito.personaId))
-              ) {
+              if (r.id === requisito.id) {
                 return {
                   ...r,
                   estado: (prev.expediente.faseActual >= 3 || r.documentoAsociado?.versionActual) ? ("actualizado" as const) : ("recibido_revision" as const),
@@ -2330,7 +2327,7 @@ export default function App() {
             ...prev,
             expediente: expActualizado,
             requisitos: prev.requisitos.map((r) =>
-              r.id === modalRevisarReq.id || r.codigoRequisito === modalRevisarReq.codigoRequisito
+              r.id === modalRevisarReq.id
                 ? {
                     ...r,
                     ...reqActualizado,

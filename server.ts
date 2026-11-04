@@ -4420,12 +4420,7 @@ export async function createApp(): Promise<express.Express> {
           }
         }
         const revision = mockDb.revisiones
-          .filter((rev) =>
-            rev.requisitoCasoId === r.id ||
-            rev.requisitoCasoId === r.codigoRequisito ||
-            (rev as any).codigoRequisito === r.codigoRequisito ||
-            (r.codigoRequisito && rev.requisitoCasoId?.includes(r.codigoRequisito.toLowerCase()))
-          )
+          .filter((rev) => rev.requisitoCasoId === r.id)
           .sort((a, b) => new Date(b.fechaRevision).getTime() - new Date(a.fechaRevision).getTime())[0];
 
         let ultimaRevision = revision || r.ultimaRevision;
@@ -6271,7 +6266,7 @@ export async function createApp(): Promise<express.Express> {
             .update({
               estado: resultado === "ACEPTADO" ? "aceptado" : "con_observaciones"
             })
-            .or(`id.eq.${reqCaso.id},and(expediente_id.eq.${exp.id},codigo_requisito.eq.${reqCaso.codigoRequisito})`);
+            .eq("id", reqCaso.id);
 
           const esUuid = (str?: string) => str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
           let reqUuid = esUuid(reqCaso.id) ? reqCaso.id : null;

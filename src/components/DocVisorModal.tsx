@@ -5,12 +5,14 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCw,
+  RotateCcw,
   Download,
   ShieldCheck,
   Camera,
   ChevronLeft,
   ChevronRight,
-  ExternalLink
+  ExternalLink,
+  RefreshCw
 } from "lucide-react";
 import { FotoRegistro } from "../types";
 
@@ -57,8 +59,17 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
   const esPdf = !tieneGaleria && (mimeType.toLowerCase().includes("pdf") || nombreArchivo.toLowerCase().endsWith(".pdf"));
   const esImagen = tieneGaleria || mimeType.toLowerCase().startsWith("image/") || /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(nombreArchivo);
 
-  const handleRotate = () => {
+  const handleRotateCw = () => {
     setRotation((prev) => (prev + 90) % 360);
+  };
+
+  const handleRotateCcw = () => {
+    setRotation((prev) => (prev - 90 + 360) % 360);
+  };
+
+  const handleResetView = () => {
+    setZoom(100);
+    setRotation(0);
   };
 
   const handlePrevFoto = () => {
@@ -102,6 +113,8 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
   const urlVisualizar = aplicarParametroAntiCache(urlBase);
   const pdfIframeUrl = esPdf && urlVisualizar ? (urlVisualizar.includes("#") ? urlVisualizar : `${urlVisualizar}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`) : urlVisualizar;
   const nombreDescargar = fotoActual ? fotoActual.nombre : nombreArchivo;
+
+  const isRotated90or270 = rotation % 180 !== 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-3 sm:p-5 animate-in fade-in duration-150">
@@ -148,33 +161,59 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                 <span className="hidden sm:inline">Descargar</span>
               </a>
             )}
-            {esImagen && (
-              <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1 text-xs text-slate-600 space-x-1">
+            {(esImagen || esPdf) && (
+              <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1 text-xs text-slate-600 space-x-1 shadow-xs">
                 <button
                   type="button"
-                  onClick={() => setZoom(Math.max(50, zoom - 25))}
-                  className="p-1 hover:bg-slate-100 rounded cursor-pointer"
-                  title="Alejar"
+                  onClick={() => setZoom(Math.max(40, zoom - 20))}
+                  className="p-1 hover:bg-slate-100 rounded cursor-pointer text-slate-700"
+                  title="Alejar zoom (-)"
                 >
                   <ZoomOut className="w-4 h-4" />
                 </button>
-                <span className="px-1.5 font-medium">{zoom}%</span>
                 <button
                   type="button"
-                  onClick={() => setZoom(Math.min(200, zoom + 25))}
-                  className="p-1 hover:bg-slate-100 rounded cursor-pointer"
-                  title="Acercar"
+                  onClick={handleResetView}
+                  className="px-1.5 py-0.5 hover:bg-slate-100 rounded cursor-pointer font-semibold text-slate-700 text-[11px]"
+                  title="Restablecer zoom y rotación (100% / 0°)"
+                >
+                  {zoom}%
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setZoom(Math.min(300, zoom + 20))}
+                  className="p-1 hover:bg-slate-100 rounded cursor-pointer text-slate-700"
+                  title="Acercar zoom (+)"
                 >
                   <ZoomIn className="w-4 h-4" />
                 </button>
+                <div className="h-4 w-px bg-slate-200 mx-0.5" />
                 <button
                   type="button"
-                  onClick={handleRotate}
-                  className="p-1 hover:bg-slate-100 rounded text-slate-700 cursor-pointer border-l border-slate-200 pl-1.5 ml-0.5"
-                  title="Rotar 90°"
+                  onClick={handleRotateCcw}
+                  className="p-1 hover:bg-slate-100 rounded text-slate-700 cursor-pointer"
+                  title="Rotar 90° a la izquierda"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRotateCw}
+                  className="p-1 hover:bg-slate-100 rounded text-slate-700 cursor-pointer"
+                  title={`Rotar 90° a la derecha (Orientación actual: ${rotation}°)`}
                 >
                   <RotateCw className="w-4 h-4" />
                 </button>
+                {(zoom !== 100 || rotation !== 0) && (
+                  <button
+                    type="button"
+                    onClick={handleResetView}
+                    className="p-1 hover:bg-slate-100 rounded text-amber-600 cursor-pointer ml-0.5"
+                    title="Restablecer orientación y escala"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             )}
             <button
@@ -189,10 +228,22 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
         </div>
 
         {/* Cuerpo del visor interactivo */}
-        <div className="flex-1 bg-slate-900/90 relative overflow-hidden flex flex-col items-center justify-center min-h-0">
+        <div className="flex-1 bg-slate-900/90 relative overflow-auto flex items-center justify-center min-h-0 p-4">
           {urlVisualizar ? (
             esPdf ? (
-              <div className="w-full h-full rounded-lg overflow-hidden border border-slate-300 shadow-sm bg-white flex flex-col relative">
+              <div
+                className="transition-transform duration-200 ease-out border border-slate-300 shadow-2xl bg-white rounded-lg overflow-hidden flex flex-col"
+                style={{
+                  transform: `scale(${zoom / 100}) rotate(${rotation}deg)`,
+                  transformOrigin: "center center",
+                  width: isRotated90or270 ? "62vh" : "100%",
+                  height: isRotated90or270 ? "82vw" : "100%",
+                  maxWidth: isRotated90or270 ? "68vh" : "960px",
+                  maxHeight: isRotated90or270 ? "88vw" : "100%",
+                  minWidth: isRotated90or270 ? "350px" : "300px",
+                  minHeight: isRotated90or270 ? "520px" : "400px",
+                }}
+              >
                 <div className="bg-slate-100 px-4 py-1.5 border-b border-slate-200 flex items-center justify-between text-xs text-slate-600 shrink-0 z-10">
                   <span className="truncate font-medium">{nombreArchivo}</span>
                   <a
@@ -205,22 +256,29 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
-                <div className="w-full flex-1 overflow-hidden bg-slate-200 p-1">
+                <div className="w-full flex-1 bg-slate-200 relative overflow-hidden">
                   <iframe
                     src={pdfIframeUrl}
                     title={nombreArchivo}
-                    className="w-full h-full border-0 rounded-lg bg-white shadow-xs"
+                    className="w-full h-full border-0 bg-white"
                   />
                 </div>
               </div>
             ) : esImagen ? (
-              <div className="relative w-full h-full flex items-center justify-center overflow-auto p-4 select-none">
-                <img
-                  src={urlVisualizar}
-                  alt={nombreDescargar}
-                  className="max-h-full max-w-full object-contain rounded-lg shadow-2xl border border-slate-700 transition-transform duration-150"
-                  style={{ transform: `scale(${zoom / 100}) rotate(${rotation}deg)`, transformOrigin: "center center" }}
-                />
+              <div className="relative w-full h-full flex items-center justify-center overflow-visible select-none">
+                <div
+                  className="transition-transform duration-200 ease-out flex items-center justify-center"
+                  style={{
+                    transform: `scale(${zoom / 100}) rotate(${rotation}deg)`,
+                    transformOrigin: "center center",
+                  }}
+                >
+                  <img
+                    src={urlVisualizar}
+                    alt={nombreDescargar}
+                    className="max-h-[75vh] max-w-[85vw] object-contain rounded-lg shadow-2xl border border-slate-700"
+                  />
+                </div>
 
                 {/* Controles flotantes de navegación si hay múltiples fotos */}
                 {tieneGaleria && fotos.length > 1 && (
@@ -228,7 +286,7 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                     <button
                       type="button"
                       onClick={handlePrevFoto}
-                      className="absolute left-4 top-1/2 -translate-y-1/2 p-2.5 bg-slate-800/80 hover:bg-slate-700 text-white rounded-full shadow-lg border border-slate-600 transition-all cursor-pointer backdrop-blur-xs"
+                      className="absolute left-4 top-1/2 -translate-y-1/2 p-2.5 bg-slate-800/80 hover:bg-slate-700 text-white rounded-full shadow-lg border border-slate-600 transition-all cursor-pointer backdrop-blur-xs z-20"
                       title="Foto anterior (Flecha izquierda)"
                     >
                       <ChevronLeft className="w-6 h-6" />
@@ -236,7 +294,7 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                     <button
                       type="button"
                       onClick={handleNextFoto}
-                      className="absolute right-4 top-1/2 -translate-y-1/2 p-2.5 bg-slate-800/80 hover:bg-slate-700 text-white rounded-full shadow-lg border border-slate-600 transition-all cursor-pointer backdrop-blur-xs"
+                      className="absolute right-4 top-1/2 -translate-y-1/2 p-2.5 bg-slate-800/80 hover:bg-slate-700 text-white rounded-full shadow-lg border border-slate-600 transition-all cursor-pointer backdrop-blur-xs z-20"
                       title="Siguiente foto (Flecha derecha)"
                     >
                       <ChevronRight className="w-6 h-6" />
@@ -246,7 +304,7 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
 
                 {/* Etiqueta de la categoría flotante sobre la foto */}
                 {fotoActual?.categoria && (
-                  <div className="absolute top-4 left-4 px-3 py-1.5 bg-slate-900/80 backdrop-blur-xs text-white rounded-lg text-xs font-semibold border border-slate-700 shadow-lg flex items-center space-x-1.5">
+                  <div className="absolute top-4 left-4 px-3 py-1.5 bg-slate-900/80 backdrop-blur-xs text-white rounded-lg text-xs font-semibold border border-slate-700 shadow-lg flex items-center space-x-1.5 z-20">
                     <Camera className="w-3.5 h-3.5 text-amber-400" />
                     <span>{fotoActual.categoria}</span>
                   </div>
@@ -273,7 +331,7 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
             )
           ) : (
             <div
-              className="bg-white p-6 sm:p-8 rounded-xl shadow-md max-w-2xl w-full text-center border border-slate-200"
+              className="bg-white p-6 sm:p-8 rounded-xl shadow-md max-w-2xl w-full text-center border border-slate-200 transition-transform duration-200"
               style={{ transform: `scale(${zoom / 100})`, transformOrigin: "top center" }}
             >
               <div className="inline-flex p-4 bg-slate-50 border border-slate-200 rounded-2xl mb-3 text-slate-600">
@@ -350,4 +408,5 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
     </div>
   );
 };
+
 
