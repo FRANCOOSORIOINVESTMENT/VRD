@@ -6212,15 +6212,13 @@ export async function createApp(): Promise<express.Express> {
         exp.bloqueadoPorRevision = false;
         if (reqCaso.fase === 1 || !reqCaso.fase) {
           exp.estadoFase1 = "devuelto";
-          exp.motivoDevolucionFase = nuevaRevision.observacion || "Documento con observaciones para corregir.";
         } else if (reqCaso.fase === 2) {
           exp.estadoFase2 = "devuelto";
-          exp.observacionDevolucionFase2 = nuevaRevision.observacion || "Documento con observaciones para corregir.";
         } else {
           exp.revisionFases = exp.revisionFases || {};
           exp.revisionFases[reqCaso.fase] = {
+            ...exp.revisionFases[reqCaso.fase],
             estado: "devuelto",
-            observacionesDevolucion: nuevaRevision.observacion || "Documento con observaciones para corregir.",
             fechaDecisionSupervisor: new Date().toISOString(),
             supervisorId: req.user!.id,
             supervisorNombre: req.user!.nombreCompleto

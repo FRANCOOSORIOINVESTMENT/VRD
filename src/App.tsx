@@ -4841,13 +4841,16 @@ export default function App() {
                       )}
 
                       {/* BANNER DE EXPEDIENTE DEVUELTO CON OBSERVACIONES EN FASE 1 */}
-                      {detalleExp.expediente.estadoFase1 === "devuelto" && !detalleExp.expediente.bloqueadoPorRevision && (
+                      {detalleExp.expediente.estadoFase1 === "devuelto" &&
+                       !detalleExp.expediente.bloqueadoPorRevision &&
+                       Boolean(detalleExp.expediente.motivoDevolucionFase?.trim()) &&
+                       !reqsFase1.some((r) => (r.ultimaRevision?.observacion || r.observaciones || "").trim() === (detalleExp.expediente.motivoDevolucionFase || "").trim()) && (
                         <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl mb-5 flex items-start space-x-3 text-amber-900 shadow-xs">
                           <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                           <div className="flex-1">
-                            <h4 className="font-bold text-sm">Expediente Devuelto con Observaciones por Análisis Documental</h4>
+                            <h4 className="font-bold text-sm">Expediente Devuelto con Observaciones Generales</h4>
                             <p className="text-xs text-amber-800 mt-0.5">
-                              <strong>Motivo:</strong> {detalleExp.expediente.motivoDevolucionFase || "Corrija los documentos observados usando el botón 'Corregir Documento' y vuelva a enviar a revisión."}
+                              <strong>Motivo General:</strong> {detalleExp.expediente.motivoDevolucionFase}
                             </p>
                           </div>
                         </div>
@@ -5079,13 +5082,8 @@ export default function App() {
                                   const obsTexto = (req.ultimaRevision?.observacion || req.observaciones || "").trim();
                                   const esObsTrivial = !obsTexto || ["ok", "ok.", "aceptado", "cumple", "aprobado", "sin observaciones", "conforme", "correcto", "revisado"].includes(obsTexto.toLowerCase());
 
-                                  if (esAceptado && esObsTrivial) return null;
-
-                                  const tieneObsActiva = req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || (obsTexto && !esObsTrivial);
-
-                                  if (!tieneObsActiva) return null;
-
                                   if (esAceptado) {
+                                    if (esObsTrivial) return null;
                                     return (
                                       <div className="mt-2.5 p-3 bg-emerald-50/90 border border-emerald-200 rounded-lg text-xs text-emerald-900 shadow-2xs">
                                         <div className="flex items-center justify-between gap-2 mb-1">
@@ -5098,6 +5096,18 @@ export default function App() {
                                       </div>
                                     );
                                   }
+
+                                  // Si se subió una corrección o el estado ya no es con_observaciones, ocultar la observación previa
+                                  const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
+                                  const tieneCorrSubida = vNum > 1 || req.estado === "actualizado" || req.estado === "corregido" || req.estado === "recibido_revision";
+
+                                  if (tieneCorrSubida || req.estado !== "con_observaciones") {
+                                    return null;
+                                  }
+
+                                  const tieneObsActiva = Boolean(obsTexto) && !esObsTrivial;
+
+                                  if (!tieneObsActiva) return null;
 
                                   return (
                                     <div className="mt-2.5 p-3 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-900 shadow-2xs">
@@ -5315,13 +5325,16 @@ export default function App() {
                       ) : (
                         <div>
                           {/* BANNER DE EXPEDIENTE DEVUELTO CON OBSERVACIONES (Cambio 7) */}
-                          {detalleExp.expediente.estadoFase2 === "devuelto" && !detalleExp.expediente.bloqueadoPorRevision && (
+                          {detalleExp.expediente.estadoFase2 === "devuelto" &&
+                           !detalleExp.expediente.bloqueadoPorRevision &&
+                           Boolean(detalleExp.expediente.observacionDevolucionFase2?.trim()) &&
+                           !reqsFase2.some((r) => (r.ultimaRevision?.observacion || r.observaciones || "").trim() === (detalleExp.expediente.observacionDevolucionFase2 || "").trim()) && (
                             <div className="p-4 bg-rose-50 border border-rose-300 rounded-xl mb-5 flex items-start space-x-3 text-rose-900 shadow-xs">
                               <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
                               <div className="flex-1">
-                                <h4 className="font-bold text-sm">Expediente Devuelto con Observaciones por Análisis Documental</h4>
+                                <h4 className="font-bold text-sm">Expediente Devuelto con Observaciones Generales</h4>
                                 <p className="text-xs text-rose-800 mt-0.5">
-                                  <strong>Motivo:</strong> {detalleExp.expediente.observacionDevolucionFase2 || "Corregir los documentos observados y volver a enviar a revisión."}
+                                  <strong>Motivo General:</strong> {detalleExp.expediente.observacionDevolucionFase2}
                                 </p>
                               </div>
                             </div>
@@ -5563,13 +5576,8 @@ export default function App() {
                                         const obsTexto = (req.ultimaRevision?.observacion || req.observaciones || "").trim();
                                         const esObsTrivial = !obsTexto || ["ok", "ok.", "aceptado", "cumple", "aprobado", "sin observaciones", "conforme", "correcto", "revisado"].includes(obsTexto.toLowerCase());
 
-                                        if (esAceptado && esObsTrivial) return null;
-
-                                        const tieneObsActiva = req.estado === "con_observaciones" || req.ultimaRevision?.resultado === "OBSERVADO" || (obsTexto && !esObsTrivial);
-
-                                        if (!tieneObsActiva) return null;
-
                                         if (esAceptado) {
+                                          if (esObsTrivial) return null;
                                           return (
                                             <div className="mt-2.5 p-3 bg-emerald-50/90 border border-emerald-200 rounded-lg text-xs text-emerald-900 shadow-2xs">
                                               <div className="flex items-center justify-between gap-2 mb-1">
@@ -5582,6 +5590,18 @@ export default function App() {
                                             </div>
                                           );
                                         }
+
+                                        // Si se subió una corrección o el estado ya no es con_observaciones, ocultar la observación previa
+                                        const vNum = req.documentoAsociado?.versionActual?.versionNumero ?? 0;
+                                        const tieneCorrSubida = vNum > 1 || req.estado === "actualizado" || req.estado === "corregido" || req.estado === "recibido_revision";
+
+                                        if (tieneCorrSubida || req.estado !== "con_observaciones") {
+                                          return null;
+                                        }
+
+                                        const tieneObsActiva = Boolean(obsTexto) && !esObsTrivial;
+
+                                        if (!tieneObsActiva) return null;
 
                                         return (
                                           <div className="mt-2.5 p-3 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-900 shadow-2xs">
