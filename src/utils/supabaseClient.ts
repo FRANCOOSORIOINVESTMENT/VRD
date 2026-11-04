@@ -45,7 +45,7 @@ export async function pingSupabaseFrontend(): Promise<{
   restUrl: string;
 }> {
   try {
-    const res = await fetch(SUPABASE_REST_URL, {
+    const res = await fetch(`${SUPABASE_REST_URL}perfiles_usuario?select=id&limit=1`, {
       method: "GET",
       headers: {
         apikey: SUPABASE_ANON_KEY,
@@ -53,7 +53,7 @@ export async function pingSupabaseFrontend(): Promise<{
       }
     });
     return {
-      ok: res.status !== 500 && res.status !== 502 && res.status !== 503,
+      ok: res.ok || res.status === 200 || res.status === 206 || res.status === 404,
       statusText: `HTTP ${res.status} ${res.statusText}`,
       projectId: SUPABASE_PROJECT_ID,
       url: SUPABASE_URL,

@@ -26,7 +26,7 @@ export const supabaseSecretKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   supabasePublishableKey;
 
-export const APP_MODE = (process.env.APP_MODE === "mock" && !supabaseUrl) ? "mock" : "supabase";
+export const APP_MODE = process.env.APP_MODE === "mock" ? "mock" : "supabase";
 export const isMockMode = APP_MODE === "mock";
 
 let clientPublic: SupabaseClient | null = null;
@@ -59,7 +59,8 @@ export async function testSupabaseConnection(): Promise<{
   restUrl: string;
   details?: any;
 }> {
-  if (!clientPublic) {
+  const targetClient = clientAdmin || clientPublic;
+  if (!targetClient) {
     return {
       ok: false,
       message: "Cliente Supabase no inicializado",
@@ -71,7 +72,7 @@ export async function testSupabaseConnection(): Promise<{
 
   try {
     // Probar conexión contra la API REST de Supabase
-    const { data, error } = await clientPublic.from("perfiles_usuario").select("count").limit(1);
+    const { data, error } = await targetClient.from("perfiles_usuario").select("id").limit(1);
     if (error) {
       if (error.code === "PGRST205" || error.message?.includes("Could not find the table")) {
         return {
