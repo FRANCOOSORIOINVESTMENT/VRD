@@ -668,7 +668,8 @@ export async function createApp(): Promise<express.Express> {
       primerApellido: postData.primer_apellido || "Registrado en DB",
       segundoApellido: postData.segundo_apellido || undefined,
       nombres: postData.nombres || `${primerNombre}${segundoNombre ? " " + segundoNombre : ""} ${postData.primer_apellido || 'Titular'}`.trim(),
-      telefonoPrincipal: postData.telefono_principal || "",
+      telefonoPrincipal: postData.telefono_principal || postData.telefono || row.telefono || "",
+      telefonoSecundario: postData.telefono_secundario || postData.telefono_secundario_contacto || row.telefono_secundario || row.telefono_secundario_contacto || row.telefono2 || "",
       correo: postData.correo || undefined
     };
 

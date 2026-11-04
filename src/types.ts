@@ -109,6 +109,7 @@ export interface Persona {
   segundoApellido?: string; // Cambio 6: Segundo Apellido (Opcional)
   nombres: string; // Nombre completo concatenado (ej: "MARTA HELENA FRANCO")
   telefonoPrincipal?: string;
+  telefonoSecundario?: string;
   correo?: string;
 }
 

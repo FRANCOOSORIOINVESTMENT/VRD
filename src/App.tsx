@@ -3378,8 +3378,8 @@ export default function App() {
                           </td>
                           <td className="px-4 py-3">
                             {(() => {
-                              const tel1 = exp.postulante?.telefonoPrincipal || (exp as any).telefono;
-                              const tel2 = (exp.postulante as any)?.telefonoSecundario || (exp as any).telefonoSecundario;
+                              const tel1 = exp.postulante?.telefonoPrincipal || (exp as any).telefono || (exp.postulante as any)?.telefono;
+                              const tel2 = exp.postulante?.telefonoSecundario || (exp as any).telefonoSecundario || (exp as any).telefonoContacto2 || (exp as any).telefono2;
                               if (!tel1 && !tel2) {
                                 return <span className="text-slate-400 text-xs italic">Sin registrar</span>;
                               }
@@ -3395,7 +3395,7 @@ export default function App() {
                                         href={`https://wa.me/57${tel1.replace(/\D/g, "")}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="inline-flex items-center space-x-1 text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-0.5 font-semibold hover:bg-emerald-100"
+                                        className="inline-flex items-center space-x-1 text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-0.5 font-semibold hover:bg-emerald-100 transition-colors"
                                         title="WhatsApp Teléfono Principal"
                                       >
                                         <span>WhatsApp Directo</span>
@@ -3412,7 +3412,7 @@ export default function App() {
                                         href={`https://wa.me/57${tel2.replace(/\D/g, "")}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="inline-flex items-center space-x-1 text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-0.5 font-semibold hover:bg-emerald-100"
+                                        className="inline-flex items-center space-x-1 text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-0.5 font-semibold hover:bg-emerald-100 transition-colors"
                                         title="WhatsApp Teléfono Secundario"
                                       >
                                         <span>WhatsApp Tel. 2</span>
@@ -3892,12 +3892,12 @@ export default function App() {
                                   <div className="flex items-center space-x-1.5 font-mono text-slate-800">
                                     <Phone className="w-3 h-3 text-slate-400 shrink-0" />
                                     <span>{item.telefono}</span>
-                                    {item.tieneWhatsapp && (
+                                    {item.telefono && (
                                       <a
-                                        href={`https://wa.me/57${item.telefono}`}
+                                        href={`https://wa.me/57${item.telefono.replace(/\D/g, "")}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="inline-flex items-center space-x-0.5 text-[9px] text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 font-bold hover:bg-emerald-100"
+                                        className="inline-flex items-center space-x-0.5 text-[9px] text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 font-bold hover:bg-emerald-100 transition-colors"
                                         title="WhatsApp Teléfono Principal"
                                       >
                                         <span>WA</span>
@@ -3905,20 +3905,18 @@ export default function App() {
                                     )}
                                   </div>
                                   {item.telefonoSecundario && (
-                                    <div className="flex items-center space-x-1.5 font-mono text-slate-600 text-[11px]">
+                                    <div className="flex items-center space-x-1.5 font-mono text-slate-600 text-[11px] pt-0.5 border-t border-slate-100">
                                       <PhoneCall className="w-2.5 h-2.5 text-slate-400 shrink-0" />
                                       <span title="Teléfono de Contacto 2">{item.telefonoSecundario}</span>
-                                      {item.tieneWhatsappSecundario && (
-                                        <a
-                                          href={`https://wa.me/57${item.telefonoSecundario}`}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="inline-flex items-center space-x-0.5 text-[9px] text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 font-bold hover:bg-emerald-100"
-                                          title="WhatsApp Teléfono Secundario"
-                                        >
-                                          <span>WA</span>
-                                        </a>
-                                      )}
+                                      <a
+                                        href={`https://wa.me/57${item.telefonoSecundario.replace(/\D/g, "")}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center space-x-0.5 text-[9px] text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 font-bold hover:bg-emerald-100 transition-colors ml-1"
+                                        title="WhatsApp Teléfono Secundario"
+                                      >
+                                        <span>WA Tel 2</span>
+                                      </a>
                                     </div>
                                   )}
                                 </div>
