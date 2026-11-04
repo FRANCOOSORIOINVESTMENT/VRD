@@ -3406,9 +3406,56 @@ export default function App() {
                           </td>
                           <td className="px-4 py-3">
                             {(() => {
-                              const tel1 = exp.postulante?.telefonoPrincipal || (exp as any).telefono || (exp.postulante as any)?.telefono;
-                              const tel2 = exp.postulante?.telefonoSecundario || (exp as any).telefonoSecundario || (exp as any).telefonoContacto2 || (exp as any).telefono2;
-                              if (!tel1 && !tel2) {
+                              const intCoincidente = interesados.find(
+                                (i) => (i.convertidoAExpedienteId && (i.convertidoAExpedienteId === exp.id || i.convertidoAExpedienteId === exp.codigoVisible)) ||
+                                       (i.cedula && exp.postulante?.numeroIdentificacion && (i.cedula === exp.postulante.numeroIdentificacion || exp.postulante.numeroIdentificacion.includes(i.cedula))) ||
+                                       (i.numeroIdentificacion && exp.postulante?.numeroIdentificacion && (i.numeroIdentificacion === exp.postulante.numeroIdentificacion || exp.postulante.numeroIdentificacion.includes(i.numeroIdentificacion))) ||
+                                       (exp.interesadoOrigenId && i.id === exp.interesadoOrigenId) ||
+                                       (i.telefono && exp.postulante?.telefonoPrincipal && i.telefono.replace(/\D/g, "") === exp.postulante.telefonoPrincipal.replace(/\D/g, ""))
+                              );
+                              const otroIntegConTel = exp.hogar?.integrantes?.find(
+                                (i) => !i.esPostulantePrincipal && (i.persona?.telefonoPrincipal || (i.persona as any)?.telefono || i.persona?.telefonoSecundario)
+                              );
+
+                              const tel1 = exp.postulante?.telefonoPrincipal || (exp as any).telefono || (exp.postulante as any)?.telefono || intCoincidente?.telefono;
+                              const tel2 = exp.postulante?.telefonoSecundario || 
+                                           (exp as any).telefonoSecundario || 
+                                           (exp as any).telefonoContacto2 || 
+                                           (exp as any).telefono2 || 
+                                           intCoincidente?.telefonoSecundario || 
+                                           (intCoincidente as any)?.telefonoContacto2 ||
+                                           (intCoincidente as any)?.telefono2 ||
+                                           intCoincidente?.contactosApoyo?.[0]?.telefono ||
+                                           otroIntegConTel?.persona?.telefonoPrincipal || 
+                                           otroIntegConTel?.persona?.telefonoSecundario ||
+                                           (otroIntegConTel?.persona as any)?.telefono;
+
+                              // Contactos adicionales de apoyo o integrantes familiares con teléfono
+                              const contactosExtras: { tel: string; label: string }[] = [];
+                              if (intCoincidente?.contactosApoyo && Array.isArray(intCoincidente.contactosApoyo)) {
+                                intCoincidente.contactosApoyo.forEach((c: any) => {
+                                  if (c.telefono && c.telefono !== tel1 && c.telefono !== tel2 && !contactosExtras.some(e => e.tel.replace(/\D/g, "") === c.telefono.replace(/\D/g, ""))) {
+                                    contactosExtras.push({
+                                      tel: c.telefono,
+                                      label: c.nombreCompleto ? `WhatsApp ${c.nombreCompleto.split(" ")[0]}` : "WhatsApp Contacto"
+                                    });
+                                  }
+                                });
+                              }
+                              if (exp.hogar?.integrantes && Array.isArray(exp.hogar.integrantes)) {
+                                exp.hogar.integrantes.forEach((i: any) => {
+                                  const itel = i.persona?.telefonoPrincipal || i.persona?.telefonoSecundario || (i.persona as any)?.telefono;
+                                  if (itel && itel !== tel1 && itel !== tel2 && !contactosExtras.some(e => e.tel.replace(/\D/g, "") === itel.replace(/\D/g, ""))) {
+                                    const pNom = i.persona?.primerNombre || i.persona?.nombres?.split(" ")[0] || i.parentesco || "Familiar";
+                                    contactosExtras.push({
+                                      tel: itel,
+                                      label: `WhatsApp ${pNom}`
+                                    });
+                                  }
+                                });
+                              }
+
+                              if (!tel1 && !tel2 && contactosExtras.length === 0) {
                                 return <span className="text-slate-400 text-xs italic">Sin registrar</span>;
                               }
                               return (
@@ -3434,7 +3481,7 @@ export default function App() {
                                     <div className={tel1 ? "pt-1 border-t border-slate-100" : ""}>
                                       <div className="flex items-center space-x-1.5 font-mono text-slate-700 text-[11px]">
                                         <PhoneCall className="w-2.5 h-2.5 text-slate-400 shrink-0" />
-                                        <span title="Teléfono Secundario">{tel2}</span>
+                                        <span title="Teléfono Secundario / Contacto 2">{tel2}</span>
                                       </div>
                                       <a
                                         href={`https://wa.me/57${tel2.replace(/\D/g, "")}`}
@@ -3447,6 +3494,23 @@ export default function App() {
                                       </a>
                                     </div>
                                   )}
+                                  {contactosExtras.map((extra, idx) => (
+                                    <div key={idx} className="pt-1 border-t border-slate-100">
+                                      <div className="flex items-center space-x-1.5 font-mono text-slate-700 text-[11px]">
+                                        <PhoneCall className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                                        <span title={extra.label}>{extra.tel}</span>
+                                      </div>
+                                      <a
+                                        href={`https://wa.me/57${extra.tel.replace(/\D/g, "")}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center space-x-1 text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-0.5 font-semibold hover:bg-emerald-100 transition-colors"
+                                        title={extra.label}
+                                      >
+                                        <span>{extra.label}</span>
+                                      </a>
+                                    </div>
+                                  ))}
                                 </div>
                               );
                             })()}
@@ -3916,38 +3980,51 @@ export default function App() {
                                 </div>
                               </td>
                               <td className="px-4 py-3">
-                                <div className="space-y-1">
-                                  <div className="flex items-center space-x-1.5 font-mono text-slate-800">
-                                    <Phone className="w-3 h-3 text-slate-400 shrink-0" />
-                                    <span>{item.telefono}</span>
-                                    {item.telefono && (
-                                      <a
-                                        href={`https://wa.me/57${item.telefono.replace(/\D/g, "")}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="inline-flex items-center space-x-0.5 text-[9px] text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 font-bold hover:bg-emerald-100 transition-colors"
-                                        title="WhatsApp Teléfono Principal"
-                                      >
-                                        <span>WA</span>
-                                      </a>
-                                    )}
-                                  </div>
-                                  {item.telefonoSecundario && (
-                                    <div className="flex items-center space-x-1.5 font-mono text-slate-600 text-[11px] pt-0.5 border-t border-slate-100">
-                                      <PhoneCall className="w-2.5 h-2.5 text-slate-400 shrink-0" />
-                                      <span title="Teléfono de Contacto 2">{item.telefonoSecundario}</span>
-                                      <a
-                                        href={`https://wa.me/57${item.telefonoSecundario.replace(/\D/g, "")}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="inline-flex items-center space-x-0.5 text-[9px] text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 font-bold hover:bg-emerald-100 transition-colors ml-1"
-                                        title="WhatsApp Teléfono Secundario"
-                                      >
-                                        <span>WA Tel 2</span>
-                                      </a>
+                                {(() => {
+                                  const tel1 = item.telefono;
+                                  const tel2 = item.telefonoSecundario || (item as any).telefonoContacto2 || (item as any).telefono2 || (item.contactosApoyo?.[0]?.telefono);
+                                  if (!tel1 && !tel2) {
+                                    return <span className="text-slate-400 text-xs italic">Sin registrar</span>;
+                                  }
+                                  return (
+                                    <div className="space-y-1.5">
+                                      {tel1 && (
+                                        <div>
+                                          <div className="flex items-center space-x-1.5 font-mono text-slate-800 text-xs">
+                                            <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                                            <span>{tel1}</span>
+                                          </div>
+                                          <a
+                                            href={`https://wa.me/57${tel1.replace(/\D/g, "")}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center space-x-1 text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-0.5 font-semibold hover:bg-emerald-100 transition-colors"
+                                            title="WhatsApp Teléfono Principal"
+                                          >
+                                            <span>WhatsApp Directo</span>
+                                          </a>
+                                        </div>
+                                      )}
+                                      {tel2 && (
+                                        <div className={tel1 ? "pt-1 border-t border-slate-100" : ""}>
+                                          <div className="flex items-center space-x-1.5 font-mono text-slate-700 text-[11px]">
+                                            <PhoneCall className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                                            <span title="Teléfono Secundario / Contacto 2">{tel2}</span>
+                                          </div>
+                                          <a
+                                            href={`https://wa.me/57${tel2.replace(/\D/g, "")}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center space-x-1 text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-0.5 font-semibold hover:bg-emerald-100 transition-colors"
+                                            title="WhatsApp Teléfono Secundario"
+                                          >
+                                            <span>WhatsApp Tel. 2</span>
+                                          </a>
+                                        </div>
+                                      )}
                                     </div>
-                                  )}
-                                </div>
+                                  );
+                                })()}
                               </td>
                               {/* CAMBIO 8: Visualización fidedigna del origen de captación */}
                               <td className="px-4 py-3">
@@ -4441,7 +4518,7 @@ export default function App() {
               )}
 
               {/* DATOS CLAVE EN GRID */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-4 text-xs">
                 <div>
                   <span className="text-slate-400 block mb-0.5">Predio de Vivienda:</span>
                   <span className="font-semibold text-slate-800">
@@ -4460,6 +4537,123 @@ export default function App() {
                       return `${nombreMun} (Cód. ${codMun})${veredaExtra}`;
                     })()}
                   </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-0.5">Contactos & WhatsApp:</span>
+                  {(() => {
+                    const intCoincidente = interesados.find(
+                      (i) => (i.convertidoAExpedienteId && (i.convertidoAExpedienteId === detalleExp.expediente.id || i.convertidoAExpedienteId === detalleExp.expediente.codigoVisible)) ||
+                             (i.cedula && detalleExp.expediente.postulante?.numeroIdentificacion && (i.cedula === detalleExp.expediente.postulante.numeroIdentificacion || detalleExp.expediente.postulante.numeroIdentificacion.includes(i.cedula))) ||
+                             (i.numeroIdentificacion && detalleExp.expediente.postulante?.numeroIdentificacion && (i.numeroIdentificacion === detalleExp.expediente.postulante.numeroIdentificacion || detalleExp.expediente.postulante.numeroIdentificacion.includes(i.numeroIdentificacion))) ||
+                             (detalleExp.expediente.interesadoOrigenId && i.id === detalleExp.expediente.interesadoOrigenId) ||
+                             (i.telefono && detalleExp.expediente.postulante?.telefonoPrincipal && i.telefono.replace(/\D/g, "") === detalleExp.expediente.postulante.telefonoPrincipal.replace(/\D/g, ""))
+                    );
+                    const otroIntegConTel = detalleExp.expediente.hogar?.integrantes?.find(
+                      (i) => !i.esPostulantePrincipal && (i.persona?.telefonoPrincipal || (i.persona as any)?.telefono || i.persona?.telefonoSecundario)
+                    );
+
+                    const tel1 = detalleExp.expediente.postulante?.telefonoPrincipal ||
+                                 (detalleExp.expediente as any).telefono ||
+                                 (detalleExp.expediente.postulante as any)?.telefono ||
+                                 intCoincidente?.telefono;
+
+                    const tel2 = detalleExp.expediente.postulante?.telefonoSecundario ||
+                                 (detalleExp.expediente as any).telefonoSecundario ||
+                                 (detalleExp.expediente as any).telefonoContacto2 ||
+                                 (detalleExp.expediente as any).telefono2 ||
+                                 intCoincidente?.telefonoSecundario ||
+                                 (intCoincidente as any)?.telefonoContacto2 ||
+                                 (intCoincidente as any)?.telefono2 ||
+                                 intCoincidente?.contactosApoyo?.[0]?.telefono ||
+                                 otroIntegConTel?.persona?.telefonoPrincipal ||
+                                 otroIntegConTel?.persona?.telefonoSecundario ||
+                                 (otroIntegConTel?.persona as any)?.telefono;
+
+                    // Contactos adicionales de apoyo o integrantes familiares con teléfono
+                    const contactosExtras: { tel: string; label: string }[] = [];
+                    if (intCoincidente?.contactosApoyo && Array.isArray(intCoincidente.contactosApoyo)) {
+                      intCoincidente.contactosApoyo.forEach((c: any) => {
+                        if (c.telefono && c.telefono !== tel1 && c.telefono !== tel2 && !contactosExtras.some(e => e.tel.replace(/\D/g, "") === c.telefono.replace(/\D/g, ""))) {
+                          contactosExtras.push({
+                            tel: c.telefono,
+                            label: c.nombreCompleto ? `WhatsApp ${c.nombreCompleto.split(" ")[0]}` : "WhatsApp Contacto"
+                          });
+                        }
+                      });
+                    }
+                    if (detalleExp.expediente.hogar?.integrantes && Array.isArray(detalleExp.expediente.hogar.integrantes)) {
+                      detalleExp.expediente.hogar.integrantes.forEach((i: any) => {
+                        const itel = i.persona?.telefonoPrincipal || i.persona?.telefonoSecundario || (i.persona as any)?.telefono;
+                        if (itel && itel !== tel1 && itel !== tel2 && !contactosExtras.some(e => e.tel.replace(/\D/g, "") === itel.replace(/\D/g, ""))) {
+                          const pNom = i.persona?.primerNombre || i.persona?.nombres?.split(" ")[0] || i.parentesco || "Familiar";
+                          contactosExtras.push({
+                            tel: itel,
+                            label: `WhatsApp ${pNom}`
+                          });
+                        }
+                      });
+                    }
+
+                    if (!tel1 && !tel2 && contactosExtras.length === 0) {
+                      return <span className="text-slate-500 font-medium italic">Sin registrar</span>;
+                    }
+
+                    return (
+                      <div className="space-y-1 mt-0.5">
+                        {tel1 && (
+                          <div className="flex items-center space-x-1.5 flex-wrap">
+                            <span className="font-mono font-bold text-slate-800 flex items-center space-x-1 text-xs">
+                              <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                              <span>{tel1}</span>
+                            </span>
+                            <a
+                              href={`https://wa.me/57${tel1.replace(/\D/g, "")}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center space-x-0.5 text-[9px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 font-bold hover:bg-emerald-100 transition-colors"
+                              title="WhatsApp Teléfono Principal"
+                            >
+                              <span>WhatsApp Directo</span>
+                            </a>
+                          </div>
+                        )}
+                        {tel2 && (
+                          <div className="flex items-center space-x-1.5 flex-wrap pt-0.5 border-t border-slate-100">
+                            <span className="font-mono font-semibold text-slate-700 flex items-center space-x-1 text-[11px]">
+                              <PhoneCall className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                              <span title="Teléfono Secundario / Contacto 2">{tel2}</span>
+                            </span>
+                            <a
+                              href={`https://wa.me/57${tel2.replace(/\D/g, "")}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center space-x-0.5 text-[9px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 font-bold hover:bg-emerald-100 transition-colors"
+                              title="WhatsApp Teléfono Secundario"
+                            >
+                              <span>WhatsApp Tel. 2</span>
+                            </a>
+                          </div>
+                        )}
+                        {contactosExtras.map((extra, idx) => (
+                          <div key={idx} className="flex items-center space-x-1.5 flex-wrap pt-0.5 border-t border-slate-100">
+                            <span className="font-mono font-semibold text-slate-700 flex items-center space-x-1 text-[11px]">
+                              <PhoneCall className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                              <span title={extra.label}>{extra.tel}</span>
+                            </span>
+                            <a
+                              href={`https://wa.me/57${extra.tel.replace(/\D/g, "")}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center space-x-0.5 text-[9px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 font-bold hover:bg-emerald-100 transition-colors"
+                              title={extra.label}
+                            >
+                              <span>{extra.label}</span>
+                            </a>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div>
                   <span className="text-slate-400 block mb-0.5">Responsable General:</span>

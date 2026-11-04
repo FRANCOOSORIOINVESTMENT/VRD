@@ -913,6 +913,22 @@ export async function createApp(): Promise<express.Express> {
       correo: postData.correo || undefined
     };
 
+    // Si el postulante no tiene teléfono secundario, enriquecerlo inmediatamente con el interesado coincidente
+    if (!postulante.telefonoSecundario) {
+      const matchInt = mockDb.interesados.find(
+        (i) =>
+          (i.convertidoAExpedienteId && (i.convertidoAExpedienteId === row.id || i.convertidoAExpedienteId === row.codigo_visible)) ||
+          (i.numeroIdentificacion && postData.numero_identificacion && (i.numeroIdentificacion === postData.numero_identificacion || postData.numero_identificacion.includes(i.numeroIdentificacion))) ||
+          (i.cedula && postData.numero_identificacion && (i.cedula === postData.numero_identificacion || postData.numero_identificacion.includes(i.cedula))) ||
+          (postData.telefono_principal && i.telefono && i.telefono.replace(/\D/g, "") === String(postData.telefono_principal).replace(/\D/g, ""))
+      );
+      if (matchInt) {
+        const sec = matchInt.telefonoSecundario || (matchInt as any).tel2;
+        if (sec) postulante.telefonoSecundario = sec;
+        if (!postulante.telefonoPrincipal && matchInt.telefono) postulante.telefonoPrincipal = matchInt.telefono;
+      }
+    }
+
     const predioVivienda: Predio = {
       id: predData.id || `pre-${row.id}`,
       departamentoCodigo: predData.departamento_codigo || "25",
@@ -935,7 +951,9 @@ export async function createApp(): Promise<express.Express> {
             tipoIdentificacion: intRow.persona?.tipo_identificacion || "CC",
             numeroIdentificacion: intRow.persona?.numero_identificacion || "",
             primerApellido: intRow.persona?.primer_apellido || "",
-            nombres: intRow.persona?.nombres || ""
+            nombres: intRow.persona?.nombres || "",
+            telefonoPrincipal: intRow.persona?.telefono_principal || intRow.persona?.telefono || "",
+            telefonoSecundario: intRow.persona?.telefono_secundario || ""
           }
         }))
       : [
@@ -2472,6 +2490,27 @@ export async function createApp(): Promise<express.Express> {
         inicializarRequisitosFase1(exp);
         limpiarRequisitosHuerfanosExpediente(exp);
         reconciliarDocumentosConRequisitos(exp);
+
+        // Enriquecer expedientes con teléfono secundario del interesado origen si está disponible
+        const matchInt = mockDb.interesados.find(
+          (i) =>
+            (i.convertidoAExpedienteId && (i.convertidoAExpedienteId === exp.id || i.convertidoAExpedienteId === exp.codigoVisible)) ||
+            (i.numeroIdentificacion && exp.postulante?.numeroIdentificacion && (i.numeroIdentificacion === exp.postulante.numeroIdentificacion || exp.postulante.numeroIdentificacion.includes(i.numeroIdentificacion))) ||
+            (i.cedula && exp.postulante?.numeroIdentificacion && (i.cedula === exp.postulante.numeroIdentificacion || exp.postulante.numeroIdentificacion.includes(i.cedula))) ||
+            (exp.interesadoOrigenId && i.id === exp.interesadoOrigenId) ||
+            (i.telefono && exp.postulante?.telefonoPrincipal && i.telefono.replace(/\D/g, "") === exp.postulante.telefonoPrincipal.replace(/\D/g, ""))
+        );
+        if (matchInt) {
+          if (!exp.interesadoOrigenId) exp.interesadoOrigenId = matchInt.id;
+          const sec = matchInt.telefonoSecundario || (matchInt as any).tel2;
+          if (sec) {
+            if (!exp.postulante.telefonoSecundario) exp.postulante.telefonoSecundario = sec;
+            if (!(exp as any).telefonoSecundario) (exp as any).telefonoSecundario = sec;
+          }
+          if (!exp.postulante.telefonoPrincipal && matchInt.telefono) {
+            exp.postulante.telefonoPrincipal = matchInt.telefono;
+          }
+        }
       });
 
       // 5. Preparar listado enriquecido de expedientes
@@ -3116,6 +3155,7 @@ export async function createApp(): Promise<express.Express> {
               }
               if (row.postulante) {
                 if (row.postulante.telefono_principal) expExistente.postulante.telefonoPrincipal = row.postulante.telefono_principal;
+                if (row.postulante.telefono_secundario) expExistente.postulante.telefonoSecundario = row.postulante.telefono_secundario;
                 if (row.postulante.correo) expExistente.postulante.correo = row.postulante.correo;
                 if (row.postulante.nombres) expExistente.postulante.nombres = row.postulante.nombres;
                 if (row.postulante.primer_apellido) expExistente.postulante.primerApellido = row.postulante.primer_apellido;
@@ -3153,6 +3193,29 @@ export async function createApp(): Promise<express.Express> {
         console.error("[EXPEDIENTES HIDRATACIÓN ERROR]:", dbErr?.message);
       }
     }
+
+    // Enriquecer expedientes con datos de contacto (teléfono secundario) desde interesados si no lo tienen
+    mockDb.expedientes.forEach((exp) => {
+      const matchInt = mockDb.interesados.find(
+        (i) =>
+          (i.convertidoAExpedienteId && (i.convertidoAExpedienteId === exp.id || i.convertidoAExpedienteId === exp.codigoVisible)) ||
+          (i.numeroIdentificacion && exp.postulante?.numeroIdentificacion && (i.numeroIdentificacion === exp.postulante.numeroIdentificacion || exp.postulante.numeroIdentificacion.includes(i.numeroIdentificacion))) ||
+          (i.cedula && exp.postulante?.numeroIdentificacion && (i.cedula === exp.postulante.numeroIdentificacion || exp.postulante.numeroIdentificacion.includes(i.cedula))) ||
+          (exp.interesadoOrigenId && i.id === exp.interesadoOrigenId) ||
+          (i.telefono && exp.postulante?.telefonoPrincipal && i.telefono.replace(/\D/g, "") === exp.postulante.telefonoPrincipal.replace(/\D/g, ""))
+      );
+      if (matchInt) {
+        if (!exp.interesadoOrigenId) exp.interesadoOrigenId = matchInt.id;
+        const sec = matchInt.telefonoSecundario || (matchInt as any).tel2;
+        if (sec) {
+          if (!exp.postulante.telefonoSecundario) exp.postulante.telefonoSecundario = sec;
+          if (!(exp as any).telefonoSecundario) (exp as any).telefonoSecundario = sec;
+        }
+        if (!exp.postulante.telefonoPrincipal && matchInt.telefono) {
+          exp.postulante.telefonoPrincipal = matchInt.telefono;
+        }
+      }
+    });
 
     const listado = mockDb.expedientes.map((exp) => {
       if (exp.faseActual >= 4 && !exp.gestionFase4) {
