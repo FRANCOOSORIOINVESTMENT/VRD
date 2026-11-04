@@ -5076,20 +5076,23 @@ export async function createApp(): Promise<express.Express> {
         if (reqCaso.codigoRequisito === "F1-03" || reqCaso.nombre.toLowerCase().includes("cédula") || reqCaso.nombre.toLowerCase().includes("cedula")) {
           let personaNombre = reqCaso.personaNombre || "";
           let personaIdent = "";
+          let esPostulante = reqCaso.nombre?.toLowerCase().includes("postulante") || (!reqCaso.nombre?.toLowerCase().includes("integrante") && (!reqCaso.personaId || reqCaso.personaId === exp.postulante?.id));
           if (reqCaso.personaId) {
             const intEnHogar = exp.hogar?.integrantes?.find((i) => i.persona?.id === reqCaso.personaId);
             if (intEnHogar) {
-              personaNombre = intEnHogar.persona.nombres || `${intEnHogar.persona.primerNombre} ${intEnHogar.persona.primerApellido}`;
+              personaNombre = intEnHogar.persona.nombres || `${intEnHogar.persona.primerNombre || ''} ${intEnHogar.persona.primerApellido || ''}`.trim();
               personaIdent = intEnHogar.persona.numeroIdentificacion;
+              esPostulante = Boolean(intEnHogar.esPostulantePrincipal) || (exp.postulante?.id === reqCaso.personaId);
             } else if (exp.postulante?.id === reqCaso.personaId) {
-              personaNombre = exp.postulante.nombres || `${exp.postulante.primerNombre} ${exp.postulante.primerApellido}`;
+              personaNombre = exp.postulante.nombres || `${exp.postulante.primerNombre || ''} ${exp.postulante.primerApellido || ''}`.trim();
               personaIdent = exp.postulante.numeroIdentificacion;
+              esPostulante = true;
             }
           }
           if (!personaIdent) personaIdent = exp.postulante?.numeroIdentificacion || "00000";
-          if (!personaNombre) personaNombre = exp.postulante?.nombres || "integrante";
+          if (!personaNombre) personaNombre = exp.postulante?.nombres || (esPostulante ? "postulante" : "integrante");
 
-          nombreEstandarizado = generarNombreArchivoCedulaEstandar(personaNombre, personaIdent, extFinal);
+          nombreEstandarizado = generarNombreArchivoCedulaEstandar(personaNombre, personaIdent, extFinal, esPostulante);
           storagePath = `expedientes/${exp.id}/cedulas/${nombreEstandarizado}`;
         }
 

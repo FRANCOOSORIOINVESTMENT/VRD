@@ -918,13 +918,26 @@ export default function App() {
           if (reqPostulante?.documentoAsociado) {
             const archNom = (reqPostulante.documentoAsociado.versionActual?.nombreArchivoOriginal || "").toLowerCase();
             const docTit = (reqPostulante.documentoAsociado.titulo || "").toLowerCase();
-            if (archNom.includes("integrante") || docTit.includes("integrante")) {
+            const docPersonaId = reqPostulante.documentoAsociado.personaId;
+            const postulantePersonaId = data?.expediente?.postulante?.id || reqPostulante.personaId;
+
+            // Mover solo si el documento pertenece explícitamente a un integrante adicional (id diferente al postulante y archivo de integrante)
+            const esDeIntegranteAdicional =
+              (Boolean(docPersonaId) && docPersonaId !== postulantePersonaId && reqsIntegrantes.some((ri: any) => ri.personaId === docPersonaId)) ||
+              (archNom.startsWith("cedula_integrante_") && reqsIntegrantes.some((ri: any) => {
+                const nomInteg = (ri.personaNombre || ri.nombre || "").toLowerCase();
+                const partes = nomInteg.split(" ").filter((p: string) => p.length >= 3);
+                return partes.some((p: string) => archNom.includes(p) || docTit.includes(p));
+              }));
+
+            if (esDeIntegranteAdicional) {
               const docMover = reqPostulante.documentoAsociado;
               reqPostulante.documentoAsociado = undefined;
               reqPostulante.estado = "pendiente_carga";
 
               const targetInteg =
                 reqsIntegrantes.find((ri: any) => {
+                  if (ri.personaId && ri.personaId === docMover.personaId) return true;
                   const nomInteg = (ri.personaNombre || ri.nombre || "").toLowerCase();
                   const partes = nomInteg.split(" ").filter((p: string) => p.length >= 3);
                   return partes.some((p: string) => archNom.includes(p) || docTit.includes(p));
@@ -1875,21 +1888,24 @@ export default function App() {
       if (esCedulaReq) {
         let pNombre = requisito.personaNombre || "";
         let pId = "";
+        let esPostulante = requisito.nombre?.toLowerCase().includes("postulante") || (!requisito.nombre?.toLowerCase().includes("integrante") && (!requisito.personaId || requisito.personaId === detalleExp?.expediente.postulante?.id));
         if (requisito.personaId) {
           const intEnHogar = detalleExp?.expediente.hogar?.integrantes?.find((i) => i.persona?.id === requisito.personaId);
           if (intEnHogar) {
             pNombre = intEnHogar.persona.nombres || `${intEnHogar.persona.primerNombre || ''} ${intEnHogar.persona.primerApellido || ''}`.trim();
             pId = intEnHogar.persona.numeroIdentificacion;
+            esPostulante = Boolean(intEnHogar.esPostulantePrincipal) || (detalleExp?.expediente.postulante?.id === requisito.personaId);
           } else if (detalleExp?.expediente.postulante?.id === requisito.personaId) {
             pNombre = detalleExp.expediente.postulante.nombres || `${detalleExp.expediente.postulante.primerNombre || ''} ${detalleExp.expediente.postulante.primerApellido || ''}`.trim();
             pId = detalleExp.expediente.postulante.numeroIdentificacion;
+            esPostulante = true;
           }
         }
-        if (!pNombre) pNombre = detalleExp?.expediente.postulante?.nombres || "integrante";
+        if (!pNombre) pNombre = detalleExp?.expediente.postulante?.nombres || (esPostulante ? "postulante" : "integrante");
         if (!pId) pId = detalleExp?.expediente.postulante?.numeroIdentificacion || "00000";
 
         const ext = archivoParaCargar.name.split('.').pop() || 'pdf';
-        nombreParaSubida = generarNombreArchivoCedulaEstandar(pNombre, pId, ext);
+        nombreParaSubida = generarNombreArchivoCedulaEstandar(pNombre, pId, ext, esPostulante);
       }
 
       // Si el cliente supabase de frontend está disponible, asegurar subida directa a Storage en Supabase

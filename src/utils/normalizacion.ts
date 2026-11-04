@@ -24,7 +24,8 @@ export function normalizarTextoNombre(texto: string | null | undefined): string 
 export function generarNombreArchivoCedulaEstandar(
   nombrePersona: string,
   numeroIdentificacion: string,
-  extension: string = "pdf"
+  extension: string = "pdf",
+  esPostulante: boolean = false
 ): string {
   const nombreLimpio = normalizarTextoNombre(nombrePersona)
     .toLowerCase()
@@ -34,7 +35,8 @@ export function generarNombreArchivoCedulaEstandar(
     .trim()
     .replace(/[^a-zA-Z0-9]/g, "");
   const extLimpia = (extension || "pdf").replace(/^\.+/, "").toLowerCase();
-  return `cedula_integrante_${nombreLimpio || "integrante"}_${idLimpia || "doc"}.${extLimpia}`;
+  const prefijo = esPostulante ? "cedula_postulante" : "cedula_integrante";
+  return `${prefijo}_${nombreLimpio || (esPostulante ? "postulante" : "integrante")}_${idLimpia || "doc"}.${extLimpia}`;
 }
 
 /**
