@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
-import { Document, Page, pdfjs } from "react-pdf";
+import React, { useState, useEffect } from "react";
 import {
   X,
   FileText,
@@ -11,15 +10,9 @@ import {
   Camera,
   ChevronLeft,
   ChevronRight,
-  ExternalLink,
-  Loader2,
-  AlertTriangle,
-  RefreshCw
+  ExternalLink
 } from "lucide-react";
 import { FotoRegistro } from "../types";
-
-// Configure pdfjs worker using standard unpkg CDN matching the pdfjs version
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 interface DocVisorModalProps {
   titulo: string;
@@ -52,34 +45,11 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
   const [rotation, setRotation] = useState<number>(0);
   const [fotoActivaIndex, setFotoActivaIndex] = useState<number>(fotoInicialIndex);
 
-  // Estados react-pdf
-  const [numPages, setNumPages] = useState<number | null>(null);
-  const [pageNumber, setPageNumber] = useState<number>(1);
-  const [pdfLoading, setPdfLoading] = useState<boolean>(true);
-  const [pdfError, setPdfError] = useState<string | null>(null);
-  const [containerWidth, setContainerWidth] = useState<number>(800);
-
-  const containerRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     if (typeof fotoInicialIndex === "number" && fotoInicialIndex >= 0) {
       setFotoActivaIndex(fotoInicialIndex);
     }
   }, [fotoInicialIndex]);
-
-  // Observer para el ancho del contenedor del visor PDF
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const updateWidth = () => {
-      if (containerRef.current) {
-        setContainerWidth(Math.max(320, containerRef.current.clientWidth - 48));
-      }
-    };
-    updateWidth();
-    const resizeObserver = new ResizeObserver(updateWidth);
-    resizeObserver.observe(containerRef.current);
-    return () => resizeObserver.disconnect();
-  }, []);
 
   const tieneGaleria = Array.isArray(fotos) && fotos.length > 0;
   const fotoActual = tieneGaleria ? fotos[fotoActivaIndex] : null;
@@ -91,46 +61,27 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
     setRotation((prev) => (prev + 90) % 360);
   };
 
-  const handleResetView = () => {
-    setZoom(100);
-    setRotation(0);
-  };
-
   const handlePrevFoto = () => {
     if (tieneGaleria) {
       setFotoActivaIndex((prev) => (prev > 0 ? prev - 1 : fotos.length - 1));
-      handleResetView();
+      setZoom(100);
+      setRotation(0);
     }
   };
 
   const handleNextFoto = () => {
     if (tieneGaleria) {
       setFotoActivaIndex((prev) => (prev < fotos.length - 1 ? prev + 1 : 0));
-      handleResetView();
+      setZoom(100);
+      setRotation(0);
     }
   };
 
-  const handlePrevPdfPage = () => {
-    setPageNumber((prev) => Math.max(1, prev - 1));
-  };
-
-  const handleNextPdfPage = () => {
-    if (numPages) {
-      setPageNumber((prev) => Math.min(numPages, prev + 1));
-    }
-  };
-
-  // Teclado
+  // Escuchar flechas del teclado y escape
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "ArrowLeft") {
-        if (tieneGaleria) handlePrevFoto();
-        else if (esPdf) handlePrevPdfPage();
-      }
-      if (e.key === "ArrowRight") {
-        if (tieneGaleria) handleNextFoto();
-        else if (esPdf) handleNextPdfPage();
-      }
+      if (e.key === "ArrowLeft") handlePrevFoto();
+      if (e.key === "ArrowRight") handleNextFoto();
       if (e.key === "Escape") {
         e.stopPropagation();
         onClose();
@@ -138,7 +89,7 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [tieneGaleria, fotos?.length, esPdf, numPages, onClose]);
+  }, [tieneGaleria, fotos?.length, onClose, fotoActivaIndex]);
 
   const aplicarParametroAntiCache = (url?: string) => {
     if (!url || url.startsWith("data:")) return url;
@@ -149,35 +100,12 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
 
   const urlBase = fotoActual ? fotoActual.url : archivoDataUrl;
   const urlVisualizar = aplicarParametroAntiCache(urlBase);
+  const pdfIframeUrl = esPdf && urlVisualizar ? (urlVisualizar.includes("#") ? urlVisualizar : `${urlVisualizar}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`) : urlVisualizar;
   const nombreDescargar = fotoActual ? fotoActual.nombre : nombreArchivo;
-
-  const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
-    setNumPages(numPages);
-    setPageNumber(1);
-    setPdfLoading(false);
-    setPdfError(null);
-  };
-
-  const onDocumentLoadError = (error: Error) => {
-    console.error("Error al cargar PDF con react-pdf:", error);
-    setPdfError("No se pudo previsualizar el archivo PDF directamente en el visor.");
-    setPdfLoading(false);
-  };
-
-  // Ancho efectivo para la página PDF considerando zoom
-  const pageCalculatedWidth = Math.min(
-    1400,
-    Math.max(300, (containerWidth * (zoom / 100)))
-  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-3 sm:p-5 animate-in fade-in duration-150">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="doc-visor-titulo"
-        className="bg-white rounded-xl shadow-2xl w-full max-w-5xl h-[88vh] flex flex-col overflow-hidden border border-slate-200"
-      >
+      <div role="dialog" aria-modal="true" aria-labelledby="doc-visor-titulo" className="bg-white rounded-xl shadow-2xl w-full max-w-5xl h-[88vh] flex flex-col overflow-hidden border border-slate-200">
         {/* Cabecera del visor */}
         <div className="flex items-center justify-between px-5 py-3.5 bg-slate-50 border-b border-slate-200 shrink-0">
           <div className="flex items-center space-x-3 min-w-0">
@@ -186,17 +114,10 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
             </div>
             <div className="truncate">
               <div className="flex items-center space-x-2 truncate">
-                <h3 id="doc-visor-titulo" title={titulo} className="font-semibold text-slate-800 text-sm sm:text-base truncate">
-                  {titulo}
-                </h3>
+                <h3 id="doc-visor-titulo" title={titulo} className="font-semibold text-slate-800 text-sm sm:text-base truncate">{titulo}</h3>
                 {tieneGaleria && (
                   <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-bold rounded-full text-[10px]">
                     Álbum: {fotoActivaIndex + 1} de {fotos.length} fotos
-                  </span>
-                )}
-                {esPdf && numPages && numPages > 0 && (
-                  <span className="px-2 py-0.5 bg-blue-100 text-blue-800 font-bold rounded-full text-[10px]">
-                    Pág. {pageNumber} de {numPages}
                   </span>
                 )}
               </div>
@@ -213,7 +134,6 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
               </p>
             </div>
           </div>
-
           <div className="flex items-center space-x-2 shrink-0">
             {urlVisualizar && (
               <a
@@ -221,56 +141,27 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                 download={nombreDescargar}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors shadow-xs cursor-pointer"
+                className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors shadow-xs"
                 title="Descargar archivo"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Descargar</span>
               </a>
             )}
-
-            {/* Navegación de páginas PDF */}
-            {esPdf && numPages && numPages > 1 && (
-              <div className="flex items-center bg-slate-100 border border-slate-200 rounded-lg p-1 text-xs text-slate-700 space-x-1">
-                <button
-                  type="button"
-                  onClick={handlePrevPdfPage}
-                  disabled={pageNumber <= 1}
-                  className="p-1 hover:bg-white rounded cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Página anterior"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                <span className="px-1 font-medium text-slate-800">
-                  {pageNumber} / {numPages}
-                </span>
-                <button
-                  type="button"
-                  onClick={handleNextPdfPage}
-                  disabled={pageNumber >= numPages}
-                  className="p-1 hover:bg-white rounded cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Página siguiente"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            )}
-
-            {/* Controles Zoom y Rotación */}
-            {(esImagen || esPdf) && (
+            {esImagen && (
               <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1 text-xs text-slate-600 space-x-1">
                 <button
                   type="button"
-                  onClick={() => setZoom((z) => Math.max(50, z - 25))}
+                  onClick={() => setZoom(Math.max(50, zoom - 25))}
                   className="p-1 hover:bg-slate-100 rounded cursor-pointer"
                   title="Alejar"
                 >
                   <ZoomOut className="w-4 h-4" />
                 </button>
-                <span className="px-1.5 font-medium text-slate-700 min-w-[38px] text-center">{zoom}%</span>
+                <span className="px-1.5 font-medium">{zoom}%</span>
                 <button
                   type="button"
-                  onClick={() => setZoom((z) => Math.min(250, z + 25))}
+                  onClick={() => setZoom(Math.min(200, zoom + 25))}
                   className="p-1 hover:bg-slate-100 rounded cursor-pointer"
                   title="Acercar"
                 >
@@ -279,25 +170,13 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                 <button
                   type="button"
                   onClick={handleRotate}
-                  className="p-1 hover:bg-slate-100 rounded text-slate-700 cursor-pointer border-l border-slate-200 pl-1.5 ml-0.5 flex items-center space-x-1"
-                  title="Rotar 90° (React-PDF nativo)"
+                  className="p-1 hover:bg-slate-100 rounded text-slate-700 cursor-pointer border-l border-slate-200 pl-1.5 ml-0.5"
+                  title="Rotar 90°"
                 >
                   <RotateCw className="w-4 h-4" />
-                  <span className="text-[10px] font-mono font-bold text-slate-500 hidden md:inline">{rotation}°</span>
                 </button>
-                {(zoom !== 100 || rotation !== 0) && (
-                  <button
-                    type="button"
-                    onClick={handleResetView}
-                    className="p-1 hover:bg-slate-100 rounded text-amber-600 cursor-pointer border-l border-slate-200 pl-1.5 ml-0.5"
-                    title="Restablecer vista a 100% y 0°"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                  </button>
-                )}
               </div>
             )}
-
             <button
               type="button"
               aria-label="Cerrar visor de documento"
@@ -310,114 +189,29 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
         </div>
 
         {/* Cuerpo del visor interactivo */}
-        <div
-          ref={containerRef}
-          className="flex-1 bg-slate-900/90 relative overflow-auto flex flex-col items-center justify-start p-4 min-h-0 select-none"
-        >
+        <div className="flex-1 bg-slate-900/90 relative overflow-hidden flex flex-col items-center justify-center min-h-0">
           {urlVisualizar ? (
             esPdf ? (
-              <div className="w-full h-full flex flex-col items-center justify-start relative">
-                {/* Indicador superior de controles rápida */}
-                <div className="w-full max-w-4xl bg-slate-800/90 backdrop-blur-xs text-white px-4 py-2 rounded-lg mb-3 flex items-center justify-between text-xs border border-slate-700 shrink-0">
-                  <div className="flex items-center space-x-2 truncate">
-                    <FileText className="w-4 h-4 text-blue-400 shrink-0" />
-                    <span className="font-medium truncate">{nombreArchivo}</span>
-                  </div>
-                  <div className="flex items-center space-x-3 shrink-0">
-                    {numPages && (
-                      <span className="text-slate-300">
-                        Página <strong>{pageNumber}</strong> de <strong>{numPages}</strong>
-                      </span>
-                    )}
-                    <a
-                      href={urlVisualizar}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300 font-semibold flex items-center space-x-1 cursor-pointer transition-colors"
-                    >
-                      <span>Abrir externo</span>
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                  </div>
-                </div>
-
-                {/* Renderizado interactivo nativo con react-pdf */}
-                <div className="flex-1 w-full flex items-center justify-center overflow-auto p-2">
-                  <Document
-                    file={urlVisualizar}
-                    onLoadSuccess={onDocumentLoadSuccess}
-                    onLoadError={onDocumentLoadError}
-                    loading={
-                      <div className="flex flex-col items-center justify-center p-12 text-slate-300 space-y-3">
-                        <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
-                        <p className="text-sm font-medium">Renderizando documento PDF con react-pdf...</p>
-                      </div>
-                    }
-                    error={
-                      <div className="bg-white p-6 rounded-xl shadow-lg max-w-md text-center border border-slate-200 my-auto">
-                        <AlertTriangle className="w-12 h-12 text-amber-500 mx-auto mb-3" />
-                        <h4 className="font-bold text-slate-800 text-sm mb-1">Previsualización incrustada no disponible</h4>
-                        <p className="text-xs text-slate-600 mb-4">
-                          {pdfError || "El archivo no se pudo renderizar directamente en el canvas."}
-                        </p>
-                        <a
-                          href={urlVisualizar}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
-                        >
-                          <ExternalLink className="w-4 h-4" />
-                          <span>Abrir en ventana independiente</span>
-                        </a>
-                      </div>
-                    }
+              <div className="w-full h-full rounded-lg overflow-hidden border border-slate-300 shadow-sm bg-white flex flex-col relative">
+                <div className="bg-slate-100 px-4 py-1.5 border-b border-slate-200 flex items-center justify-between text-xs text-slate-600 shrink-0 z-10">
+                  <span className="truncate font-medium">{nombreArchivo}</span>
+                  <a
+                    href={urlVisualizar}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:text-blue-800 font-semibold flex items-center space-x-1 cursor-pointer"
                   >
-                    {!pdfError && (
-                      <div className="shadow-2xl rounded-lg overflow-hidden border border-slate-700 bg-white transition-all duration-150">
-                        <Page
-                          pageNumber={pageNumber}
-                          width={pageCalculatedWidth}
-                          rotate={rotation}
-                          renderTextLayer={false}
-                          renderAnnotationLayer={false}
-                          loading={
-                            <div className="flex flex-col items-center justify-center p-8 text-slate-500 space-y-2 bg-white">
-                              <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
-                              <span className="text-xs font-medium">Cargando página {pageNumber}...</span>
-                            </div>
-                          }
-                        />
-                      </div>
-                    )}
-                  </Document>
+                    <span>Abrir en ventana independiente</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
                 </div>
-
-                {/* Navegación flotante inferior si es multi-página */}
-                {numPages && numPages > 1 && (
-                  <div className="mt-3 bg-slate-800/90 text-white px-4 py-2 rounded-full border border-slate-700 flex items-center space-x-3 shadow-xl backdrop-blur-xs shrink-0 z-10">
-                    <button
-                      type="button"
-                      onClick={handlePrevPdfPage}
-                      disabled={pageNumber <= 1}
-                      className="p-1 hover:bg-slate-700 rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                      title="Página anterior"
-                    >
-                      <ChevronLeft className="w-5 h-5" />
-                    </button>
-                    <span className="text-xs font-semibold px-2">
-                      Página {pageNumber} de {numPages}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleNextPdfPage}
-                      disabled={pageNumber >= numPages}
-                      className="p-1 hover:bg-slate-700 rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                      title="Página siguiente"
-                    >
-                      <ChevronRight className="w-5 h-5" />
-                    </button>
-                  </div>
-                )}
+                <div className="w-full flex-1 overflow-hidden bg-slate-200 p-1">
+                  <iframe
+                    src={pdfIframeUrl}
+                    title={nombreArchivo}
+                    className="w-full h-full border-0 rounded-lg bg-white shadow-xs"
+                  />
+                </div>
               </div>
             ) : esImagen ? (
               <div className="relative w-full h-full flex items-center justify-center overflow-auto p-4 select-none">
@@ -459,7 +253,7 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                 )}
               </div>
             ) : (
-              <div className="bg-white p-8 rounded-xl shadow-md max-w-lg w-full text-center border border-slate-200 my-auto">
+              <div className="bg-white p-8 rounded-xl shadow-md max-w-lg w-full text-center border border-slate-200">
                 <div className="inline-flex p-4 bg-blue-50 border border-blue-200 rounded-2xl mb-4 text-blue-600">
                   <FileText className="w-12 h-12" />
                 </div>
@@ -479,7 +273,7 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
             )
           ) : (
             <div
-              className="bg-white p-6 sm:p-8 rounded-xl shadow-md max-w-2xl w-full text-center border border-slate-200 my-auto"
+              className="bg-white p-6 sm:p-8 rounded-xl shadow-md max-w-2xl w-full text-center border border-slate-200"
               style={{ transform: `scale(${zoom / 100})`, transformOrigin: "top center" }}
             >
               <div className="inline-flex p-4 bg-slate-50 border border-slate-200 rounded-2xl mb-3 text-slate-600">
@@ -519,7 +313,8 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
                 type="button"
                 onClick={() => {
                   setFotoActivaIndex(index);
-                  handleResetView();
+                  setZoom(100);
+                  setRotation(0);
                 }}
                 className={`relative shrink-0 rounded-lg overflow-hidden border-2 transition-all p-0.5 cursor-pointer ${
                   fotoActivaIndex === index
@@ -555,3 +350,4 @@ export const DocVisorModal: React.FC<DocVisorModalProps> = ({
     </div>
   );
 };
+

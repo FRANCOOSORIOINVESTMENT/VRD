@@ -99,8 +99,8 @@ export const Fase3Compensar: React.FC<Fase3CompensarProps> = ({
   const puedeOperar = currentUser.rol === "ingenieria" || currentUser.rol === "administrador";
   const puedeRegistrarRespuesta = currentUser.rol === "ingenieria" || currentUser.rol === "supervisor" || currentUser.rol === "administrador";
   const puedeAvanzarFase = currentUser.rol === "supervisor" || currentUser.rol === "administrador";
-  // GESTIÓN FLEXIBLE CRUD DE ARCHIVOS (FASE 3): Habilitado para ingeniería, asistente/gestor, supervisor y administrador
-  const puedeEditarDocumentos = currentUser.rol === "ingenieria" || currentUser.rol === "asistente" || currentUser.rol === "supervisor" || currentUser.rol === "administrador";
+  // GESTIÓN FLEXIBLE CRUD DE ARCHIVOS (FASE 3): Habilitado para ingeniería, asistente/gestor y administrador (supervisor excluido)
+  const puedeEditarDocumentos = currentUser.rol === "ingenieria" || currentUser.rol === "asistente" || currentUser.rol === "administrador";
 
   // Estado y referencias para reemplazo y eliminación flexible de archivos en Fase 3
   const [cargandoDocId, setCargandoDocId] = useState<string | null>(null);

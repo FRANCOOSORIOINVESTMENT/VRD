@@ -10931,10 +10931,18 @@ export async function createApp(): Promise<express.Express> {
 
         if (delErr) {
           console.error("[SUPABASE]: Error eliminando usuario en Supabase:", delErr);
-          return res.status(500).json({ error: `Error en Supabase: ${delErr.message}` });
+          console.warn("[SUPABASE]: Aplicando fallback de desactivación (activo = false) en Supabase due to DB relations...");
+          const { error: softErr } = isUuid
+            ? await supabaseAdmin.from("perfiles_usuario").update({ activo: false }).eq("id", usr.id)
+            : await supabaseAdmin.from("perfiles_usuario").update({ activo: false }).eq("username", usr.username);
+
+          if (softErr) {
+            console.error("[SUPABASE]: Error en fallback de desactivación en Supabase:", softErr);
+            return res.status(500).json({ error: `Error en Supabase: ${delErr.message}` });
+          }
         }
         await sincronizarPerfilesDesdeSupabase();
-        console.log(`[SUPABASE]: Usuario ${usr.username} (${usr.id}) eliminado de Supabase.`);
+        console.log(`[SUPABASE]: Usuario ${usr.username} (${usr.id}) procesado en Supabase.`);
       } catch (err: any) {
         console.error("[SUPABASE]: Excepción al eliminar usuario en Supabase:", err);
         return res.status(500).json({ error: `Excepción en Supabase: ${err.message}` });

@@ -109,12 +109,11 @@ export const Fase4GestionTecnica: React.FC<Fase4GestionTecnicaProps> = ({
   // Estado de bloqueo si el expediente ya avanzó a Fase 5 o superior
   const yaAvanzoFase5 = (expediente.faseActual || 1) >= 5;
 
-  // Permisos: Ingeniería y Administrador gestionan frentes; Supervisor también puede revisar y avanzar
+  // Permisos: Ingeniería y Administrador gestionan frentes (Supervisor excluido de carga/edición)
   const puedeEditarFrentes =
     !yaAvanzoFase5 &&
     (currentUser.rol === "ingenieria" ||
-    currentUser.rol === "administrador" ||
-    currentUser.rol === "supervisor");
+    currentUser.rol === "administrador");
 
   const puedeAvanzarFase5 =
     currentUser.rol === "supervisor" ||
