@@ -2054,9 +2054,13 @@ export default function App() {
               }
               return r;
             });
+            const notasActualizadas = respJson.nota
+              ? [respJson.nota, ...(prev.notas || []).filter((n) => n.id !== respJson.nota.id)]
+              : prev.notas;
             return {
               ...prev,
-              requisitos: reqsActualizados
+              requisitos: reqsActualizados,
+              notas: notasActualizadas
             };
           });
         }
@@ -2403,9 +2407,14 @@ export default function App() {
             ? { ...prev.expediente, ...data.expediente }
             : prev.expediente;
 
+          const notasActualizadas = data.nota
+            ? [data.nota, ...(prev.notas || []).filter((n) => n.id !== data.nota.id)]
+            : prev.notas;
+
           return {
             ...prev,
             expediente: expActualizado,
+            notas: notasActualizadas,
             requisitos: prev.requisitos.map((r) =>
               r.id === modalRevisarReq.id
                 ? {
@@ -6734,9 +6743,18 @@ export default function App() {
                     <div key={n.id} className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs">
                       <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
                         <span className="font-bold text-slate-700">{formatearNombreUsuario(n.autorNombre)}</span>
-                        <span>{new Date(n.creadoEn || n.fechaGestion).toLocaleString("es-CO")}</span>
+                        <span className="font-mono text-slate-500">
+                          {new Date(n.creadoEn || n.fechaGestion).toLocaleString("es-CO", {
+                            year: "numeric",
+                            month: "2-digit",
+                            day: "2-digit",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit"
+                          })}
+                        </span>
                       </div>
-                      <p className="text-slate-800">{n.contenido}</p>
+                      <p className="text-slate-800 whitespace-pre-wrap">{n.contenido}</p>
                     </div>
                   ))
                 )}

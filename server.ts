@@ -2252,8 +2252,266 @@ export async function createApp(): Promise<express.Express> {
   }
 
   /**
+   * Mapea el código de rol del sistema a su etiqueta institucional para la bitácora.
+   */
+  function obtenerEtiquetaRolBitacora(rol?: string): string {
+    switch (String(rol || "").toLowerCase()) {
+      case "comercial":
+        return "Gestor Rural";
+      case "asistente":
+        return "Gestor Documental";
+      case "supervisor":
+        return "Analista Documental";
+      case "ingenieria":
+        return "Coordinación de Ingeniería";
+      case "administrador":
+        return "Administrador";
+      case "planeacion":
+        return "Planeación y Auditoría";
+      default:
+        return rol || "Sistema";
+    }
+  }
+
+  /**
+   * Enriquece (solo para movimientos nuevos de ahora en adelante) una nota de bitácora
+   * con fecha/hora exacta ISO, rol del usuario y etiqueta de fase, y la persiste en
+   * la tabla `notas_conversaciones` de Supabase sin alterar registros históricos previos.
+   */
+  function enriquecerYPersistirNotaBitacora(nota: any): void {
+    if (!nota || typeof nota !== "object") return;
+    if (nota._hidratadoDesdeSupabase || nota._procesadaBitacora) return;
+    nota._procesadaBitacora = true;
+
+    const ahoraIso = new Date().toISOString();
+    if (!nota.creadoEn) nota.creadoEn = nota.fechaGestion || ahoraIso;
+    if (!nota.fechaGestion) nota.fechaGestion = nota.creadoEn;
+    if (!nota.id) {
+      nota.id = `nota-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    }
+
+    // Resolver perfil del autor para incluir siempre Nombre + Rol en la bitácora
+    const perfilAutor = mockDb.perfiles.find(
+      (p) =>
+        p.id === nota.autorId ||
+        p.username?.toLowerCase() === String(nota.autorId || "").toLowerCase() ||
+        (nota.autorNombre && p.nombreCompleto?.toLowerCase() === String(nota.autorNombre).toLowerCase())
+    );
+    const rolEfectivo = nota.autorRol || perfilAutor?.rol;
+    const nombreBase = nota.autorNombre || perfilAutor?.nombreCompleto || "Usuario del Sistema";
+    if (rolEfectivo && !nombreBase.includes("(")) {
+      nota.autorNombre = `${nombreBase} (${obtenerEtiquetaRolBitacora(rolEfectivo)})`;
+    } else {
+      nota.autorNombre = nombreBase;
+    }
+
+    // Resolver expediente asociado y prefijar [Fase X] si es un movimiento de expediente
+    let expAsociado: Expediente | undefined = undefined;
+    if (nota.expedienteId) {
+      expAsociado = mockDb.expedientes.find(
+        (e) =>
+          e.id === nota.expedienteId ||
+          e.codigoVisible === nota.expedienteId ||
+          (e.codigoVisible && e.codigoVisible.toUpperCase() === String(nota.expedienteId).toUpperCase())
+      );
+      if (expAsociado) {
+        nota.expedienteId = expAsociado.id;
+      }
+      const faseMovimiento = nota.fase || expAsociado?.faseActual || 1;
+      if (nota.contenido && !/\[?Fase\s*\d+/i.test(String(nota.contenido))) {
+        nota.contenido = `[Fase ${faseMovimiento}] ${nota.contenido}`;
+      }
+    }
+
+    // Persistir asíncronamente en la tabla notas_conversaciones de Supabase
+    if (supabaseAdmin) {
+      void (async () => {
+        try {
+          let expUuid: string | null = null;
+          if (nota.expedienteId && esUuidValido(nota.expedienteId)) {
+            expUuid = nota.expedienteId;
+          } else if (expAsociado?.id && esUuidValido(expAsociado.id)) {
+            expUuid = expAsociado.id;
+          } else if (expAsociado?.codigoVisible || nota.expedienteId) {
+            const codigoBuscar = expAsociado?.codigoVisible || nota.expedienteId;
+            const { data: expDb } = await supabaseAdmin!
+              .from("expedientes")
+              .select("id")
+              .eq("codigo_visible", codigoBuscar)
+              .maybeSingle();
+            if (expDb?.id) expUuid = expDb.id;
+          }
+
+          let intUuid: string | null = null;
+          if (nota.interesadoId && esUuidValido(nota.interesadoId)) {
+            intUuid = nota.interesadoId;
+          }
+
+          if (!expUuid && !intUuid) return;
+
+          let autorUuid: string | null = null;
+          if (nota.autorId && esUuidValido(nota.autorId)) {
+            autorUuid = nota.autorId;
+          } else if (perfilAutor?.id && esUuidValido(perfilAutor.id)) {
+            autorUuid = perfilAutor.id;
+          } else if (perfilAutor?.username) {
+            const { data: uRow } = await supabaseAdmin!
+              .from("perfiles_usuario")
+              .select("id")
+              .eq("username", perfilAutor.username.toLowerCase())
+              .maybeSingle();
+            if (uRow?.id) autorUuid = uRow.id;
+          }
+
+          if (!autorUuid && rolEfectivo) {
+            const { data: uRol } = await supabaseAdmin!
+              .from("perfiles_usuario")
+              .select("id")
+              .eq("rol", rolEfectivo)
+              .limit(1)
+              .maybeSingle();
+            if (uRol?.id) autorUuid = uRol.id;
+          }
+
+          if (!autorUuid) {
+            const { data: fallbackUser } = await supabaseAdmin!
+              .from("perfiles_usuario")
+              .select("id")
+              .limit(1)
+              .maybeSingle();
+            if (fallbackUser?.id) autorUuid = fallbackUser.id;
+          }
+
+          if (!autorUuid) return;
+
+          const { data: insertedRow, error: insErr } = await supabaseAdmin!
+            .from("notas_conversaciones")
+            .insert([
+              {
+                expediente_id: expUuid,
+                interesado_id: intUuid,
+                autor_id: autorUuid,
+                persona_contactada: String(nota.personaContactada || nota.tipo || "Bitácora del Expediente").slice(0, 150),
+                canal: String(nota.canal || nota.tipo || "sistema").slice(0, 50),
+                contenido: String(nota.contenido || ""),
+                fecha_gestion: nota.fechaGestion || nota.creadoEn,
+                creado_en: nota.creadoEn
+              }
+            ])
+            .select("id")
+            .maybeSingle();
+
+          if (!insErr && insertedRow?.id) {
+            nota.id = insertedRow.id;
+          } else if (insErr) {
+            console.warn("[SUPABASE BITACORA INSERT WARNING]:", insErr.message);
+          }
+        } catch (err: any) {
+          console.warn("[SUPABASE BITACORA EXCEPTION]:", err?.message);
+        }
+      })();
+    }
+  }
+
+  /**
+   * Hidrata filas de `notas_conversaciones` provenientes de Supabase hacia `mockDb.notas`
+   * preservando intactos los registros existentes y evitando duplicados.
+   */
+  function hidratarNotasDesdeFilasSupabase(filas: any[], expedienteIdLocal?: string): void {
+    if (!Array.isArray(filas) || filas.length === 0) return;
+    filas.forEach((row: any) => {
+      if (!row || !row.contenido) return;
+      const expIdTarget = expedienteIdLocal || row.expediente_id || undefined;
+      const perfilLocal = mockDb.perfiles.find((p) => p.id === row.autor_id);
+      const nombreAutorDb = row.autor?.nombre_completo || perfilLocal?.nombreCompleto || "Usuario del Sistema";
+      const rolAutorDb = row.autor?.rol || perfilLocal?.rol;
+      const autorFormateado =
+        rolAutorDb && !String(nombreAutorDb).includes("(")
+          ? `${nombreAutorDb} (${obtenerEtiquetaRolBitacora(rolAutorDb)})`
+          : nombreAutorDb;
+
+      const notaMapeada: any = {
+        id: row.id,
+        expedienteId: expIdTarget,
+        interesadoId: row.interesado_id || undefined,
+        autorId: row.autor_id,
+        autorNombre: autorFormateado,
+        personaContactada: row.persona_contactada || "Bitácora del Expediente",
+        canal: row.canal || "sistema",
+        contenido: row.contenido,
+        fechaGestion: row.fecha_gestion || row.creado_en,
+        creadoEn: row.creado_en || row.fecha_gestion,
+        _hidratadoDesdeSupabase: true,
+        _procesadaBitacora: true
+      };
+
+      const idxExistente = mockDb.notas.findIndex(
+        (n) =>
+          n.id === notaMapeada.id ||
+          (n.expedienteId === notaMapeada.expedienteId &&
+            n.contenido === notaMapeada.contenido &&
+            Math.abs(new Date(n.creadoEn || n.fechaGestion).getTime() - new Date(notaMapeada.creadoEn).getTime()) < 5000)
+      );
+
+      if (idxExistente >= 0) {
+        mockDb.notas[idxExistente].id = notaMapeada.id;
+        (mockDb.notas[idxExistente] as any)._hidratadoDesdeSupabase = true;
+        (mockDb.notas[idxExistente] as any)._procesadaBitacora = true;
+      } else {
+        mockDb.notas.push(notaMapeada);
+      }
+    });
+  }
+
+  /**
+   * Envuelve el arreglo `mockDb.notas` para interceptar cualquier `.push()` o `.unshift()`
+   * de nuevos movimientos sin alterar las notas históricas iniciales.
+   */
+  function envolverArregloNotasBitacora(arr: NotaConversacion[]): NotaConversacion[] {
+    if ((arr as any)._interceptorBitacoraInstalado) return arr;
+    // Marcar las notas preexistentes para no modificarlas ni reinsertarlas
+    arr.forEach((n: any) => {
+      if (n && typeof n === "object") {
+        n._procesadaBitacora = true;
+      }
+    });
+
+    const origPush = arr.push.bind(arr);
+    const origUnshift = arr.unshift.bind(arr);
+
+    arr.push = function (...items: NotaConversacion[]): number {
+      items.forEach((item) => enriquecerYPersistirNotaBitacora(item));
+      return origPush(...items);
+    };
+
+    arr.unshift = function (...items: NotaConversacion[]): number {
+      items.forEach((item) => enriquecerYPersistirNotaBitacora(item));
+      return origUnshift(...items);
+    };
+
+    Object.defineProperty(arr, "_interceptorBitacoraInstalado", {
+      value: true,
+      enumerable: false,
+      configurable: true
+    });
+    return arr;
+  }
+
+  let _notasInternas = envolverArregloNotasBitacora(mockDb.notas);
+  Object.defineProperty(mockDb, "notas", {
+    get() {
+      return _notasInternas;
+    },
+    set(nuevoArr: NotaConversacion[]) {
+      _notasInternas = envolverArregloNotasBitacora(Array.isArray(nuevoArr) ? nuevoArr : []);
+    },
+    configurable: true,
+    enumerable: true
+  });
+
+  /**
    * Sincronización maestra e hidratación completa desde Supabase hacia la memoria del servidor.
-   * Carga perfiles, interesados, expedientes con integrantes/predio/postulante y documentos.
+   * Carga perfiles, interesados, expedientes con integrantes/predio/postulante, documentos y bitácora.
    */
   async function sincronizarTodoDesdeSupabase(): Promise<{
     ok: boolean;
@@ -2426,6 +2684,32 @@ export async function createApp(): Promise<express.Express> {
         }
       } catch (docErr: any) {
         console.warn("[SUPABASE]: Advertencia sincronizando documentos:", docErr?.message);
+      }
+
+      // 5. Sincronizar bitácora de notas y movimientos desde Supabase sin alterar las existentes
+      try {
+        const { data: dbNotas } = await supabaseAdmin
+          .from("notas_conversaciones")
+          .select(`
+            id,
+            expediente_id,
+            interesado_id,
+            autor_id,
+            persona_contactada,
+            canal,
+            contenido,
+            fecha_gestion,
+            creado_en,
+            autor:perfiles_usuario(id, nombre_completo, username, rol)
+          `)
+          .order("creado_en", { ascending: false });
+
+        if (Array.isArray(dbNotas) && dbNotas.length > 0) {
+          hidratarNotasDesdeFilasSupabase(dbNotas);
+          console.log(`[SUPABASE]: ${dbNotas.length} registros de bitácora sincronizados oficialmente.`);
+        }
+      } catch (notErr: any) {
+        console.warn("[SUPABASE]: Advertencia sincronizando bitácora:", notErr?.message);
       }
 
       return {
@@ -4271,12 +4555,25 @@ export async function createApp(): Promise<express.Express> {
             (nuevoExp as any)._persistidoEnSupabase = true;
             interesado.convertidoAExpedienteId = expDb.id;
             interesado.estadoComercial = "convertido_a_expediente";
-            // Sincronizar requisitosCaso en memoria con el nuevo UUID oficial de Supabase
+            // Sincronizar requisitosCaso y notas previas en memoria con el nuevo UUID oficial de Supabase
             mockDb.requisitosCaso.forEach((r) => {
               if (r.expedienteId === nuevoExpId) {
                 r.expedienteId = expDb.id;
               }
             });
+            mockDb.notas.forEach((n) => {
+              if (n.expedienteId === nuevoExpId || n.interesadoId === interesado.id) {
+                n.expedienteId = expDb.id;
+              }
+            });
+
+            // Vincular en Supabase las notas previas de captación al nuevo expediente
+            if (esUuidValido(interesado.id)) {
+              await supabaseAdmin
+                .from("notas_conversaciones")
+                .update({ expediente_id: expDb.id })
+                .eq("interesado_id", interesado.id);
+            }
 
             // Actualizar estado del interesado en Supabase
             await supabaseAdmin
@@ -4312,6 +4609,20 @@ export async function createApp(): Promise<express.Express> {
         console.error("[SUPABASE]: Error al persistir conversión en Supabase:", err?.message);
       }
     }
+
+    // Registrar en bitácora la creación oficial del expediente a partir de captación
+    mockDb.notas.push({
+      id: `nota-conv-${Date.now()}`,
+      expedienteId: nuevoExp.id,
+      interesadoId: interesado.id,
+      autorId: req.user!.id,
+      autorNombre: req.user!.nombreCompleto,
+      personaContactada: nombreCompleto,
+      canal: "sistema",
+      contenido: `[Fase 1] Apertura oficial del expediente VRD ${nuevoExp.codigoVisible} a partir de captación. Postulante principal: ${nombreCompleto} (${personaPostulante.tipoIdentificacion} ${personaPostulante.numeroIdentificacion}).`,
+      fechaGestion: new Date().toISOString(),
+      creadoEn: new Date().toISOString()
+    });
 
     res.status(201).json({
       success: true,
@@ -4425,8 +4736,13 @@ export async function createApp(): Promise<express.Express> {
         }
 
         if (expUuid) {
-          // Ejecutar en paralelo la hidratación de expediente, documentos y requisitos para minimizar latencia
-          const [expRowRes, docsRes, reqsRes] = await Promise.all([
+          // Ejecutar en paralelo la hidratación de expediente, documentos, requisitos y bitácora para minimizar latencia
+          const filtroNotasOr =
+            exp.interesadoOrigenId && esUuidValido(exp.interesadoOrigenId)
+              ? `expediente_id.eq.${expUuid},interesado_id.eq.${exp.interesadoOrigenId}`
+              : `expediente_id.eq.${expUuid}`;
+
+          const [expRowRes, docsRes, reqsRes, notasRes] = await Promise.all([
             supabaseAdmin
               .from("expedientes")
               .select("*")
@@ -4469,12 +4785,33 @@ export async function createApp(): Promise<express.Express> {
                   version_documento_id
                 )
               `)
-              .eq("expediente_id", expUuid)
+              .eq("expediente_id", expUuid),
+            supabaseAdmin
+              .from("notas_conversaciones")
+              .select(`
+                id,
+                expediente_id,
+                interesado_id,
+                autor_id,
+                persona_contactada,
+                canal,
+                contenido,
+                fecha_gestion,
+                creado_en,
+                autor:perfiles_usuario(id, nombre_completo, username, rol)
+              `)
+              .or(filtroNotasOr)
+              .order("creado_en", { ascending: false })
           ]);
 
           const dbExpRow = expRowRes.data;
           const dbDocs = docsRes.data;
           const dbReqs = reqsRes.data;
+          const dbNotasExp = notasRes.data;
+
+          if (Array.isArray(dbNotasExp) && dbNotasExp.length > 0) {
+            hidratarNotasDesdeFilasSupabase(dbNotasExp, exp.id);
+          }
 
           if (dbExpRow) {
             if (dbExpRow.fase_actual) exp.faseActual = Number(dbExpRow.fase_actual);
@@ -4768,7 +5105,12 @@ export async function createApp(): Promise<express.Express> {
       });
 
     const notas = mockDb.notas
-      .filter((n) => n.expedienteId === exp.id || n.interesadoId === exp.interesadoOrigenId)
+      .filter(
+        (n) =>
+          n.expedienteId === exp.id ||
+          (exp.codigoVisible && n.expedienteId === exp.codigoVisible) ||
+          (exp.interesadoOrigenId && n.interesadoId === exp.interesadoOrigenId)
+      )
       .sort((a, b) => new Date(b.creadoEn || b.fechaGestion).getTime() - new Date(a.creadoEn || a.fechaGestion).getTime());
     const tareas = mockDb.tareas.filter((t) => t.expedienteId === exp.id);
     const eventoSalida = mockDb.eventosSalida.find((ev) => ev.expedienteId === exp.id);
@@ -5243,6 +5585,25 @@ export async function createApp(): Promise<express.Express> {
           exp.estadoFase2 = "en_preparacion";
         }
 
+        // Registrar movimiento exacto de carga o corrección de documento en la bitácora del expediente
+        const faseReqMovimiento = reqCaso.fase || exp.faseActual || 1;
+        const detalleTipoSubida = esCorreccionSubida
+          ? `Corrección de documento subida (Versión v${nuevaVersion.versionNumero})`
+          : `Carga de documento (Versión v${nuevaVersion.versionNumero}${fotosArr ? `, ${fotosArr.length} fotografía(s)` : ""})`;
+        const notaSubidaBitacora: NotaConversacion & { autorRol?: string } = {
+          id: `nota-sub-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          expedienteId: exp.id,
+          autorId: req.user!.id,
+          autorNombre: req.user!.nombreCompleto,
+          autorRol: req.user!.rol,
+          personaContactada: "Gestión Documental",
+          canal: "sistema",
+          contenido: `[Fase ${faseReqMovimiento}] ${detalleTipoSubida} en requisito [${reqCaso.codigoRequisito}] "${reqCaso.nombre}": archivo "${nuevaVersion.nombreArchivoOriginal}". Estado actualizado a: ${esCorreccionSubida ? "Corrección Subida (En Revisión)" : "En Revisión"}.`,
+          fechaGestion: nuevaVersion.subidoEn,
+          creadoEn: nuevaVersion.subidoEn
+        };
+        mockDb.notas.push(notaSubidaBitacora);
+
         // Persistencia relacional optimizada en PostgreSQL (consultas paralelas Promise.all)
         if (supabaseAdmin) {
           try {
@@ -5433,7 +5794,8 @@ export async function createApp(): Promise<express.Express> {
           documento: doc,
           version: nuevaVersion,
           requisito: reqCaso,
-          expedienteId: exp.id
+          expedienteId: exp.id,
+          nota: notaSubidaBitacora
         });
       } catch (err: any) {
         console.error("[UPLOAD EXCEPTION]: Error no controlado al subir documento:", err);
@@ -5565,6 +5927,19 @@ export async function createApp(): Promise<express.Express> {
       }
 
       mockDb.requisitosCaso.push(nuevoRequisito);
+
+      // Registrar creación de requisito/archivo adicional en bitácora
+      mockDb.notas.push({
+        id: `nota-req-add-${Date.now()}`,
+        expedienteId: exp.id,
+        autorId: req.user!.id,
+        autorNombre: req.user!.nombreCompleto,
+        personaContactada: "Gestión Documental",
+        canal: "sistema",
+        contenido: `[Fase ${faseSolicitada}] Requisito adicional [${codigoRequisito}] "${nombre}" agregado al expediente${req.body.nombreArchivo ? ` con archivo adjunto "${req.body.nombreArchivo}"` : ""}.`,
+        fechaGestion: new Date().toISOString(),
+        creadoEn: new Date().toISOString()
+      });
 
       // Si Supabase está disponible, registrar en PostgreSQL
       if (supabaseAdmin) {
@@ -6216,6 +6591,23 @@ export async function createApp(): Promise<express.Express> {
         (r) => !(r.expedienteId === exp.id && r.personaId === integrante.persona.id)
       );
 
+      const nombreIntEliminado =
+        integrante.persona?.nombres ||
+        `${integrante.persona?.primerNombre || ""} ${integrante.persona?.primerApellido || ""}`.trim() ||
+        "Integrante";
+
+      mockDb.notas.push({
+        id: `nota-del-int-${Date.now()}`,
+        expedienteId: exp.id,
+        autorId: req.user!.id,
+        autorNombre: req.user!.nombreCompleto,
+        personaContactada: nombreIntEliminado,
+        canal: "sistema",
+        contenido: `[Fase ${exp.faseActual}] Integrante ${nombreIntEliminado} (${integrante.parentesco}) y su requisito de identificación fueron removidos del hogar.`,
+        fechaGestion: new Date().toISOString(),
+        creadoEn: new Date().toISOString()
+      });
+
       // Persistencia inmediata de la eliminación en Supabase (PostgreSQL)
       eliminarIntegranteDeSupabase(
         exp.id,
@@ -6315,6 +6707,18 @@ export async function createApp(): Promise<express.Express> {
       }
 
       mockDb.requisitosCaso.push(nuevoReq);
+
+      mockDb.notas.push({
+        id: `nota-req-${Date.now()}`,
+        expedienteId: exp.id,
+        autorId: req.user!.id,
+        autorNombre: req.user!.nombreCompleto,
+        personaContactada: "Gestión Documental",
+        canal: "sistema",
+        contenido: `[Fase ${numFase}] Requisito [${codigo}] "${nuevoReq.nombre}" registrado en el expediente${nombreArchivo ? ` con archivo adjunto "${nombreArchivo}"` : ""}.`,
+        fechaGestion: new Date().toISOString(),
+        creadoEn: new Date().toISOString()
+      });
 
       res.status(201).json({
         success: true,
@@ -6487,6 +6891,19 @@ export async function createApp(): Promise<express.Express> {
       }
 
       const [eliminado] = mockDb.requisitosCaso.splice(idx, 1);
+      if (exp && eliminado) {
+        mockDb.notas.push({
+          id: `nota-del-req-${Date.now()}`,
+          expedienteId: exp.id,
+          autorId: req.user!.id,
+          autorNombre: req.user!.nombreCompleto,
+          personaContactada: "Gestión Documental",
+          canal: "sistema",
+          contenido: `[Fase ${eliminado.fase || exp.faseActual}] Requisito [${eliminado.codigoRequisito}] "${eliminado.nombre}" eliminado del expediente.`,
+          fechaGestion: new Date().toISOString(),
+          creadoEn: new Date().toISOString()
+        });
+      }
       res.json({ success: true, eliminado });
     }
   );
@@ -6603,9 +7020,14 @@ export async function createApp(): Promise<express.Express> {
         }
       }
 
-      // Si se observó con comentarios, generar tarea y nota individual para subsanación del documento
-      const tieneComentariosObs = resultado === "OBSERVADO" || Boolean(observacion && String(observacion).trim().length > 0);
-      if (tieneComentariosObs) {
+      // Si se observó con comentarios, generar tarea y nota individual para subsanación del documento;
+      // si fue ACEPTADO, registrar igualmente el dictamen aprobatorio en la bitácora del expediente.
+      const faseReqRev = reqCaso.fase || exp.faseActual || 1;
+      const numVerRev = reqCaso.documentoAsociado?.versionActual?.versionNumero || 1;
+      const archNomRev = reqCaso.documentoAsociado?.versionActual?.nombreArchivoOriginal || reqCaso.codigoRequisito;
+
+      let notaRevisionBitacora: NotaConversacion & { autorRol?: string };
+      if (resultado === "OBSERVADO") {
         // NOTA: La devolución es estrictamente individual por documento/archivo.
         // No altera el estado general de la fase (estadoFase1 / estadoFase2) ni el motivo general de devolución del expediente.
         const responsableDestino = reqCaso.fase === 1
@@ -6622,17 +7044,33 @@ export async function createApp(): Promise<express.Express> {
           creadoEn: new Date().toISOString()
         });
 
-        mockDb.notas.push({
-          id: `nota-obs-${Date.now()}`,
+        notaRevisionBitacora = {
+          id: `nota-obs-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
           expedienteId: exp.id,
           autorId: req.user!.id,
           autorNombre: req.user!.nombreCompleto,
+          autorRol: req.user!.rol,
           personaContactada: "Responsable de Gestión",
           canal: "sistema",
-          contenido: `Devolución individual del documento '${reqCaso.nombre}': ${nuevaRevision.observacion}. Documento habilitado para su corrección.`,
-          fechaGestion: new Date().toISOString(),
-          creadoEn: new Date().toISOString()
-        });
+          contenido: `[Fase ${faseReqRev}] Devolución individual del documento [${reqCaso.codigoRequisito}] "${reqCaso.nombre}" (v${numVerRev} - ${archNomRev}): OBSERVADO — Motivo: ${nuevaRevision.observacion}. Documento habilitado para su corrección.`,
+          fechaGestion: nuevaRevision.fechaRevision,
+          creadoEn: nuevaRevision.fechaRevision
+        };
+        mockDb.notas.push(notaRevisionBitacora);
+      } else {
+        notaRevisionBitacora = {
+          id: `nota-rev-ok-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          expedienteId: exp.id,
+          autorId: req.user!.id,
+          autorNombre: req.user!.nombreCompleto,
+          autorRol: req.user!.rol,
+          personaContactada: "Revisión Documental",
+          canal: "sistema",
+          contenido: `[Fase ${faseReqRev}] Revisión de documento [${reqCaso.codigoRequisito}] "${reqCaso.nombre}" (v${numVerRev} - ${archNomRev}): ACEPTADO${nuevaRevision.observacion ? ` — Observación: ${nuevaRevision.observacion}` : "."}`,
+          fechaGestion: nuevaRevision.fechaRevision,
+          creadoEn: nuevaRevision.fechaRevision
+        };
+        mockDb.notas.push(notaRevisionBitacora);
       }
 
       // Sincronizar actualización en Supabase
@@ -6763,7 +7201,7 @@ export async function createApp(): Promise<express.Express> {
         }
       }
 
-      res.status(200).json({ success: true, revision: nuevaRevision, requisito: reqCaso, expediente: exp });
+      res.status(200).json({ success: true, revision: nuevaRevision, requisito: reqCaso, expediente: exp, nota: notaRevisionBitacora });
     }
   );
 
@@ -7782,6 +8220,18 @@ export async function createApp(): Promise<express.Express> {
         creadoEn: new Date().toISOString()
       });
 
+      mockDb.notas.push({
+        id: `nota-salida-${Date.now()}`,
+        expedienteId: exp.id,
+        autorId: req.user!.id,
+        autorNombre: req.user!.nombreCompleto,
+        personaContactada: "Postulante / Hogar",
+        canal: "sistema",
+        contenido: `[Fase ${exp.faseActual}] Registro de Salida Definitiva del expediente. Motivo: ${motivo}. Fundamento: ${fundamento}.`,
+        fechaGestion: new Date().toISOString(),
+        creadoEn: new Date().toISOString()
+      });
+
       res.status(201).json({ success: true, expediente: exp, eventoSalida, cartaSalida });
     }
   );
@@ -7806,6 +8256,18 @@ export async function createApp(): Promise<express.Express> {
         carta.fechaEnvio = new Date().toISOString();
       }
 
+      mockDb.notas.push({
+        id: `nota-carta-${Date.now()}`,
+        expedienteId: req.params.id,
+        autorId: req.user!.id,
+        autorNombre: req.user!.nombreCompleto,
+        personaContactada: "Postulante",
+        canal: canalEnvio || "sistema",
+        contenido: `Actualización de Carta de Salida: estado cambiado a "${carta.estadoCarta}"${canalEnvio ? ` (Canal: ${canalEnvio})` : ""}.`,
+        fechaGestion: new Date().toISOString(),
+        creadoEn: new Date().toISOString()
+      });
+
       res.json({ success: true, carta });
     }
   );
@@ -7821,14 +8283,15 @@ export async function createApp(): Promise<express.Express> {
       return;
     }
 
-    const nuevaNota: NotaConversacion = {
+    const nuevaNota: NotaConversacion & { autorRol?: string } = {
       id: `nota-${Date.now()}`,
       expedienteId: req.params.id,
       autorId: req.user!.id,
       autorNombre: req.user!.nombreCompleto,
+      autorRol: req.user!.rol,
       personaContactada: personaContactada || "Postulante",
       canal: canal || "llamada",
-      contenido,
+      contenido: String(contenido).trim(),
       fechaGestion: new Date().toISOString(),
       creadoEn: new Date().toISOString()
     };
