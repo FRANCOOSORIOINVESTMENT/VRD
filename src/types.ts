@@ -392,6 +392,8 @@ export interface SoporteDocumentoLicencia {
   sha256Hash?: string;
   subidoPor?: string;
   subidoEn?: string;
+  heredadoDeFase?: number;
+  codigoOrigen?: string;
 }
 
 export type TipoDocumentoRadicacionPlaneacion =
@@ -435,6 +437,8 @@ export interface DocumentoRadicacionPlaneacion {
   cargadoPorNombre?: string;
   cargadoPorRol?: string;
   observaciones?: string;
+  heredadoDeFase?: number;
+  codigoOrigen?: string;
 }
 
 export const PLANTILLA_DOCUMENTOS_FASE_5: {
@@ -707,6 +711,9 @@ export interface RequisitoCaso {
   esObligatorio: boolean;
   esAdicional: boolean;
   origenFase1?: boolean;
+  heredadoDeFase?: number;
+  codigoRequisitoOrigen?: string;
+  reemplazadoEnFase?: boolean;
   alertaVigencia?: string;
   documentoAsociado?: Documento;
   ultimaRevision?: RevisionHumana;

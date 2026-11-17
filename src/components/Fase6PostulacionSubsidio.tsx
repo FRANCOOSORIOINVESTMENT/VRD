@@ -4,7 +4,9 @@ import {
   PerfilUsuario,
   PostulacionSubsidio,
   RondaSubsanacionPostulacion,
-  SoporteDocumentoPostulacion
+  SoporteDocumentoPostulacion,
+  RequisitoCaso,
+  Documento
 } from "../types";
 import {
   generarTextoPortapapeles,
@@ -51,6 +53,8 @@ import {
 
 interface Fase6PostulacionSubsidioProps {
   expediente: Expediente;
+  requisitos?: RequisitoCaso[];
+  documentos?: Documento[];
   currentUser: PerfilUsuario;
   onAbrirVisor: (data: {
     titulo: string;
@@ -68,6 +72,8 @@ interface Fase6PostulacionSubsidioProps {
 
 export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> = ({
   expediente,
+  requisitos,
+  documentos,
   currentUser,
   onAbrirVisor,
   onActualizarExpediente,
@@ -95,11 +101,13 @@ export const Fase6PostulacionSubsidio: React.FC<Fase6PostulacionSubsidioProps> =
   const puedeAvanzarFase = true;
 
   // Lista canónica de los 28 documentos en orden estricto
-  const [lista28, setLista28] = useState<ItemDocumentoOficial28[]>(() => construirListaOficial28(expediente));
+  const [lista28, setLista28] = useState<ItemDocumentoOficial28[]>(() =>
+    construirListaOficial28(expediente, requisitos, documentos)
+  );
 
   useEffect(() => {
-    setLista28(construirListaOficial28(expediente));
-  }, [expediente]);
+    setLista28(construirListaOficial28(expediente, requisitos, documentos));
+  }, [expediente, requisitos, documentos]);
 
   // Filtros y búsqueda en la tabla de los 28 documentos
   const [filtroEstado, setFiltroEstado] = useState<

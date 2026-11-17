@@ -1,4 +1,4 @@
-import { Expediente } from "../types";
+import { Expediente, RequisitoCaso, Documento } from "../types";
 import JSZip from "jszip";
 
 export type EstadoDocFase6 =
@@ -312,32 +312,70 @@ interface ResultadoBusquedaFasePrevia {
   observacion?: string;
 }
 
-function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codigoItem: string): ResultadoBusquedaFasePrevia {
+function buscarDocumentoEnFasesAnteriores(
+  exp: Expediente,
+  numItem: number,
+  codigoItem: string,
+  requisitosExternos?: RequisitoCaso[],
+  documentosExternos?: Documento[]
+): ResultadoBusquedaFasePrevia {
   const f4 = exp.gestionFase4 as any;
   const tramite = exp.tramiteLicencia as any;
 
-  // Search in mockDb requirements and documents
-  let reqs = mockDb.requisitosCaso.filter(r => r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible));
-  let docs = mockDb.documentos.filter(d => d.expedienteId === exp.id || (exp.codigoVisible && d.expedienteId === exp.codigoVisible));
+  // Combinar requisitos reales hidratados desde el backend con mockDb sin duplicar IDs
+  const reqsMock = mockDb.requisitosCaso.filter(
+    (r) => r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)
+  );
+  const mapaReqs = new Map<string, RequisitoCaso>();
+  reqsMock.forEach((r) => mapaReqs.set(r.id, r));
+  if (Array.isArray(requisitosExternos)) {
+    requisitosExternos.forEach((r) => mapaReqs.set(r.id, r));
+  }
+  const reqs = Array.from(mapaReqs.values());
+
+  // Combinar documentos reales hidratados desde el backend con mockDb sin duplicar IDs
+  const docsMock = mockDb.documentos.filter(
+    (d) => d.expedienteId === exp.id || (exp.codigoVisible && d.expedienteId === exp.codigoVisible)
+  );
+  const mapaDocs = new Map<string, Documento>();
+  docsMock.forEach((d) => mapaDocs.set(d.id, d));
+  if (Array.isArray(documentosExternos)) {
+    documentosExternos.forEach((d) => mapaDocs.set(d.id, d));
+  }
+  const docs = Array.from(mapaDocs.values());
 
   switch (numItem) {
-    case 3: { // F6-03: Documentos de identidad del grupo familiar (Cédulas)
-      const reqCed = reqs.find(r => (r.codigoRequisito === "F1-03" || r.codigoRequisito === "F2-01") && r.documentoAsociado?.versionActual);
-      if (reqCed?.documentoAsociado?.versionActual) {
-        const v = reqCed.documentoAsociado.versionActual;
+    case 3: { // F6-03: Documentos de identidad del grupo familiar (Cédulas Postulante + Integrantes)
+      const reqsCedF2 = reqs.filter((r) => r.codigoRequisito === "F2-01" && r.documentoAsociado?.versionActual);
+      const reqsCedF1 = reqs.filter((r) => r.codigoRequisito === "F1-03" && r.documentoAsociado?.versionActual);
+      const reqCedReemplazadaF2 = reqsCedF2.find((r) => r.reemplazadoEnFase);
+      const reqCedPrincipal = reqCedReemplazadaF2 || reqsCedF2[0] || reqsCedF1[0];
+
+      if (reqCedPrincipal?.documentoAsociado?.versionActual) {
+        const v = reqCedPrincipal.documentoAsociado.versionActual;
+        const totalCedulasCargadas = Math.max(reqsCedF1.length, reqsCedF2.length, 1);
+        const faseOrigen = reqCedPrincipal.reemplazadoEnFase
+          ? 2
+          : reqCedPrincipal.heredadoDeFase || (reqCedPrincipal.origenFase1 ? 1 : reqCedPrincipal.fase || 1);
         return {
           encontrado: true,
-          faseNum: 1,
-          faseNombre: "Fase 1 (Ingreso Hogar)",
-          nombreArchivoOriginal: v.nombreArchivoOriginal || v.nombreArchivo || `Cedulas_Grupo_Familiar_${exp.postulante.numeroIdentificacion}.pdf`,
+          faseNum: faseOrigen,
+          faseNombre: faseOrigen === 2 ? "Fase 2 (Recolección Documental)" : "Fase 1 (Ingreso Hogar)",
+          nombreArchivoOriginal:
+            v.nombreArchivoOriginal ||
+            ( v as any).nombreArchivo ||
+            `Cedulas_Grupo_Familiar_${exp.postulante.numeroIdentificacion}.pdf`,
           soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal || v.storagePath,
           mimeType: v.mimeType || "application/pdf",
           tamanoBytes: v.tamanoBytes || 204800,
           sha256Hash: v.sha256Hash,
-          observacion: "Documento de identidad heredado automáticamente de Fase 1 (Cédula de Ciudadanía)."
+          observacion:
+            totalCedulasCargadas > 1
+              ? `Documentos de identidad del titular e integrantes (${totalCedulasCargadas} soportes registrados) arrastrados automáticamente de Fase ${faseOrigen}.`
+              : `Documento de identidad heredado automáticamente de Fase ${faseOrigen} (Cédula de Ciudadanía).`
         };
       }
-      const docCed = docs.find(d => {
+      const docCed = docs.find((d) => {
         const t = (d.titulo || "").toLowerCase();
         return t.includes("cedula") || t.includes("cédula") || t.includes("identidad") || t.includes("postulante");
       });
@@ -358,27 +396,65 @@ function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codi
       break;
     }
 
-    case 9: { // F6-09: Certificado de tradición y libertad
-      const reqCTL = reqs.find(r => (r.codigoRequisito === "F1-01" || r.codigoRequisito === "F2-04") && r.documentoAsociado?.versionActual);
-      if (reqCTL?.documentoAsociado?.versionActual) {
-        const v = reqCTL.documentoAsociado.versionActual;
+    case 9: { // F6-09: Certificado de tradición y libertad (Fases 1 -> 2 -> 5 -> 6)
+      const docPlanCtl = tramite?.documentosPlaneacion?.find(
+        (d: any) => d.tipo === "certificado_tradicion" || d.itemNumero === 2
+      );
+      if (docPlanCtl?.soporte?.nombreArchivo && !docPlanCtl.soporte.heredadoDeFase && !docPlanCtl.heredadoDeFase) {
+        const sop = docPlanCtl.soporte;
         return {
           encontrado: true,
-          faseNum: reqCTL.fase || 1,
-          faseNombre: `Fase ${reqCTL.fase || 1}`,
+          faseNum: 5,
+          faseNombre: "Fase 5 (Trámite Licencia)",
+          nombreArchivoOriginal: sop.nombreArchivo,
+          soporteUrl: sop.archivoDataUrl || sop.url,
+          mimeType: sop.mimeType || "application/pdf",
+          tamanoBytes: sop.tamanoBytes,
+          sha256Hash: sop.sha256 || sop.sha256Hash,
+          observacion: "Certificado de Tradición y Libertad actualizado en Fase 5 y arrastrado automáticamente."
+        };
+      }
+
+      const reqCtlF2 = reqs.find((r) => r.codigoRequisito === "F2-04" && r.documentoAsociado?.versionActual);
+      const reqCtlF1 = reqs.find((r) => r.codigoRequisito === "F1-01" && r.documentoAsociado?.versionActual);
+      const reqCTL = (reqCtlF2?.reemplazadoEnFase ? reqCtlF2 : reqCtlF2 || reqCtlF1);
+
+      if (reqCTL?.documentoAsociado?.versionActual) {
+        const v = reqCTL.documentoAsociado.versionActual;
+        const faseOrig = reqCTL.reemplazadoEnFase ? 2 : reqCTL.heredadoDeFase || (reqCTL.origenFase1 ? 1 : reqCTL.fase || 1);
+        return {
+          encontrado: true,
+          faseNum: faseOrig,
+          faseNombre: `Fase ${faseOrig}`,
           nombreArchivoOriginal: v.nombreArchivoOriginal || "Certificado_Tradicion_Libertad.pdf",
           soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
           mimeType: v.mimeType || "application/pdf",
           tamanoBytes: v.tamanoBytes,
           sha256Hash: v.sha256Hash,
-          observacion: "Certificado de Tradición y Libertad heredado de Fase 1/2."
+          observacion: `Certificado de Tradición y Libertad arrastrado automáticamente de Fase ${faseOrig}.`
+        };
+      }
+
+      if (docPlanCtl?.soporte?.nombreArchivo) {
+        const sop = docPlanCtl.soporte;
+        const fOrig = docPlanCtl.heredadoDeFase || sop.heredadoDeFase || 5;
+        return {
+          encontrado: true,
+          faseNum: fOrig,
+          faseNombre: `Fase ${fOrig}`,
+          nombreArchivoOriginal: sop.nombreArchivo,
+          soporteUrl: sop.archivoDataUrl || sop.url,
+          mimeType: sop.mimeType || "application/pdf",
+          tamanoBytes: sop.tamanoBytes,
+          sha256Hash: sop.sha256 || sop.sha256Hash,
+          observacion: `Certificado de Tradición y Libertad heredado de Fase ${fOrig}.`
         };
       }
       break;
     }
 
-    case 10: { // F6-10: Escritura pública
-      const reqEsc = reqs.find(r => r.codigoRequisito === "F2-03" && r.documentoAsociado?.versionActual);
+    case 10: { // F6-10: Escritura pública (Fase 2 F2-03 -> Fase 6)
+      const reqEsc = reqs.find((r) => r.codigoRequisito === "F2-03" && r.documentoAsociado?.versionActual);
       if (reqEsc?.documentoAsociado?.versionActual) {
         const v = reqEsc.documentoAsociado.versionActual;
         return {
@@ -390,32 +466,67 @@ function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codi
           mimeType: v.mimeType || "application/pdf",
           tamanoBytes: v.tamanoBytes,
           sha256Hash: v.sha256Hash,
-          observacion: "Escritura Pública protocolizada traída de Fase 2 (Separada de Tradición y Libertad)."
+          observacion: "Escritura Pública protocolizada arrastrada automáticamente de Fase 2 (Separada de Tradición y Libertad)."
         };
       }
       break;
     }
 
-    case 11: { // F6-11: Impuesto predial
-      const reqPred = reqs.find(r => (r.codigoRequisito === "F1-02" || r.codigoRequisito === "F2-05") && r.documentoAsociado?.versionActual);
+    case 11: { // F6-11: Impuesto predial (Fase 1 F1-02 -> Fase 2 F2-05 -> Fase 6)
+      const reqPredF2 = reqs.find((r) => r.codigoRequisito === "F2-05" && r.documentoAsociado?.versionActual);
+      const reqPredF1 = reqs.find((r) => r.codigoRequisito === "F1-02" && r.documentoAsociado?.versionActual);
+      const reqPred = reqPredF2?.reemplazadoEnFase ? reqPredF2 : reqPredF2 || reqPredF1;
       if (reqPred?.documentoAsociado?.versionActual) {
         const v = reqPred.documentoAsociado.versionActual;
+        const faseOrig = reqPred.reemplazadoEnFase ? 2 : reqPred.heredadoDeFase || (reqPred.origenFase1 ? 1 : reqPred.fase || 1);
         return {
           encontrado: true,
-          faseNum: reqPred.fase || 1,
-          faseNombre: `Fase ${reqPred.fase || 1}`,
+          faseNum: faseOrig,
+          faseNombre: `Fase ${faseOrig}`,
           nombreArchivoOriginal: v.nombreArchivoOriginal || "Impuesto_Predial_Unificado.pdf",
           soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
           mimeType: v.mimeType || "application/pdf",
           tamanoBytes: v.tamanoBytes,
           sha256Hash: v.sha256Hash,
-          observacion: "Comprobante de Impuesto Predial traído de Fase 1/2."
+          observacion: `Comprobante de Impuesto Predial arrastrado automáticamente de Fase ${faseOrig}.`
         };
       }
       break;
     }
 
-    case 12: { // F6-12: Presupuesto (PDF firmado)
+    case 12: { // F6-12: Presupuesto (PDF firmado) (Fase 4 -> Fase 5 F5-01 / Ítem 12 -> Fase 6)
+      const reqPresF5 = reqs.find((r) => r.codigoRequisito === "F5-01" && r.documentoAsociado?.versionActual);
+      const docPlanCant = tramite?.documentosPlaneacion?.find(
+        (d: any) => d.tipo === "memoria_cantidades" || d.itemNumero === 12
+      );
+      if (reqPresF5?.reemplazadoEnFase && reqPresF5.documentoAsociado?.versionActual) {
+        const v = reqPresF5.documentoAsociado.versionActual;
+        return {
+          encontrado: true,
+          faseNum: 5,
+          faseNombre: "Fase 5 (Trámite Licencia)",
+          nombreArchivoOriginal: v.nombreArchivoOriginal || "Presupuesto_Oficial_Firmado.pdf",
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+          mimeType: v.mimeType || "application/pdf",
+          tamanoBytes: v.tamanoBytes,
+          sha256Hash: v.sha256Hash,
+          observacion: "Presupuesto oficial firmado en PDF actualizado en Fase 5."
+        };
+      }
+      if (docPlanCant?.soportePdf?.nombreArchivo && !docPlanCant.soportePdf.heredadoDeFase) {
+        const sop = docPlanCant.soportePdf;
+        return {
+          encontrado: true,
+          faseNum: 5,
+          faseNombre: "Fase 5 (Trámite Licencia)",
+          nombreArchivoOriginal: sop.nombreArchivo,
+          soporteUrl: sop.archivoDataUrl || sop.url,
+          mimeType: sop.mimeType || "application/pdf",
+          tamanoBytes: sop.tamanoBytes,
+          sha256Hash: sop.sha256 || sop.sha256Hash,
+          observacion: "Presupuesto y memoria en PDF arrastrado desde Fase 5."
+        };
+      }
       const pres = f4?.interventoria?.soporte || f4?.presupuestoOficial?.soportePresupuesto;
       if (pres?.nombreArchivo) {
         return {
@@ -426,34 +537,104 @@ function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codi
           soporteUrl: pres.archivoDataUrl || pres.url,
           mimeType: pres.mimeType || "application/pdf",
           tamanoBytes: pres.tamanoBytes,
-          sha256Hash: pres.sha256,
+          sha256Hash: pres.sha256 || pres.sha256Hash,
           observacion: "Presupuesto oficial firmado en PDF heredado de Fase 4."
+        };
+      }
+      if (reqPresF5?.documentoAsociado?.versionActual) {
+        const v = reqPresF5.documentoAsociado.versionActual;
+        const fOrig = reqPresF5.heredadoDeFase || 5;
+        return {
+          encontrado: true,
+          faseNum: fOrig,
+          faseNombre: `Fase ${fOrig}`,
+          nombreArchivoOriginal: v.nombreArchivoOriginal || "Presupuesto_Oficial_Firmado.pdf",
+          soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+          mimeType: v.mimeType || "application/pdf",
+          tamanoBytes: v.tamanoBytes,
+          sha256Hash: v.sha256Hash,
+          observacion: `Presupuesto oficial firmado en PDF arrastrado de Fase ${fOrig}.`
         };
       }
       break;
     }
 
-    case 13: { // F6-13: Memoria de cantidades
-      const docPlan = tramite?.documentosPlaneacion?.find((d: any) => d.tipo === "memoria_cantidades" || d.itemNumero === 12);
+    case 13: { // F6-13: Memoria de cantidades (Fase 4 / Fase 5 -> Fase 6)
+      const docPlan = tramite?.documentosPlaneacion?.find(
+        (d: any) => d.tipo === "memoria_cantidades" || d.itemNumero === 12
+      );
       if (docPlan?.soportePdf?.nombreArchivo || docPlan?.soporte?.nombreArchivo) {
         const sop = docPlan.soportePdf || docPlan.soporte;
+        const fOrig = sop.heredadoDeFase || docPlan.heredadoDeFase || 5;
         return {
           encontrado: true,
-          faseNum: 5,
-          faseNombre: "Fase 5 (Trámite Licencia)",
+          faseNum: fOrig,
+          faseNombre: fOrig === 4 ? "Fase 4 (Documentos Técnicos)" : "Fase 5 (Trámite Licencia)",
           nombreArchivoOriginal: sop.nombreArchivo,
           soporteUrl: sop.archivoDataUrl || sop.url,
           mimeType: sop.mimeType || "application/pdf",
           tamanoBytes: sop.tamanoBytes,
-          sha256Hash: sop.sha256,
-          observacion: "Memoria de cantidades de obra traída de Fase 5."
+          sha256Hash: sop.sha256 || sop.sha256Hash,
+          observacion: `Memoria de cantidades de obra traída automáticamente de Fase ${fOrig}.`
+        };
+      }
+      const presF4 = f4?.interventoria?.soporte || f4?.presupuestoOficial?.soportePresupuesto;
+      if (presF4?.nombreArchivo) {
+        return {
+          encontrado: true,
+          faseNum: 4,
+          faseNombre: "Fase 4 (Documentos Técnicos)",
+          nombreArchivoOriginal: presF4.nombreArchivo,
+          soporteUrl: presF4.archivoDataUrl || presF4.url,
+          mimeType: presF4.mimeType || "application/pdf",
+          tamanoBytes: presF4.tamanoBytes,
+          sha256Hash: presF4.sha256 || presF4.sha256Hash,
+          observacion: "Memoria de cantidades y cómputos heredada de Fase 4."
+        };
+      }
+      break;
+    }
+
+    case 14: { // F6-14: Especificaciones técnicas (Fase 4 Estudios/Arquitectura o Fase 5 Memoriales/Suelos -> Fase 6)
+      const docPlanEsp = tramite?.documentosPlaneacion?.find(
+        (d: any) =>
+          (d.itemNumero === 6 || d.itemNumero === 7 || d.itemNumero === 11 || d.itemNumero === 14) &&
+          d.soporte?.nombreArchivo
+      );
+      if (docPlanEsp?.soporte?.nombreArchivo) {
+        const sop = docPlanEsp.soporte;
+        const fOrig = sop.heredadoDeFase || docPlanEsp.heredadoDeFase || 5;
+        return {
+          encontrado: true,
+          faseNum: fOrig,
+          faseNombre: fOrig === 4 ? "Fase 4 (Documentos Técnicos)" : "Fase 5 (Trámite Licencia)",
+          nombreArchivoOriginal: sop.nombreArchivo,
+          soporteUrl: sop.archivoDataUrl || sop.url,
+          mimeType: sop.mimeType || "application/pdf",
+          tamanoBytes: sop.tamanoBytes,
+          sha256Hash: sop.sha256 || sop.sha256Hash,
+          observacion: `Especificaciones técnicas y memoria constructiva arrastrada de Fase ${fOrig}.`
+        };
+      }
+      const sopTecF4 = f4?.arquitectura?.soporte || f4?.estudioSuelos?.soporte;
+      if (sopTecF4?.nombreArchivo) {
+        return {
+          encontrado: true,
+          faseNum: 4,
+          faseNombre: "Fase 4 (Documentos Técnicos)",
+          nombreArchivoOriginal: sopTecF4.nombreArchivo,
+          soporteUrl: sopTecF4.archivoDataUrl || sopTecF4.url,
+          mimeType: sopTecF4.mimeType || "application/pdf",
+          tamanoBytes: sopTecF4.tamanoBytes,
+          sha256Hash: sopTecF4.sha256 || sopTecF4.sha256Hash,
+          observacion: "Especificaciones técnicas y estudio constructivo heredado de Fase 4."
         };
       }
       break;
     }
 
     case 15: { // F6-15: Acta y registro fotográfico
-      const reqFoto = reqs.find(r => r.codigoRequisito === "F2-11" && r.documentoAsociado?.versionActual);
+      const reqFoto = reqs.find((r) => r.codigoRequisito === "F2-11" && r.documentoAsociado?.versionActual);
       if (reqFoto?.documentoAsociado?.versionActual) {
         const v = reqFoto.documentoAsociado.versionActual;
         return {
@@ -478,71 +659,131 @@ function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codi
           soporteUrl: inf.archivoDataUrl || inf.url,
           mimeType: inf.mimeType || "application/pdf",
           tamanoBytes: inf.tamanoBytes,
-          sha256Hash: inf.sha256,
+          sha256Hash: inf.sha256 || inf.sha256Hash,
           observacion: "Acta e informe de visita pericial técnica heredado de Fase 4."
         };
       }
       break;
     }
 
-    case 16: { // F6-16: Planos de intervención (Sellados)
-      const docPlan = tramite?.documentosPlaneacion?.find((d: any) => d.tipo === "planos_radicacion" || d.itemNumero === 18);
+    case 16: { // F6-16: Planos de intervención (Sellados) (Fase 4 / Fase 5 -> Fase 6)
+      const docPlan = tramite?.documentosPlaneacion?.find(
+        (d: any) =>
+          (d.tipo === "planos_radicacion" ||
+            d.itemNumero === 18 ||
+            d.tipo === "paquete_arquitecto" ||
+            d.itemNumero === 9 ||
+            d.tipo === "memorial_arquitectonico" ||
+            d.itemNumero === 6) &&
+          d.soporte?.nombreArchivo
+      );
       if (docPlan?.soporte?.nombreArchivo) {
         const sop = docPlan.soporte;
+        const fOrig = sop.heredadoDeFase || docPlan.heredadoDeFase || 5;
         return {
           encontrado: true,
-          faseNum: 5,
-          faseNombre: "Fase 5 (Trámite Licencia)",
+          faseNum: fOrig,
+          faseNombre: fOrig === 4 ? "Fase 4 (Documentos Técnicos)" : "Fase 5 (Trámite Licencia)",
           nombreArchivoOriginal: sop.nombreArchivo,
           soporteUrl: sop.archivoDataUrl || sop.url,
           mimeType: sop.mimeType || "application/pdf",
           tamanoBytes: sop.tamanoBytes,
-          sha256Hash: sop.sha256,
-          observacion: "Planos de intervención con sellos oficiales de radicación traídos de Fase 5."
+          sha256Hash: sop.sha256 || sop.sha256Hash,
+          observacion: `Planos de intervención en predio arrastrados automáticamente de Fase ${fOrig}.`
+        };
+      }
+      if (f4?.arquitectura?.soporte?.nombreArchivo) {
+        const sop = f4.arquitectura.soporte;
+        return {
+          encontrado: true,
+          faseNum: 4,
+          faseNombre: "Fase 4 (Documentos Técnicos)",
+          nombreArchivoOriginal: sop.nombreArchivo,
+          soporteUrl: sop.archivoDataUrl || sop.url,
+          mimeType: sop.mimeType || "application/pdf",
+          tamanoBytes: sop.tamanoBytes,
+          sha256Hash: sop.sha256 || sop.sha256Hash,
+          observacion: "Planos arquitectónicos y de intervención arrastrados de Fase 4."
         };
       }
       break;
     }
 
     case 17: { // F6-17: Licencia de construcción (con número de resolución)
-      if (tramite?.soporteLicenciaAprobada?.nombreArchivo) {
-        const sop = tramite.soporteLicenciaAprobada;
+      const sopLic = tramite?.soporteLicenciaAprobada || tramite?.soporteLicenciaAprobadaDocs?.[0];
+      if (sopLic?.nombreArchivo) {
         return {
           encontrado: true,
           faseNum: 5,
           faseNombre: "Fase 5 (Trámite Licencia)",
-          nombreArchivoOriginal: sop.nombreArchivo,
-          soporteUrl: sop.archivoDataUrl || sop.url,
-          mimeType: sop.mimeType || "application/pdf",
-          tamanoBytes: sop.tamanoBytes,
-          sha256Hash: sop.sha256 || sop.sha256Hash,
+          nombreArchivoOriginal: sopLic.nombreArchivo,
+          soporteUrl: sopLic.archivoDataUrl || sopLic.url,
+          mimeType: sopLic.mimeType || "application/pdf",
+          tamanoBytes: sopLic.tamanoBytes,
+          sha256Hash: sopLic.sha256 || sopLic.sha256Hash,
           observacion: `Licencia de Construcción (Res. ${tramite.numeroResolucionLicencia || "Aprobada"}) traída de Fase 5.`
         };
       }
       break;
     }
 
-    case 18: { // F6-18: Planos aprobados
-      const docPlan = tramite?.documentosPlaneacion?.find((d: any) => d.tipo === "planos_radicacion" || d.itemNumero === 18);
-      if (docPlan?.soporte?.nombreArchivo) {
-        const sop = docPlan.soporte;
+    case 18: { // F6-18: Planos aprobados (Fase 5 / Fase 4 -> Fase 6)
+      const sopSegundoDocLic = tramite?.soporteLicenciaAprobadaDocs?.[1];
+      if (sopSegundoDocLic?.nombreArchivo) {
         return {
           encontrado: true,
           faseNum: 5,
           faseNombre: "Fase 5 (Trámite Licencia)",
+          nombreArchivoOriginal: sopSegundoDocLic.nombreArchivo,
+          soporteUrl: sopSegundoDocLic.archivoDataUrl || sopSegundoDocLic.url,
+          mimeType: sopSegundoDocLic.mimeType || "application/pdf",
+          tamanoBytes: sopSegundoDocLic.tamanoBytes,
+          sha256Hash: sopSegundoDocLic.sha256 || sopSegundoDocLic.sha256Hash,
+          observacion: "Juego de planos aprobados adjunto a la licencia en Fase 5."
+        };
+      }
+      const docPlan = tramite?.documentosPlaneacion?.find(
+        (d: any) =>
+          (d.tipo === "planos_radicacion" ||
+            d.itemNumero === 18 ||
+            d.tipo === "paquete_arquitecto" ||
+            d.itemNumero === 9) &&
+          d.soporte?.nombreArchivo
+      );
+      if (docPlan?.soporte?.nombreArchivo) {
+        const sop = docPlan.soporte;
+        const fOrig = sop.heredadoDeFase || docPlan.heredadoDeFase || 5;
+        return {
+          encontrado: true,
+          faseNum: fOrig,
+          faseNombre: fOrig === 4 ? "Fase 4 (Documentos Técnicos)" : "Fase 5 (Trámite Licencia)",
           nombreArchivoOriginal: sop.nombreArchivo,
           soporteUrl: sop.archivoDataUrl || sop.url,
           mimeType: sop.mimeType || "application/pdf",
           tamanoBytes: sop.tamanoBytes,
-          sha256Hash: sop.sha256,
-          observacion: "Juego completo de planos aprobados (5 especialidades) heredado de Fase 5."
+          sha256Hash: sop.sha256 || sop.sha256Hash,
+          observacion: `Juego completo de planos aprobados heredado de Fase ${fOrig}.`
+        };
+      }
+      if (f4?.arquitectura?.soporte?.nombreArchivo) {
+        const sop = f4.arquitectura.soporte;
+        return {
+          encontrado: true,
+          faseNum: 4,
+          faseNombre: "Fase 4 (Documentos Técnicos)",
+          nombreArchivoOriginal: sop.nombreArchivo,
+          soporteUrl: sop.archivoDataUrl || sop.url,
+          mimeType: sop.mimeType || "application/pdf",
+          tamanoBytes: sop.tamanoBytes,
+          sha256Hash: sop.sha256 || sop.sha256Hash,
+          observacion: "Juego de planos arquitectónicos y técnicos arrastrado de Fase 4."
         };
       }
       break;
     }
 
     case 19: { // F6-19: Nomenclatura
-      const reqNom = reqs.find(r => r.codigoRequisito === "F2-08" && r.documentoAsociado?.versionActual);
+      const reqNom = reqs.find((r) => r.codigoRequisito === "F2-08" && r.documentoAsociado?.versionActual);
       if (reqNom?.documentoAsociado?.versionActual) {
         const v = reqNom.documentoAsociado.versionActual;
         return {
@@ -561,7 +802,7 @@ function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codi
     }
 
     case 20: { // F6-20: Certificado de uso de suelo
-      const reqSuelo = reqs.find(r => r.codigoRequisito === "F2-06" && r.documentoAsociado?.versionActual);
+      const reqSuelo = reqs.find((r) => r.codigoRequisito === "F2-06" && r.documentoAsociado?.versionActual);
       if (reqSuelo?.documentoAsociado?.versionActual) {
         const v = reqSuelo.documentoAsociado.versionActual;
         return {
@@ -579,20 +820,23 @@ function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codi
       break;
     }
 
-    case 21: { // F6-21: Certificado de riesgo
-      const reqRiesgo = reqs.find(r => r.codigoRequisito === "F2-07" && r.documentoAsociado?.versionActual);
+    case 21: { // F6-21: Certificado de riesgo (Fase 2 F2-07 / Fase 3 F3-03 -> Fase 6)
+      const reqRiesgoF3 = reqs.find((r) => r.codigoRequisito === "F3-03" && r.documentoAsociado?.versionActual);
+      const reqRiesgoF2 = reqs.find((r) => r.codigoRequisito === "F2-07" && r.documentoAsociado?.versionActual);
+      const reqRiesgo = reqRiesgoF3?.reemplazadoEnFase ? reqRiesgoF3 : reqRiesgoF2 || reqRiesgoF3;
       if (reqRiesgo?.documentoAsociado?.versionActual) {
         const v = reqRiesgo.documentoAsociado.versionActual;
+        const fOrig = reqRiesgo.reemplazadoEnFase ? reqRiesgo.fase || 2 : reqRiesgo.heredadoDeFase || reqRiesgo.fase || 2;
         return {
           encontrado: true,
-          faseNum: 2,
-          faseNombre: "Fase 2 (Recolección Documental)",
+          faseNum: fOrig,
+          faseNombre: fOrig === 3 ? "Fase 3 (Validación Compensar)" : "Fase 2 (Recolección Documental)",
           nombreArchivoOriginal: v.nombreArchivoOriginal || "Certificado_No_Riesgo.pdf",
           soporteUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
           mimeType: v.mimeType || "application/pdf",
           tamanoBytes: v.tamanoBytes,
           sha256Hash: v.sha256Hash,
-          observacion: "Certificado de no riesgo ni amenaza no mitigable traído de Fase 2."
+          observacion: `Certificado de no riesgo ni amenaza no mitigable arrastrado de Fase ${fOrig}.`
         };
       }
       break;
@@ -609,18 +853,24 @@ function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codi
           soporteUrl: sop.archivoDataUrl || sop.url,
           mimeType: sop.mimeType || "application/pdf",
           tamanoBytes: sop.tamanoBytes,
-          sha256Hash: sop.sha256,
+          sha256Hash: sop.sha256 || sop.sha256Hash,
           observacion: "Formato oficial de transporte y acarreo de materiales expedido por interventoría traído de Fase 4."
         };
       }
       break;
     }
 
-    case 25: { // F6-25: Servicios públicos (Agua y Energía)
-      const reqAgua = reqs.find(r => r.codigoRequisito === "F2-09" && r.documentoAsociado?.versionActual);
-      const reqEnergia = reqs.find(r => r.codigoRequisito === "F2-10" && r.documentoAsociado?.versionActual);
-      if (reqAgua?.documentoAsociado?.versionActual || reqEnergia?.documentoAsociado?.versionActual) {
-        const v = (reqAgua?.documentoAsociado?.versionActual || reqEnergia?.documentoAsociado?.versionActual)!;
+    case 25: { // F6-25: Servicios públicos (Agua F2-09 y Energía F2-10 / Fase 3 F3-04 / Fase 5 Ítem 5)
+      const reqAgua = reqs.find((r) => r.codigoRequisito === "F2-09" && r.documentoAsociado?.versionActual);
+      const reqEnergia = reqs.find((r) => r.codigoRequisito === "F2-10" && r.documentoAsociado?.versionActual);
+      const reqServF3 = reqs.find((r) => r.codigoRequisito === "F3-04" && r.documentoAsociado?.versionActual);
+      if (reqAgua?.documentoAsociado?.versionActual || reqEnergia?.documentoAsociado?.versionActual || reqServF3?.documentoAsociado?.versionActual) {
+        const v = (
+          reqAgua?.documentoAsociado?.versionActual ||
+          reqEnergia?.documentoAsociado?.versionActual ||
+          reqServF3?.documentoAsociado?.versionActual
+        )!;
+        const ambosServicios = Boolean(reqAgua?.documentoAsociado?.versionActual && reqEnergia?.documentoAsociado?.versionActual);
         return {
           encontrado: true,
           faseNum: 2,
@@ -630,14 +880,16 @@ function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codi
           mimeType: v.mimeType || "application/pdf",
           tamanoBytes: v.tamanoBytes,
           sha256Hash: v.sha256Hash,
-          observacion: "Certificado de disponibilidad de servicios públicos traído de Fase 2 (Agua y Energía independientes)."
+          observacion: ambosServicios
+            ? "Certificados de disponibilidad de Agua (F2-09) y Energía (F2-10) independientes arrastrados de Fase 2."
+            : "Certificado de disponibilidad de servicios públicos traído de Fase 2 (Agua y Energía independientes)."
         };
       }
       break;
     }
 
     case 26: { // F6-26: Arraigo
-      const reqArr = reqs.find(r => r.codigoRequisito === "F2-02" && r.documentoAsociado?.versionActual);
+      const reqArr = reqs.find((r) => r.codigoRequisito === "F2-02" && r.documentoAsociado?.versionActual);
       if (reqArr?.documentoAsociado?.versionActual) {
         const v = reqArr.documentoAsociado.versionActual;
         return {
@@ -667,7 +919,7 @@ function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codi
           soporteUrl: sop.archivoDataUrl || sop.url,
           mimeType: sop.mimeType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           tamanoBytes: sop.tamanoBytes,
-          sha256Hash: sop.sha256,
+          sha256Hash: sop.sha256 || sop.sha256Hash,
           observacion: "Hoja de cálculo nativa Excel (.xlsx) con presupuesto y APU traída de Fase 5."
         };
       }
@@ -675,10 +927,14 @@ function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codi
     }
   }
 
-  // Generic lookup in mockDb.documentos by code or title match
-  const docGen = docs.find(d => {
+  // Generic lookup in documentos by code or title match
+  const docGen = docs.find((d) => {
     const t = (d.titulo || "").toLowerCase();
-    return t.includes(codigoItem.toLowerCase()) || (CATALOGO_ESTRICTO_28_DOCUMENTOS[numItem - 1]?.nombre && t.includes(CATALOGO_ESTRICTO_28_DOCUMENTOS[numItem - 1].nombre.toLowerCase()));
+    return (
+      t.includes(codigoItem.toLowerCase()) ||
+      (CATALOGO_ESTRICTO_28_DOCUMENTOS[numItem - 1]?.nombre &&
+        t.includes(CATALOGO_ESTRICTO_28_DOCUMENTOS[numItem - 1].nombre.toLowerCase()))
+    );
   });
   if (docGen?.versionActual) {
     const v = docGen.versionActual;
@@ -702,7 +958,11 @@ function buscarDocumentoEnFasesAnteriores(exp: Expediente, numItem: number, codi
  * Construye la lista de los 28 documentos en orden estricto combinando datos heredados de fases previas
  * y documentos específicos registrados en Fase 6.
  */
-export function construirListaOficial28(exp: Expediente): ItemDocumentoOficial28[] {
+export function construirListaOficial28(
+  exp: Expediente,
+  requisitosExternos?: RequisitoCaso[],
+  documentosExternos?: Documento[]
+): ItemDocumentoOficial28[] {
   const post = exp.postulacionSubsidio as any;
   const docsActivos = post?.documentosCargaActiva || {};
 
@@ -730,8 +990,14 @@ export function construirListaOficial28(exp: Expediente): ItemDocumentoOficial28
         ? "Documento identificado y clasificado automáticamente tras descompresión de paquete .ZIP."
         : "Documento cargado directamente en la Fase 6 de Postulación.";
     } else {
-      // 2. Search in previous phases (Fases 1, 2, 4, 5)
-      const busqueda = buscarDocumentoEnFasesAnteriores(exp, cat.numero, cat.codigo);
+      // 2. Search in previous phases (Fases 1, 2, 3, 4, 5)
+      const busqueda = buscarDocumentoEnFasesAnteriores(
+        exp,
+        cat.numero,
+        cat.codigo,
+        requisitosExternos,
+        documentosExternos
+      );
       if (busqueda.encontrado) {
         estado = "Traído de Fase Anterior";
         faseOrigenNum = busqueda.faseNum;

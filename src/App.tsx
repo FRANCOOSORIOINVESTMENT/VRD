@@ -5823,7 +5823,7 @@ export default function App() {
                                       <FileText className="w-5 h-5" />
                                     </div>
                                     <div>
-                                      <div className="flex items-center space-x-2">
+                                      <div className="flex flex-wrap items-center gap-2">
                                         <span className="font-mono text-xs font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
                                           {req.codigoRequisito}
                                         </span>
@@ -5831,6 +5831,11 @@ export default function App() {
                                         <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${req.esObligatorio ? "bg-slate-100 text-slate-600" : "bg-blue-50 text-blue-600"}`}>
                                           {req.esObligatorio ? "Obligatorio" : "Opcional"}
                                         </span>
+                                        {(req.heredadoDeFase || req.origenFase1) && !req.reemplazadoEnFase && req.documentoAsociado?.versionActual && (
+                                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                            Heredado de Fase {req.heredadoDeFase || 1}{req.codigoRequisitoOrigen ? ` (${req.codigoRequisitoOrigen})` : ""}
+                                          </span>
+                                        )}
                                       </div>
                                       <p className="text-xs text-slate-500 mt-0.5">{req.descripcion}</p>
 
@@ -6276,6 +6281,8 @@ export default function App() {
                       ) : (
                         <Fase6PostulacionSubsidio
                           expediente={detalleExp.expediente}
+                          requisitos={detalleExp.requisitos}
+                          documentos={detalleExp.documentos}
                           currentUser={currentUser}
                           onAbrirVisor={(docData) => setDocVisorData(docData)}
                           onActualizarExpediente={async (nuevaFase?: number) => {

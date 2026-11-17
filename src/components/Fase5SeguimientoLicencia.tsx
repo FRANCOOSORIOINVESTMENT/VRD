@@ -1411,6 +1411,16 @@ export const Fase5SeguimientoLicencia: React.FC<Fase5SeguimientoLicenciaProps> =
                         <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200">
                           Obligatorio
                         </span>
+                        {(doc.heredadoDeFase || doc.soporte?.heredadoDeFase || doc.soportePdf?.heredadoDeFase) && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                            <span>
+                              Heredado de Fase {doc.heredadoDeFase || doc.soporte?.heredadoDeFase || doc.soportePdf?.heredadoDeFase}
+                              {(doc.codigoOrigen || doc.soporte?.codigoOrigen || doc.soportePdf?.codigoOrigen)
+                                ? ` (${doc.codigoOrigen || doc.soporte?.codigoOrigen || doc.soportePdf?.codigoOrigen})`
+                                : ""}
+                            </span>
+                          </span>
+                        )}
                         {esItem12 && (
                           <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 flex items-center gap-1">
                             <Sparkles className="w-3 h-3" />

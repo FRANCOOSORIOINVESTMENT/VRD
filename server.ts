@@ -896,29 +896,34 @@ export async function createApp(): Promise<express.Express> {
       }
     });
 
-    // 2.5. Garantizar que ningún par de requisitos distintos comparta la misma instancia de Documento
+    // 2.5. Garantizar que ningún par de requisitos distintos EN LA MISMA FASE comparta la misma instancia de Documento
+    // (Los requisitos heredados entre fases distintas sí comparten legítimamente la referencia hasta ser reemplazados)
     const mapaDocAReq = new Map<string, RequisitoCaso>();
     reqsExp.forEach((r) => {
       const doc = r.documentoAsociado;
       if (!doc || !doc.id) return;
-      const prevReq = mapaDocAReq.get(doc.id);
+      const claveFaseDoc = `${r.fase || 1}::${doc.id}`;
+      const prevReq = mapaDocAReq.get(claveFaseDoc);
       if (!prevReq) {
-        mapaDocAReq.set(doc.id, r);
+        mapaDocAReq.set(claveFaseDoc, r);
       } else if (prevReq.id !== r.id) {
-        // Determinar cuál de los dos requisitos es el dueño legítimo según el título del documento
+        // Determinar cuál de los dos requisitos de la misma fase es el dueño legítimo según el título del documento
         const docTit = (doc.titulo || "").toLowerCase();
         const prevMatch = docTit.includes((prevReq.nombre || "").toLowerCase()) || docTit.includes((prevReq.codigoRequisito || "").toLowerCase());
         const currMatch = docTit.includes((r.nombre || "").toLowerCase()) || docTit.includes((r.codigoRequisito || "").toLowerCase());
         if (currMatch && !prevMatch) {
           prevReq.documentoAsociado = undefined;
           if (prevReq.estado !== "con_observaciones") prevReq.estado = "pendiente_carga";
-          mapaDocAReq.set(doc.id, r);
+          mapaDocAReq.set(claveFaseDoc, r);
         } else {
           r.documentoAsociado = undefined;
           if (r.estado !== "con_observaciones") r.estado = "pendiente_carga";
         }
       }
     });
+
+    // 2.6. Sincronizar herencia documental transversal hacia adelante entre todas las fases (Fases 1 -> 2 -> 3 -> 4 -> 5 -> 6)
+    sincronizarHerenciaDocumentalEntreFases(exp);
 
     // 3. Sincronización relacional asíncrona de corrección en Supabase
     if (supabaseAdmin) {
@@ -1162,32 +1167,455 @@ export async function createApp(): Promise<express.Express> {
     return expBase;
   }
 
+  // Motor transversal de herencia y propagación hacia adelante de documentos repetidos entre fases (Fases 1 a 6)
+  // Respeta íntegramente la fase actual y datos de los expedientes creados, vinculando automáticamente
+  // los documentos previos cuando la fase siguiente no tiene un reemplazo propio cargado manualmente.
+  function sincronizarHerenciaDocumentalEntreFases(exp: Expediente) {
+    if (!exp || !exp.id) return;
+
+    const perteneceAExp = (r: RequisitoCaso) =>
+      r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible);
+
+    const titularPersonaId = exp.postulante?.id || `per-${exp.id}`;
+    const reqsExp = mockDb.requisitosCaso.filter(perteneceAExp);
+
+    // Localizar requisitos fuente de Fase 1
+    const reqTradicionF1 = reqsExp.find(
+      (r) => (r.fase === 1 || !r.fase) && (r.codigoRequisito === "F1-01" || r.nombre.toLowerCase().includes("tradición") || r.nombre.toLowerCase().includes("tradicion"))
+    );
+    const reqPredialF1 = reqsExp.find(
+      (r) => (r.fase === 1 || !r.fase) && (r.codigoRequisito === "F1-02" || r.nombre.toLowerCase().includes("predial"))
+    );
+    const reqCedulaTitularF1 = reqsExp.find(
+      (r) =>
+        (r.fase === 1 || !r.fase) &&
+        r.codigoRequisito === "F1-03" &&
+        (r.personaId === titularPersonaId || r.nombre.toLowerCase().includes("postulante") || !r.nombre.toLowerCase().includes("integrante"))
+    );
+
+    // -------------------------------------------------------------------------
+    // A. HERENCIA FASE 1 -> FASE 2 (Cédulas Titular e Integrantes, Tradición, Predial)
+    // -------------------------------------------------------------------------
+    const reqsFase2 = reqsExp.filter((r) => r.fase === 2);
+    if (reqsFase2.length > 0) {
+      // 1. Cédula del Postulante (F1-03 -> F2-01)
+      const reqCedulaTitularF2 = reqsFase2.find(
+        (r) => r.codigoRequisito === "F2-01" && (!r.personaId || r.personaId === titularPersonaId || !r.nombre.toLowerCase().includes("integrante"))
+      );
+      if (reqCedulaTitularF2 && reqCedulaTitularF1?.documentoAsociado?.versionActual) {
+        const sinDocPropioF2 =
+          !reqCedulaTitularF2.documentoAsociado?.versionActual ||
+          (!reqCedulaTitularF2.reemplazadoEnFase &&
+            (reqCedulaTitularF2.origenFase1 ||
+              reqCedulaTitularF2.heredadoDeFase === 1 ||
+              reqCedulaTitularF2.documentoAsociado?.id === reqCedulaTitularF1.documentoAsociado.id));
+
+        if (sinDocPropioF2) {
+          reqCedulaTitularF2.documentoAsociado = reqCedulaTitularF1.documentoAsociado;
+          reqCedulaTitularF2.origenFase1 = true;
+          reqCedulaTitularF2.heredadoDeFase = 1;
+          reqCedulaTitularF2.codigoRequisitoOrigen = "F1-03";
+          if (reqCedulaTitularF2.estado === "pendiente_carga" || reqCedulaTitularF1.estado === "aceptado") {
+            reqCedulaTitularF2.estado = "aceptado";
+          }
+        }
+      }
+
+      // 2. Cédulas de Integrantes del Hogar (F1-03 Integrante -> F2-01 Integrante)
+      const integrantesHogar = exp.hogar?.integrantes || [];
+      integrantesHogar.forEach((integ) => {
+        if (integ.esPostulantePrincipal) return;
+        const pId = integ.persona?.id || `per-${integ.id}`;
+        const pNombre = integ.persona
+          ? `${integ.persona.primerNombre || integ.persona.nombres || "Integrante"} ${integ.persona.primerApellido || ""}`.trim()
+          : "Integrante del Hogar";
+
+        const reqCedIntegF1 = reqsExp.find(
+          (r) => (r.fase === 1 || !r.fase) && r.codigoRequisito === "F1-03" && r.personaId === pId
+        );
+
+        if (reqCedIntegF1?.documentoAsociado?.versionActual) {
+          let reqCedIntegF2 = mockDb.requisitosCaso.find(
+            (r) => perteneceAExp(r) && r.fase === 2 && r.codigoRequisito === "F2-01" && r.personaId === pId
+          );
+          if (!reqCedIntegF2) {
+            reqCedIntegF2 = {
+              id: `req-f2-01-${exp.id}-${pId}`,
+              expedienteId: exp.id,
+              codigoRequisito: "F2-01",
+              nombre: `Cédula de Integrante: ${pNombre} (${integ.parentesco || "Familiar"})`,
+              descripcion: `Documento de identidad del integrante del hogar heredado automáticamente de Fase 1.`,
+              fase: 2,
+              personaId: pId,
+              personaNombre: pNombre,
+              estado: "aceptado",
+              esObligatorio: false,
+              esAdicional: false,
+              origenFase1: true,
+              heredadoDeFase: 1,
+              codigoRequisitoOrigen: "F1-03",
+              documentoAsociado: reqCedIntegF1.documentoAsociado
+            };
+            // Insertar justo después de F2-01 del titular para mantener orden lógico
+            const idxF201 = mockDb.requisitosCaso.findIndex(
+              (r) => perteneceAExp(r) && r.fase === 2 && r.codigoRequisito === "F2-01"
+            );
+            if (idxF201 >= 0) {
+              mockDb.requisitosCaso.splice(idxF201 + 1, 0, reqCedIntegF2);
+            } else {
+              mockDb.requisitosCaso.push(reqCedIntegF2);
+            }
+          } else if (!reqCedIntegF2.documentoAsociado?.versionActual || !reqCedIntegF2.reemplazadoEnFase) {
+            reqCedIntegF2.documentoAsociado = reqCedIntegF1.documentoAsociado;
+            reqCedIntegF2.origenFase1 = true;
+            reqCedIntegF2.heredadoDeFase = 1;
+            reqCedIntegF2.codigoRequisitoOrigen = "F1-03";
+            if (reqCedIntegF2.estado === "pendiente_carga" || reqCedIntegF1.estado === "aceptado") {
+              reqCedIntegF2.estado = "aceptado";
+            }
+          }
+        }
+      });
+
+      // 3. Certificado de Tradición y Libertad (F1-01 -> F2-04)
+      const reqTradicionF2 = reqsFase2.find((r) => r.codigoRequisito === "F2-04");
+      if (reqTradicionF2 && reqTradicionF1?.documentoAsociado?.versionActual) {
+        const sinDocPropioF2 =
+          !reqTradicionF2.documentoAsociado?.versionActual ||
+          (!reqTradicionF2.reemplazadoEnFase &&
+            (reqTradicionF2.origenFase1 ||
+              reqTradicionF2.heredadoDeFase === 1 ||
+              reqTradicionF2.documentoAsociado?.id === reqTradicionF1.documentoAsociado.id));
+
+        if (sinDocPropioF2) {
+          reqTradicionF2.documentoAsociado = reqTradicionF1.documentoAsociado;
+          reqTradicionF2.origenFase1 = true;
+          reqTradicionF2.heredadoDeFase = 1;
+          reqTradicionF2.codigoRequisitoOrigen = "F1-01";
+          if (reqTradicionF2.estado === "pendiente_carga" || reqTradicionF1.estado === "aceptado") {
+            reqTradicionF2.estado = "aceptado";
+          }
+        }
+      }
+
+      // 4. Impuesto Predial Unificado (F1-02 -> F2-05)
+      const reqPredialF2 = reqsFase2.find((r) => r.codigoRequisito === "F2-05");
+      if (reqPredialF2 && reqPredialF1?.documentoAsociado?.versionActual) {
+        const sinDocPropioF2 =
+          !reqPredialF2.documentoAsociado?.versionActual ||
+          (!reqPredialF2.reemplazadoEnFase &&
+            (reqPredialF2.origenFase1 ||
+              reqPredialF2.heredadoDeFase === 1 ||
+              reqPredialF2.documentoAsociado?.id === reqPredialF1.documentoAsociado.id));
+
+        if (sinDocPropioF2) {
+          reqPredialF2.documentoAsociado = reqPredialF1.documentoAsociado;
+          reqPredialF2.origenFase1 = true;
+          reqPredialF2.heredadoDeFase = 1;
+          reqPredialF2.codigoRequisitoOrigen = "F1-02";
+          if (reqPredialF2.estado === "pendiente_carga" || reqPredialF1.estado === "aceptado") {
+            reqPredialF2.estado = "aceptado";
+          }
+        }
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // B. HERENCIA FASE 2 -> FASE 3 (Riesgo F2-07 -> F3-03, Servicios F2-09/F2-10 -> F3-04)
+    // -------------------------------------------------------------------------
+    const reqRiesgoF2 = mockDb.requisitosCaso.find((r) => perteneceAExp(r) && r.fase === 2 && r.codigoRequisito === "F2-07");
+    const reqAguaF2 = mockDb.requisitosCaso.find((r) => perteneceAExp(r) && r.fase === 2 && r.codigoRequisito === "F2-09");
+    const reqEnergiaF2 = mockDb.requisitosCaso.find((r) => perteneceAExp(r) && r.fase === 2 && r.codigoRequisito === "F2-10");
+
+    const reqRiesgoF3 = mockDb.requisitosCaso.find((r) => perteneceAExp(r) && r.fase === 3 && r.codigoRequisito === "F3-03");
+    if (reqRiesgoF3 && reqRiesgoF2?.documentoAsociado?.versionActual) {
+      if (!reqRiesgoF3.documentoAsociado?.versionActual || (!reqRiesgoF3.reemplazadoEnFase && reqRiesgoF3.heredadoDeFase === 2)) {
+        reqRiesgoF3.documentoAsociado = reqRiesgoF2.documentoAsociado;
+        reqRiesgoF3.heredadoDeFase = 2;
+        reqRiesgoF3.codigoRequisitoOrigen = "F2-07";
+        if (reqRiesgoF3.estado === "pendiente_carga") reqRiesgoF3.estado = "aceptado";
+      }
+    }
+
+    const reqServiciosF3 = mockDb.requisitosCaso.find((r) => perteneceAExp(r) && r.fase === 3 && r.codigoRequisito === "F3-04");
+    const docServF2 = reqAguaF2?.documentoAsociado?.versionActual ? reqAguaF2 : reqEnergiaF2;
+    if (reqServiciosF3 && docServF2?.documentoAsociado?.versionActual) {
+      if (!reqServiciosF3.documentoAsociado?.versionActual || (!reqServiciosF3.reemplazadoEnFase && reqServiciosF3.heredadoDeFase === 2)) {
+        reqServiciosF3.documentoAsociado = docServF2.documentoAsociado;
+        reqServiciosF3.heredadoDeFase = 2;
+        reqServiciosF3.codigoRequisitoOrigen = docServF2.codigoRequisito;
+        if (reqServiciosF3.estado === "pendiente_carga") reqServiciosF3.estado = "aceptado";
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // C. HERENCIA FASES 1, 2 Y 4 -> FASE 5 (Checklist 15 Documentos Planeación y F5-01)
+    // -------------------------------------------------------------------------
+    const construirSoporteDesdeReq = (reqOrig: RequisitoCaso | undefined, faseOrig: number): SoporteDocumentoLicencia | undefined => {
+      const v = reqOrig?.documentoAsociado?.versionActual;
+      if (!v) return undefined;
+      return {
+        id: `sop-heredado-${reqOrig!.codigoRequisito}-${v.id}`,
+        nombreArchivo: v.nombreArchivoOriginal || `${reqOrig!.codigoRequisito}.pdf`,
+        url: v.archivoDataUrl || v.urlFirmadaTemporal,
+        archivoDataUrl: v.archivoDataUrl || v.urlFirmadaTemporal,
+        mimeType: v.mimeType || "application/pdf",
+        tamanoBytes: v.tamanoBytes || 204800,
+        sha256: v.sha256Hash || `sha256-${reqOrig!.codigoRequisito}`,
+        sha256Hash: v.sha256Hash || `sha256-${reqOrig!.codigoRequisito}`,
+        subidoPor: v.subidoPorNombre || `Heredado de Fase ${faseOrig}`,
+        subidoEn: v.subidoEn || new Date().toISOString(),
+        heredadoDeFase: faseOrig,
+        codigoOrigen: reqOrig!.codigoRequisito
+      };
+    };
+
+    const construirSoporteDesdeF4 = (sopF4: any, codigoOrig: string): SoporteDocumentoLicencia | undefined => {
+      if (!sopF4 || (!sopF4.nombreArchivo && !sopF4.archivoDataUrl && !sopF4.url)) return undefined;
+      return {
+        id: sopF4.id || `sop-heredado-f4-${codigoOrig}`,
+        nombreArchivo: sopF4.nombreArchivo || `${codigoOrig}.pdf`,
+        url: sopF4.archivoDataUrl || sopF4.url,
+        archivoDataUrl: sopF4.archivoDataUrl || sopF4.url,
+        mimeType: sopF4.mimeType || "application/pdf",
+        tamanoBytes: sopF4.tamanoBytes || 256000,
+        sha256: sopF4.sha256 || sopF4.sha256Hash || `sha256-${codigoOrig}`,
+        sha256Hash: sopF4.sha256Hash || sopF4.sha256 || `sha256-${codigoOrig}`,
+        subidoPor: sopF4.subidoPor || "Ingeniería (Fase 4)",
+        subidoEn: sopF4.subidoEn || new Date().toISOString(),
+        heredadoDeFase: 4,
+        codigoOrigen: codigoOrig
+      };
+    };
+
+    // Sincronizar F5-01 (Presupuesto Oficial y APU) con Fase 4 si aún no tiene carga propia en Fase 5
+    const reqF5_01 = mockDb.requisitosCaso.find((r) => perteneceAExp(r) && r.fase === 5 && r.codigoRequisito === "F5-01");
+    const sopPresupuestoF4 =
+      (exp.gestionFase4 as any)?.presupuestoOficial?.soportePresupuesto ||
+      exp.gestionFase4?.interventoria?.soporte;
+
+    if (reqF5_01 && sopPresupuestoF4 && (sopPresupuestoF4.nombreArchivo || sopPresupuestoF4.archivoDataUrl || sopPresupuestoF4.url)) {
+      if (!reqF5_01.documentoAsociado?.versionActual || (!reqF5_01.reemplazadoEnFase && reqF5_01.heredadoDeFase === 4)) {
+        const docIdF501 = `doc-f5-01-heredado-${exp.id}`;
+        const verF501: DocVersion = {
+          id: `ver-f5-01-heredado-${exp.id}`,
+          documentoId: docIdF501,
+          versionNumero: 1,
+          storagePath: `expedientes/${exp.id}/F5-01_Heredado_F4.pdf`,
+          nombreArchivoOriginal: sopPresupuestoF4.nombreArchivo || `Presupuesto_Oficial_${exp.codigoVisible || exp.id}.pdf`,
+          mimeType: sopPresupuestoF4.mimeType || "application/pdf",
+          tamanoBytes: sopPresupuestoF4.tamanoBytes || 320000,
+          sha256Hash: sopPresupuestoF4.sha256 || sopPresupuestoF4.sha256Hash || `sha256-f501-${exp.id}`,
+          subidoPorId: "usr-ingenieria-01",
+          subidoPorNombre: sopPresupuestoF4.subidoPor || "Ingeniería (Fase 4)",
+          subidoEn: sopPresupuestoF4.subidoEn || new Date().toISOString(),
+          urlFirmadaTemporal: sopPresupuestoF4.archivoDataUrl || sopPresupuestoF4.url,
+          archivoDataUrl: sopPresupuestoF4.archivoDataUrl || sopPresupuestoF4.url
+        };
+        let docEnDb = mockDb.documentos.find((d) => d.id === docIdF501);
+        if (!docEnDb) {
+          docEnDb = {
+            id: docIdF501,
+            expedienteId: exp.id,
+            titulo: `Presupuesto Oficial y APU Detallado - ${exp.postulante?.primerApellido || "Hogar"}`,
+            versiones: [verF501],
+            versionActual: verF501
+          };
+          mockDb.documentos.push(docEnDb);
+        } else {
+          docEnDb.versiones = [verF501];
+          docEnDb.versionActual = verF501;
+        }
+        reqF5_01.documentoAsociado = docEnDb;
+        reqF5_01.heredadoDeFase = 4;
+        reqF5_01.codigoRequisitoOrigen = "F4-PRESUPUESTO";
+        if (reqF5_01.estado === "pendiente_carga") {
+          reqF5_01.estado = "aceptado";
+        }
+      }
+    }
+
+    if (exp.tramiteLicencia?.documentosPlaneacion && Array.isArray(exp.tramiteLicencia.documentosPlaneacion)) {
+      const reqTradicionF2Act = mockDb.requisitosCaso.find((r) => perteneceAExp(r) && r.fase === 2 && r.codigoRequisito === "F2-04");
+      const reqTradicionFuente = reqTradicionF2Act?.documentoAsociado?.versionActual ? reqTradicionF2Act : reqTradicionF1;
+      const faseOrigenTradicion = reqTradicionF2Act?.reemplazadoEnFase ? 2 : 1;
+
+      exp.tramiteLicencia.documentosPlaneacion.forEach((docPlan) => {
+        // Ítem 2: Certificado de Tradición y Libertad Actualizado <- Fase 2 (F2-04) / Fase 1 (F1-01)
+        if (docPlan.itemNumero === 2 || docPlan.tipo === "certificado_tradicion") {
+          if (!docPlan.soporte || docPlan.soporte.heredadoDeFase) {
+            const sop = construirSoporteDesdeReq(reqTradicionFuente, faseOrigenTradicion);
+            if (sop) {
+              docPlan.soporte = sop;
+              docPlan.heredadoDeFase = faseOrigenTradicion;
+              docPlan.codigoOrigen = faseOrigenTradicion === 2 ? "F2-04" : "F1-01";
+              docPlan.fechaCarga = docPlan.fechaCarga || sop.subidoEn;
+              docPlan.observaciones = `Arrastrado automáticamente de Fase ${faseOrigenTradicion} (${docPlan.codigoOrigen}). Puede reemplazarlo si requiere versión más reciente.`;
+            }
+          }
+        }
+
+        // Ítem 5: Certificación de No Afectación a Redes Eléctricas <- Fase 2 (F2-10 Energía)
+        if (docPlan.itemNumero === 5 || docPlan.tipo === "certificacion_redes") {
+          if (!docPlan.soporte || docPlan.soporte.heredadoDeFase) {
+            const sop = construirSoporteDesdeReq(reqEnergiaF2, 2);
+            if (sop) {
+              docPlan.soporte = sop;
+              docPlan.heredadoDeFase = 2;
+              docPlan.codigoOrigen = "F2-10";
+              docPlan.fechaCarga = docPlan.fechaCarga || sop.subidoEn;
+              docPlan.observaciones = "Arrastrado automáticamente de Fase 2 (F2-10 Certificación de Disponibilidad de Energía).";
+            }
+          }
+        }
+
+        // Ítem 6 (Memorial Arquitectónico) e Ítem 9 (Paquete Arquitecto) <- Fase 4 (Frente Arquitectura)
+        if (docPlan.itemNumero === 6 || docPlan.tipo === "memorial_arquitectonico" || docPlan.itemNumero === 9 || docPlan.tipo === "paquete_arquitecto") {
+          if (!docPlan.soporte || docPlan.soporte.heredadoDeFase) {
+            const sop = construirSoporteDesdeF4(exp.gestionFase4?.arquitectura?.soporte, "F4-ARQ");
+            if (sop) {
+              docPlan.soporte = sop;
+              docPlan.heredadoDeFase = 4;
+              docPlan.codigoOrigen = "F4-ARQ";
+              docPlan.fechaCarga = docPlan.fechaCarga || sop.subidoEn;
+              docPlan.observaciones = "Arrastrado automáticamente de Fase 4 (Frente de Diseño Arquitectónico).";
+            }
+          }
+        }
+
+        // Ítem 12 (Memoria de Cantidades PDF) <-> F5-01 / Fase 4 (Presupuesto / Interventoría)
+        if (docPlan.itemNumero === 12 || docPlan.tipo === "memoria_cantidades") {
+          if (!docPlan.soportePdf || docPlan.soportePdf.heredadoDeFase) {
+            let sopPdf: SoporteDocumentoLicencia | undefined = undefined;
+            if (reqF5_01?.documentoAsociado?.versionActual) {
+              const fOrig = reqF5_01.heredadoDeFase || 5;
+              sopPdf = construirSoporteDesdeReq(reqF5_01, fOrig);
+            } else if (sopPresupuestoF4) {
+              sopPdf = construirSoporteDesdeF4(sopPresupuestoF4, "F4-PRESUPUESTO");
+            }
+            if (sopPdf) {
+              docPlan.soportePdf = sopPdf;
+              if (!docPlan.soporte) docPlan.soporte = sopPdf;
+              docPlan.heredadoDeFase = sopPdf.heredadoDeFase;
+              docPlan.codigoOrigen = sopPdf.codigoOrigen;
+              docPlan.fechaCarga = docPlan.fechaCarga || sopPdf.subidoEn;
+            }
+          } else if (docPlan.soportePdf && !docPlan.soportePdf.heredadoDeFase && reqF5_01 && !reqF5_01.reemplazadoEnFase) {
+            // Si el usuario subió el PDF en el Ítem 12 de Fase 5, sincronizarlo con F5-01
+            const sPdf = docPlan.soportePdf;
+            const docIdSync = `doc-f5-01-sync-${exp.id}`;
+            const verSync: DocVersion = {
+              id: `ver-f5-01-sync-${exp.id}`,
+              documentoId: docIdSync,
+              versionNumero: 1,
+              storagePath: `expedientes/${exp.id}/F5-01_Item12.pdf`,
+              nombreArchivoOriginal: sPdf.nombreArchivo,
+              mimeType: sPdf.mimeType || "application/pdf",
+              tamanoBytes: sPdf.tamanoBytes || 256000,
+              sha256Hash: sPdf.sha256Hash || sPdf.sha256 || `sha256-f501-sync`,
+              subidoPorId: "usr-ingenieria-01",
+              subidoPorNombre: sPdf.subidoPor || "Ingeniería (Fase 5)",
+              subidoEn: sPdf.subidoEn || new Date().toISOString(),
+              urlFirmadaTemporal: sPdf.archivoDataUrl || sPdf.url,
+              archivoDataUrl: sPdf.archivoDataUrl || sPdf.url
+            };
+            reqF5_01.documentoAsociado = {
+              id: docIdSync,
+              expedienteId: exp.id,
+              titulo: `Presupuesto Oficial y APU Detallado - ${exp.postulante?.primerApellido || "Hogar"}`,
+              versiones: [verSync],
+              versionActual: verSync
+            };
+            reqF5_01.estado = "aceptado";
+          }
+        }
+
+        // Ítem 13 (Anexo 1 Investigación Mínima) e Ítem 14 (Anexo 2 Estudio de Suelos) <- Fase 4 (Estudio de Suelos)
+        if (docPlan.itemNumero === 13 || docPlan.tipo === "anexo_1_investigacion_minima" || docPlan.itemNumero === 14 || docPlan.tipo === "anexo_2_estudio_suelos") {
+          if (!docPlan.soporte || docPlan.soporte.heredadoDeFase) {
+            const sop = construirSoporteDesdeF4(exp.gestionFase4?.estudioSuelos?.soporte, "F4-SUELOS");
+            if (sop) {
+              docPlan.soporte = sop;
+              docPlan.heredadoDeFase = 4;
+              docPlan.codigoOrigen = "F4-SUELOS";
+              docPlan.fechaCarga = docPlan.fechaCarga || sop.subidoEn;
+              docPlan.observaciones = "Arrastrado automáticamente de Fase 4 (Frente de Estudio de Suelos).";
+            }
+          }
+        }
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // D. HERENCIA HACIA FASE 6 (Insumos referenciados de Postulación Compensar)
+    // -------------------------------------------------------------------------
+    if (exp.postulacionSubsidio && Array.isArray(exp.postulacionSubsidio.documentosIncluidos)) {
+      const docPlan12 = exp.tramiteLicencia?.documentosPlaneacion?.find((d) => d.itemNumero === 12 || d.tipo === "memoria_cantidades");
+      const docPlanArq = exp.tramiteLicencia?.documentosPlaneacion?.find((d) => d.tipo === "planos_radicacion" || d.itemNumero === 9 || d.itemNumero === 6);
+
+      exp.postulacionSubsidio.documentosIncluidos.forEach((docInc) => {
+        if (docInc.tipo === "licencia") {
+          const urlLic = exp.tramiteLicencia?.soporteLicenciaAprobada?.archivoDataUrl || exp.tramiteLicencia?.soporteLicenciaAprobada?.url;
+          if (urlLic) docInc.soporteUrl = urlLic;
+          if (exp.tramiteLicencia?.numeroResolucionLicencia) {
+            docInc.identificador = exp.tramiteLicencia.numeroResolucionLicencia;
+            docInc.nombre = `Licencia de Construcción (Resolución ${exp.tramiteLicencia.numeroResolucionLicencia})`;
+          }
+        } else if (docInc.tipo === "presupuesto") {
+          const urlPres =
+            reqF5_01?.documentoAsociado?.versionActual?.archivoDataUrl ||
+            docPlan12?.soportePdf?.archivoDataUrl ||
+            docPlan12?.soportePdf?.url ||
+            (exp.gestionFase4 as any)?.presupuestoOficial?.soportePresupuesto?.archivoDataUrl ||
+            exp.gestionFase4?.interventoria?.soporte?.archivoDataUrl;
+          if (urlPres) docInc.soporteUrl = urlPres;
+        } else if (docInc.tipo === "planos") {
+          const urlPlanos =
+            docPlanArq?.soporte?.archivoDataUrl ||
+            docPlanArq?.soporte?.url ||
+            exp.gestionFase4?.arquitectura?.soporte?.archivoDataUrl ||
+            exp.gestionFase4?.arquitectura?.soporte?.url;
+          if (urlPlanos) docInc.soporteUrl = urlPlanos;
+        } else if (docInc.tipo === "interventoria") {
+          const urlInt =
+            exp.gestionFase4?.interventoria?.soporte?.archivoDataUrl ||
+            exp.gestionFase4?.interventoria?.soporte?.url;
+          if (urlInt) docInc.soporteUrl = urlInt;
+        }
+      });
+    }
+  }
+
   // Helper para inicializar los 11 documentos oficiales de Fase 2
-  // Heredando los 3 documentos existentes de Fase 1 (Cédula, Tradición y Libertad, Impuesto Predial)
+  // Heredando los documentos existentes de Fase 1 (Cédulas de postulante e integrantes, Tradición y Libertad, Impuesto Predial)
   function inicializarRequisitosFase2(exp: Expediente) {
     const existentesFase2 = mockDb.requisitosCaso.filter(
-      (r) => r.expedienteId === exp.id && r.fase === 2
+      (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && r.fase === 2
     );
     if (existentesFase2.length > 0) {
-      return existentesFase2;
+      sincronizarHerenciaDocumentalEntreFases(exp);
+      return mockDb.requisitosCaso.filter(
+        (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && r.fase === 2
+      );
     }
 
     // Localizar requisitos de Fase 1 para heredar documentos ya validados
     const reqCedulaF1 = mockDb.requisitosCaso.find(
       (r) =>
-        r.expedienteId === exp.id &&
+        (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
         r.fase === 1 &&
-        (r.codigoRequisito === "F1-03" || r.nombre.toLowerCase().includes("cédula") || r.nombre.toLowerCase().includes("cedula"))
+        (r.codigoRequisito === "F1-03" || r.nombre.toLowerCase().includes("cédula") || r.nombre.toLowerCase().includes("cedula")) &&
+        (!r.nombre.toLowerCase().includes("integrante"))
     );
     const reqTradicionF1 = mockDb.requisitosCaso.find(
       (r) =>
-        r.expedienteId === exp.id &&
+        (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
         r.fase === 1 &&
         (r.codigoRequisito === "F1-01" || r.nombre.toLowerCase().includes("tradición") || r.nombre.toLowerCase().includes("tradicion"))
     );
     const reqPredialF1 = mockDb.requisitosCaso.find(
       (r) =>
-        r.expedienteId === exp.id &&
+        (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) &&
         r.fase === 1 &&
         (r.codigoRequisito === "F1-02" || r.nombre.toLowerCase().includes("predial"))
     );
@@ -1195,21 +1623,29 @@ export async function createApp(): Promise<express.Express> {
     const nuevos: RequisitoCaso[] = PLANTILLAS_FASE_2.map((plantilla) => {
       let estado: EstadoRequisito = "pendiente_carga";
       let docAsociado = undefined;
+      let heredadoDeFase: number | undefined = undefined;
+      let codigoRequisitoOrigen: string | undefined = undefined;
 
       // 1. Cédula: heredada de Fase 1
       if (plantilla.codigoRequisito === "F2-01" && reqCedulaF1?.documentoAsociado) {
         docAsociado = reqCedulaF1.documentoAsociado;
         estado = "aceptado";
+        heredadoDeFase = 1;
+        codigoRequisitoOrigen = "F1-03";
       }
       // 4. Certificado de Tradición y Libertad: heredado de Fase 1 (reemplazar si > 90 días)
       else if (plantilla.codigoRequisito === "F2-04" && reqTradicionF1?.documentoAsociado) {
         docAsociado = reqTradicionF1.documentoAsociado;
         estado = "aceptado";
+        heredadoDeFase = 1;
+        codigoRequisitoOrigen = "F1-01";
       }
       // 5. Impuesto Predial: heredado de Fase 1 (actualizar si cambió el año)
       else if (plantilla.codigoRequisito === "F2-05" && reqPredialF1?.documentoAsociado) {
         docAsociado = reqPredialF1.documentoAsociado;
         estado = "aceptado";
+        heredadoDeFase = 1;
+        codigoRequisitoOrigen = "F1-02";
       }
 
       // Si el expediente ya superó la Fase 2 (está en Fase 3 o superior), garantizar que los 11 documentos estén formalmente aceptados y con documento disponible
@@ -1292,13 +1728,18 @@ export async function createApp(): Promise<express.Express> {
         esObligatorio: plantilla.esObligatorio,
         esAdicional: false,
         origenFase1: plantilla.origenFase1,
+        heredadoDeFase,
+        codigoRequisitoOrigen,
         alertaVigencia: plantilla.alertaVigencia,
         documentoAsociado: docAsociado
       };
     });
 
     mockDb.requisitosCaso.push(...nuevos);
-    return nuevos;
+    sincronizarHerenciaDocumentalEntreFases(exp);
+    return mockDb.requisitosCaso.filter(
+      (r) => (r.expedienteId === exp.id || (exp.codigoVisible && r.expedienteId === exp.codigoVisible)) && r.fase === 2
+    );
   }
 
   // Helper para hidratar y vincular documentos y requisitos de un expediente desde Supabase
@@ -1671,6 +2112,7 @@ export async function createApp(): Promise<express.Express> {
     );
 
     exp.tramiteLicencia.documentosPlaneacion = [...docsNuevos, ...docsAdicionales];
+    sincronizarHerenciaDocumentalEntreFases(exp);
   }
 
   // Helper para inicializar Fase 6: En Postulación (Compensar e Indicación a Obra)
@@ -1744,6 +2186,7 @@ export async function createApp(): Promise<express.Express> {
         actualizadoEn: new Date().toISOString()
       };
     }
+    sincronizarHerenciaDocumentalEntreFases(exp);
   }
 
   // Helper para inicializar Fase 7: En Construcción y Cobro Subsidio (Hitos de Obra, Cierre y Desembolso)
@@ -5565,6 +6008,15 @@ export async function createApp(): Promise<express.Express> {
           reqCaso.estado = "recibido_revision";
         }
 
+        // Si el usuario subió/reemplazó directamente en una fase >= 2, marcar como versión propia de esta fase
+        if (reqCaso.fase && reqCaso.fase >= 2) {
+          reqCaso.reemplazadoEnFase = true;
+          reqCaso.heredadoDeFase = undefined;
+        }
+
+        // Propagar automáticamente esta versión hacia adelante a las fases siguientes que no tengan reemplazo propio
+        sincronizarHerenciaDocumentalEntreFases(exp);
+
         // Si estaba en subsanación de Fase 3, registrar el documento modificado
         if (exp.subsanacionFase3Activa) {
           if (!exp.subsanacionFase3DocumentosModificados) {
@@ -8997,6 +9449,8 @@ export async function createApp(): Promise<express.Express> {
         subidoPor: req.user!.nombreCompleto,
         subidoEn: new Date().toISOString()
       };
+      // Propagar nuevo soporte técnico de Fase 4 hacia Fase 5 y Fase 6
+      sincronizarHerenciaDocumentalEntreFases(exp);
     }
 
     // Registro en bitácora/historial del frente
@@ -9822,6 +10276,11 @@ export async function createApp(): Promise<express.Express> {
           };
           docs.push(docActualizado);
         }
+
+        // Al subir un archivo manualmente en Fase 5, limpiar marca de herencia en el documento actualizado y propagar hacia adelante (ej. F5-01 y Fase 6)
+        docActualizado.heredadoDeFase = undefined;
+        docActualizado.codigoOrigen = undefined;
+        sincronizarHerenciaDocumentalEntreFases(exp);
 
         exp.tramiteLicencia!.actualizadoEn = new Date().toISOString();
 
