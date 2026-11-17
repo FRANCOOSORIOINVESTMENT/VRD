@@ -193,6 +193,13 @@ export default function App() {
     setFiltroResponsable("");
     setFiltroTiempo("");
   };
+  const [expedienteAEliminar, setExpedienteAEliminar] = useState<{
+    id: string;
+    codigo: string;
+    postulante: string;
+  } | null>(null);
+  const [eliminandoExpediente, setEliminandoExpediente] = useState<boolean>(false);
+
   const [integranteAEliminar, setIntegranteAEliminar] = useState<{
     id: string;
     nombre: string;
@@ -522,10 +529,25 @@ export default function App() {
     }
   }, [currentUser, modalAprobarFase1]);
 
-  // Carga de detalle cuando cambia el ID seleccionado con limpieza estricta de estado (previene fuga entre expedientes)
+  // Carga de detalle cuando cambia el ID seleccionado con pre-hidratación instantánea desde memoria
   useEffect(() => {
     if (expedienteSeleccionadoId && currentUser) {
-      setDetalleExp(null);
+      const expEnMemoria = expedientes.find(
+        (e) => e.id === expedienteSeleccionadoId || e.codigoVisible === expedienteSeleccionadoId
+      );
+      setDetalleExp((prev) => {
+        if (prev && (prev.expediente?.id === expedienteSeleccionadoId || prev.expediente?.codigoVisible === expedienteSeleccionadoId)) {
+          return prev;
+        }
+        if (expEnMemoria) {
+          return {
+            expediente: expEnMemoria,
+            requisitos: [],
+            notas: []
+          };
+        }
+        return null;
+      });
       setModalRevisarReq(null);
       setFormRevision({ resultado: "ACEPTADO", observacion: "" });
       setTextoDevolucionFase1("");
@@ -706,6 +728,35 @@ export default function App() {
     }
   };
 
+  const handleConfirmarEliminarExpediente = async () => {
+    if (!expedienteAEliminar) return;
+    setEliminandoExpediente(true);
+    try {
+      const targetId = expedienteAEliminar.id;
+      const targetCodigo = expedienteAEliminar.codigo;
+      const res = await authFetch(`/api/expedientes/${targetId}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        mostrarToast(data.mensaje || `Expediente ${targetCodigo} eliminado permanentemente del sistema y de Supabase.`);
+        setExpedienteAEliminar(null);
+        if (expedienteSeleccionadoId === targetId || expedienteSeleccionadoId === targetCodigo) {
+          setExpedienteSeleccionadoId(null);
+          setVistaActual("expedientes");
+        }
+        await cargarExpedientes();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        mostrarToast(err.error || "Error al eliminar el expediente.", "error");
+      }
+    } catch {
+      mostrarToast("Error de conexión al eliminar el expediente.", "error");
+    } finally {
+      setEliminandoExpediente(false);
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
@@ -825,8 +876,8 @@ export default function App() {
       .catch(() => {});
   };
 
-  const cargarExpedientes = (): Promise<void> => {
-    return authFetch(`/api/expedientes?t=${Date.now()}`)
+  const cargarExpedientes = (force: boolean = false): Promise<void> => {
+    return authFetch(`/api/expedientes?t=${Date.now()}${force ? "&force=1" : ""}`)
       .then(async (res) => {
         if (!res.ok) {
           if (res.status === 401) {
@@ -851,10 +902,10 @@ export default function App() {
       });
   };
 
-  const cargarInteresados = (): Promise<void> => {
+  const cargarInteresados = (force: boolean = false): Promise<void> => {
     const rolesAutorizados = ["comercial", "administrador", "planeacion", "supervisor", "asistente"];
     if (!currentUser || !rolesAutorizados.includes(currentUser.rol)) return Promise.resolve();
-    return authFetch(`/api/interesados?t=${Date.now()}`)
+    return authFetch(`/api/interesados?t=${Date.now()}${force ? "&force=1" : ""}`)
       .then(async (res) => {
         if (!res.ok) {
           if (res.status === 401) {
@@ -998,9 +1049,9 @@ export default function App() {
     // 2. Consulta y recarga atómica desde backend con anti-caché garantizado
     const idAconsultar = targetExpedienteId !== undefined ? targetExpedienteId : expedienteSeleccionadoId;
     await Promise.allSettled([
-      cargarExpedientes(),
+      cargarExpedientes(true),
       currentUser && ["comercial", "administrador", "planeacion", "supervisor", "asistente"].includes(currentUser.rol)
-        ? cargarInteresados()
+        ? cargarInteresados(true)
         : Promise.resolve(),
       cargarUsuarios(),
       cargarOrigenesCaptacion(),
@@ -1093,7 +1144,7 @@ export default function App() {
         setArchivoAdjuntoNuevoReq(null);
         mostrarToast(data.mensaje || `Archivo adicional "${formNuevoRequisito.nombre}" registrado y cargado exitosamente en Fase ${formNuevoRequisito.fase}.`);
         await cargarDetalleExpediente(detalleExp.expediente.id);
-        await cargarExpedientes();
+        void cargarExpedientes();
       } else {
         setErrorNuevoRequisito(data.error || "No fue posible agregar el requisito.");
       }
@@ -1120,7 +1171,7 @@ export default function App() {
           if (res.ok) {
             mostrarToast("Requisito eliminado correctamente.");
             await cargarDetalleExpediente(detalleExp.expediente.id);
-            await cargarExpedientes();
+            void cargarExpedientes();
           } else {
             const data = await res.json();
             mostrarToast(data.error || "No fue posible eliminar el requisito.", "error");
@@ -1150,7 +1201,7 @@ export default function App() {
           if (res.ok) {
             mostrarToast(data.mensaje || "Integrante y documento de identidad removidos exitosamente.");
             await cargarDetalleExpediente(detalleExp.expediente.id);
-            await cargarExpedientes();
+            void cargarExpedientes();
           } else {
             mostrarToast(data.error || "No fue posible eliminar el integrante.", "error");
           }
@@ -1196,8 +1247,8 @@ export default function App() {
               : e
           )
         );
-        await cargarDetalleExpediente(detalleExp.expediente.id);
-        await cargarExpedientes();
+        void cargarDetalleExpediente(detalleExp.expediente.id);
+        void cargarExpedientes();
       } else {
         mostrarToast(data.error || "No fue posible enviar a revisión.", "error");
       }
@@ -1224,7 +1275,7 @@ export default function App() {
         mostrarToast(data.mensaje || "Fase 2 aprobada con éxito. Avanzó a Fase 3.");
         setTabRequisitos(3);
         await cargarDetalleExpediente(detalleExp.expediente.id);
-        await cargarExpedientes();
+        void cargarExpedientes();
       } else {
         mostrarToast(data.error || "No fue posible aprobar la Fase 2.", "error");
       }
@@ -1252,7 +1303,7 @@ export default function App() {
         setTextoDevolucionFase2("");
         mostrarToast(data.mensaje || "Expediente devuelto al Gestor Documental con observaciones.");
         await cargarDetalleExpediente(detalleExp.expediente.id);
-        await cargarExpedientes();
+        void cargarExpedientes();
       } else {
         mostrarToast(data.error || "No fue posible devolver el expediente.", "error");
       }
@@ -1280,7 +1331,7 @@ export default function App() {
         setTextoDevolucionFase1("");
         mostrarToast(data.mensaje || "Expediente devuelto a Gestor Rural con observaciones.");
         await cargarDetalleExpediente(detalleExp.expediente.id);
-        await cargarExpedientes();
+        void cargarExpedientes();
       } else {
         mostrarToast(data.error || "No fue posible devolver el expediente.", "error");
       }
@@ -1311,7 +1362,7 @@ export default function App() {
         setMotivoReasignacion("");
         mostrarToast(data.mensaje || "Responsable general reasignado exitosamente.");
         await cargarDetalleExpediente(detalleExp.expediente.id);
-        await cargarExpedientes();
+        void cargarExpedientes();
       } else {
         mostrarToast(data.error || "No fue posible reasignar el expediente.", "error");
       }
@@ -1343,7 +1394,7 @@ export default function App() {
             mostrarToast(data.mensaje || `Expediente avanzado a Fase ${faseDestino}.`);
             setTabRequisitos(faseDestino);
             await cargarDetalleExpediente(detalleExp.expediente.id);
-            await cargarExpedientes();
+            void cargarExpedientes();
           } else {
             mostrarToast(data.error || "No fue posible avanzar de fase.", "error");
           }
@@ -1792,12 +1843,15 @@ export default function App() {
           }
         }
 
-        archivoDataUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = (err) => reject(err);
-          reader.readAsDataURL(archivoParaCargar);
-        });
+        // Solo codificar a Base64 como respaldo si la subida directa a Supabase Storage no obtuvo URL pública
+        if (!publicStorageUrl) {
+          archivoDataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = (err) => reject(err);
+            reader.readAsDataURL(archivoParaCargar);
+          });
+        }
       }
 
       const res = await authFetch(`/api/expedientes/${expedienteSeleccionadoId}/hogar/agregar-cedula`, {
@@ -1834,7 +1888,7 @@ export default function App() {
         });
         mostrarToast("Integrante y documento de cédula agregados exitosamente al hogar.");
         await cargarDetalleExpediente(expedienteSeleccionadoId);
-        await cargarExpedientes();
+        void cargarExpedientes();
       } else {
         const err = await res.json().catch(() => ({}));
         setErrorAgregarCedula(err.error || "Error al agregar cédula.");
@@ -1908,12 +1962,13 @@ export default function App() {
         nombreParaSubida = generarNombreArchivoCedulaEstandar(pNombre, pId, ext, esPostulante);
       }
 
-      // Si el cliente supabase de frontend está disponible, asegurar subida directa a Storage en Supabase
+      // Si el cliente supabase de frontend está disponible, realizar subida directa a Storage sin duplicar en Base64
       let publicStorageUrl: string | undefined = undefined;
+      let rutaStorageFrontend: string | undefined = undefined;
       if (supabase) {
         try {
           const timestampSubida = new Date().getTime();
-          const rutaStorageFrontend = esCedulaReq
+          rutaStorageFrontend = esCedulaReq
             ? `expedientes/${expedienteSeleccionadoId}/cedulas/${nombreParaSubida}`
             : `expedientes/${expedienteSeleccionadoId}/${requisito.codigoRequisito}_v${timestampSubida}_${archivoParaCargar.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
           const { error: storageErr } = await supabase.storage
@@ -1937,13 +1992,16 @@ export default function App() {
         }
       }
 
-      // Convertir archivo a Data URL base64 real
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = (err) => reject(err);
-        reader.readAsDataURL(archivoParaCargar);
-      });
+      // Solo convertir el archivo a Data URL Base64 si falló la subida directa a Supabase Storage (fallback seguro)
+      let dataUrl: string | undefined = undefined;
+      if (!publicStorageUrl) {
+        dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = (err) => reject(err);
+          reader.readAsDataURL(archivoParaCargar);
+        });
+      }
 
       // Generar huella SHA256 determinista visual
       const sha256Hash = `sha256-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 10)}${archivoParaCargar.size.toString(16)}`;
@@ -1959,6 +2017,7 @@ export default function App() {
             tamanoBytes: archivoParaCargar.size,
             archivoDataUrl: dataUrl,
             url: publicStorageUrl,
+            storagePath: rutaStorageFrontend,
             sha256Hash,
             codigoRequisito: requisito.codigoRequisito,
             fase: requisito.fase,
@@ -1980,9 +2039,14 @@ export default function App() {
             if (!prev) return prev;
             const reqsActualizados = prev.requisitos.map((r) => {
               if (r.id === requisito.id) {
+                const nuevoEstado =
+                  respJson.requisito?.estado ||
+                  (r.documentoAsociado?.versionActual || r.estado === "con_observaciones" || r.estado === "rechazado"
+                    ? ("actualizado" as const)
+                    : ("recibido_revision" as const));
                 return {
                   ...r,
-                  estado: (prev.expediente.faseActual >= 3 || r.documentoAsociado?.versionActual) ? ("actualizado" as const) : ("recibido_revision" as const),
+                  estado: nuevoEstado,
                   observaciones: undefined,
                   ultimaRevision: undefined,
                   documentoAsociado: respJson.documento
@@ -1997,9 +2061,9 @@ export default function App() {
           });
         }
 
-        // Forzar re-fetch inmediato y reactivo de la lista de documentos y estado del expediente
-        await cargarDetalleExpediente(expedienteSeleccionadoId);
-        await cargarExpedientes();
+        // Revalidar detalle y listado en segundo plano sin bloquear el cierre del modal ni el spinner
+        void cargarDetalleExpediente(expedienteSeleccionadoId);
+        void cargarExpedientes();
       } else {
         let msg = "";
         try {
@@ -2242,8 +2306,8 @@ export default function App() {
         setArchivoSeleccionadoSubir(null);
         setFotosParaRegistro([]);
         mostrarToast(`Registro fotográfico de ${fotosSubir.length} fotos guardado exitosamente.`);
-        await cargarDetalleExpediente(expedienteSeleccionadoId);
-        await cargarExpedientes();
+        void cargarDetalleExpediente(expedienteSeleccionadoId);
+        void cargarExpedientes();
       } else {
         const err = await res.json().catch(() => ({}));
         setErrorSubirArchivo(
@@ -2287,8 +2351,8 @@ export default function App() {
         setModalSubirArchivoReq(null);
         setArchivoSeleccionadoSubir(null);
         mostrarToast(`Documento ${nombreArchivo} subido correctamente.`);
-        await cargarDetalleExpediente(expedienteSeleccionadoId);
-        await cargarExpedientes();
+        void cargarDetalleExpediente(expedienteSeleccionadoId);
+        void cargarExpedientes();
       } else {
         const err = await res.json().catch(() => ({}));
         setErrorSubirArchivo(
@@ -2361,8 +2425,8 @@ export default function App() {
             )
           };
         });
-        await cargarDetalleExpediente(expedienteSeleccionadoId);
-        await cargarExpedientes();
+        void cargarDetalleExpediente(expedienteSeleccionadoId);
+        void cargarExpedientes();
       } else {
         const err = await res.json().catch(() => ({}));
         const mensajeError = err.error || "Error al registrar la revisión del requisito.";
@@ -2399,7 +2463,7 @@ export default function App() {
         mostrarToast(data.mensaje || "Fase 1 aprobada con éxito. Expediente avanzó a Fase 2.");
         setTabRequisitos(2);
         await cargarDetalleExpediente(expedienteSeleccionadoId);
-        await cargarExpedientes();
+        void cargarExpedientes();
       } else {
         setErrorAprobar(data.error || "No se pudo aprobar la Fase 1.");
       }
@@ -3681,18 +3745,37 @@ export default function App() {
                             )}
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setExpedienteSeleccionadoId(exp.id);
-                                setTabRequisitos(exp.faseActual || 1);
-                              }}
-                              className="inline-flex items-center space-x-1 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-bold transition-colors cursor-pointer border border-blue-200"
-                              title={`Continuar en Fase ${exp.faseActual}`}
-                            >
-                              <span>Continuar</span>
-                              <ChevronRight className="w-3.5 h-3.5" />
-                            </button>
+                            <div className="flex items-center justify-end space-x-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setExpedienteSeleccionadoId(exp.id);
+                                  setTabRequisitos(exp.faseActual || 1);
+                                }}
+                                className="inline-flex items-center space-x-1 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-bold transition-colors cursor-pointer border border-blue-200"
+                                title={`Continuar en Fase ${exp.faseActual}`}
+                              >
+                                <span>Continuar</span>
+                                <ChevronRight className="w-3.5 h-3.5" />
+                              </button>
+                              {currentUser.rol === "administrador" && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setExpedienteAEliminar({
+                                      id: exp.id,
+                                      codigo: exp.codigoVisible || exp.id,
+                                      postulante: obtenerNombrePostulante(exp.postulante)
+                                    });
+                                  }}
+                                  className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 rounded-lg text-xs font-bold transition-colors cursor-pointer border border-rose-200"
+                                  title="Borrar este expediente de Supabase y del sistema (Administrador)"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -4334,6 +4417,25 @@ export default function App() {
                     <FileText className="w-4 h-4 text-slate-700" />
                     <span>Ficha Técnica Oficial</span>
                   </button>
+
+                  {/* BOTÓN BORRAR EXPEDIENTE INDIVIDUAL (ADMINISTRADOR) */}
+                  {currentUser.rol === "administrador" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExpedienteAEliminar({
+                          id: detalleExp.expediente.id,
+                          codigo: detalleExp.expediente.codigoVisible || detalleExp.expediente.id,
+                          postulante: obtenerNombrePostulante(detalleExp.expediente.postulante)
+                        });
+                      }}
+                      className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-xl text-xs font-bold shadow-2xs flex items-center space-x-1.5 transition-colors cursor-pointer"
+                      title="Borrar este expediente de Supabase y del sistema (Administrador)"
+                    >
+                      <Trash2 className="w-4 h-4 text-rose-600" />
+                      <span>Borrar Expediente</span>
+                    </button>
+                  )}
 
                   {/* BOTÓN SOLICITAR RECHAZO DEL HOGAR (CUALQUIER FASE 1 A 7) - EXCLUYE PLANEACIÓN */}
                   {!esSalidaDefinitiva && currentUser.rol !== "planeacion" && detalleExp.expediente.solicitudRechazo?.estado !== "pendiente" && (() => {
@@ -8944,6 +9046,63 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIRMACIÓN DE ELIMINACIÓN DE EXPEDIENTE (SOLO ADMINISTRADOR) */}
+      {expedienteAEliminar && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center space-x-3 text-rose-600">
+              <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Eliminar Expediente</h3>
+                <p className="text-xs text-rose-700 font-medium">Esta acción eliminará los datos en Supabase</p>
+              </div>
+            </div>
+
+            <div className="bg-rose-50/70 border border-rose-100 rounded-xl p-3.5 text-xs text-slate-700 space-y-2">
+              <p>
+                ¿Está seguro de que desea borrar permanentemente el expediente{" "}
+                <strong className="text-slate-900 font-mono">{expedienteAEliminar.codigo}</strong> de{" "}
+                <strong className="text-slate-900">{expedienteAEliminar.postulante}</strong>?
+              </p>
+              <p className="text-slate-500 text-[11px] leading-relaxed">
+                Se eliminarán sus requisitos, documentos, historial de versiones y revisiones asociadas únicamente a este expediente en Supabase PostgreSQL. Los demás expedientes no se verán afectados.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setExpedienteAEliminar(null)}
+                disabled={eliminandoExpediente}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmarEliminarExpediente}
+                disabled={eliminandoExpediente}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center space-x-1.5 shadow-xs disabled:opacity-50"
+              >
+                {eliminandoExpediente ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Eliminando de Supabase...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Confirmar Eliminación</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

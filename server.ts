@@ -3215,135 +3215,165 @@ export async function createApp(): Promise<express.Express> {
     res.json(CATALOGO_MUNICIPIOS);
   });
 
-  // 3. LISTADO GENERAL Y CONSULTA UNIVERSAL DEL ESTADO (CON HIDRATACIÓN DESDE SUPABASE)
+  // Control de caché SWR (Stale-While-Revalidate) para hidratación rápida de listados
+  let lastExpedientesHydrationMs = 0;
+  let isHydratingExpedientes = false;
+  let lastInteresadosHydrationMs = 0;
+  let isHydratingInteresados = false;
+  const LIST_HYDRATION_TTL_MS = 8000;
+
+  // Invalidar caché de lectura automáticamente ante cualquier mutación (POST, PUT, PATCH, DELETE)
+  app.use("/api", (req: Request, _res: Response, next: express.NextFunction) => {
+    if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
+      lastExpedientesHydrationMs = 0;
+      lastInteresadosHydrationMs = 0;
+    }
+    next();
+  });
+
+  const ejecutarHidratacionExpedientes = async () => {
+    if (!supabaseAdmin || isHydratingExpedientes) return;
+    isHydratingExpedientes = true;
+    try {
+      const { data: dbRows, error: sbErr } = await supabaseAdmin
+        .from("expedientes")
+        .select(`
+          *,
+          postulante:personas!expedientes_postulante_id_fkey(*),
+          predio:predios!expedientes_predio_vivienda_id_fkey(*),
+          hogar:hogares!expedientes_hogar_id_fkey(
+            id,
+            observaciones,
+            integrantes:integrantes_hogar(
+              id,
+              parentesco,
+              es_postulante_principal,
+              persona:personas(*)
+            )
+          ),
+          comercial:perfiles_usuario!expedientes_comercial_origen_id_fkey(id, nombre_completo, username, rol),
+          responsable:perfiles_usuario!expedientes_responsable_general_id_fkey(id, nombre_completo, username, rol)
+        `)
+        .order("creado_en", { ascending: false });
+
+      if (!sbErr && Array.isArray(dbRows)) {
+        const idsEnDb = new Set(dbRows.map((r: any) => r.id));
+        const codigosEnDb = new Set(dbRows.map((r: any) => r.codigo_visible).filter(Boolean));
+
+        for (const row of dbRows) {
+          const index = mockDb.expedientes.findIndex(
+            (e) => e.id === row.id || (row.codigo_visible && e.codigoVisible === row.codigo_visible)
+          );
+          if (index !== -1) {
+            // 1.1 Si ya existe, sincronizar campos actualizados desde la base de datos
+            const expExistente = mockDb.expedientes[index];
+            const dbFase = Number(row.fase_actual);
+            if (dbFase) expExistente.faseActual = Math.max(expExistente.faseActual || 1, dbFase);
+            if (row.estado_general) expExistente.estadoGeneral = row.estado_general;
+            if (row.actualizado_en) expExistente.actualizadoEn = row.actualizado_en;
+            if (row.validacion_compensar) {
+              expExistente.validacionCompensar = row.validacion_compensar;
+              if (row.validacion_compensar.subsanacionFase3Activa !== undefined) {
+                expExistente.subsanacionFase3Activa = Boolean(row.validacion_compensar.subsanacionFase3Activa);
+              }
+              if (row.validacion_compensar.subsanacionFase3Estado !== undefined) {
+                expExistente.subsanacionFase3Estado = row.validacion_compensar.subsanacionFase3Estado;
+              }
+              if (row.validacion_compensar.subsanacionFase3ObservacionAnalista !== undefined) {
+                expExistente.subsanacionFase3ObservacionAnalista = row.validacion_compensar.subsanacionFase3ObservacionAnalista;
+              }
+              if (row.validacion_compensar.subsanacionFase3DocumentosModificados !== undefined) {
+                expExistente.subsanacionFase3DocumentosModificados = row.validacion_compensar.subsanacionFase3DocumentosModificados;
+              }
+            }
+            if (row.gestion_fase4) {
+              inicializarFase4(expExistente);
+              expExistente.gestionFase4 = {
+                interventoria: {
+                  ...(row.gestion_fase4.interventoria || {}),
+                  ...(expExistente.gestionFase4?.interventoria || {})
+                },
+                arquitectura: {
+                  ...(row.gestion_fase4.arquitectura || {}),
+                  ...(expExistente.gestionFase4?.arquitectura || {})
+                },
+                estudioSuelos: {
+                  ...(row.gestion_fase4.estudioSuelos || {}),
+                  ...(expExistente.gestionFase4?.estudioSuelos || {})
+                },
+                informeVisitaFrancoOsorio: expExistente.gestionFase4?.informeVisitaFrancoOsorio || row.gestion_fase4.informeVisitaFrancoOsorio,
+                actualizadoEn: expExistente.gestionFase4?.actualizadoEn || row.gestion_fase4.actualizadoEn || new Date().toISOString()
+              };
+            }
+            if (row.tramite_licencia) expExistente.tramiteLicencia = row.tramite_licencia;
+            if (row.postulacion_subsidio) expExistente.postulacionSubsidio = row.postulacion_subsidio;
+            if (row.gestion_fase7) expExistente.gestionFase7 = row.gestion_fase7;
+            if (row.bloqueado_por_revision !== undefined) expExistente.bloqueadoPorRevision = Boolean(row.bloqueado_por_revision);
+            if (row.estado_fase1) expExistente.estadoFase1 = row.estado_fase1;
+            if (row.estado_fase2) expExistente.estadoFase2 = row.estado_fase2;
+            if (row.motivo_devolucion_fase !== undefined) expExistente.motivoDevolucionFase = row.motivo_devolucion_fase || undefined;
+            if (row.observacion_devolucion_fase2 !== undefined) expExistente.observacionDevolucionFase2 = row.observacion_devolucion_fase2 || undefined;
+            if (row.revision_fases) expExistente.revisionFases = row.revision_fases;
+            if (expExistente.validacionCompensar?.estadoActual === "aprobado" && expExistente.faseActual < 4) {
+              expExistente.faseActual = 4;
+              expExistente.bloqueadoPorRevision = false;
+            }
+            if (row.postulante) {
+              if (row.postulante.telefono_principal) expExistente.postulante.telefonoPrincipal = row.postulante.telefono_principal;
+              if (row.postulante.telefono_secundario) expExistente.postulante.telefonoSecundario = row.postulante.telefono_secundario;
+              if (row.postulante.correo) expExistente.postulante.correo = row.postulante.correo;
+              if (row.postulante.nombres) expExistente.postulante.nombres = row.postulante.nombres;
+              if (row.postulante.primer_apellido) expExistente.postulante.primerApellido = row.postulante.primer_apellido;
+            }
+            if (row.predio) {
+              if (row.predio.vereda) expExistente.predioVivienda.vereda = row.predio.vereda;
+              if (row.predio.nombre_o_direccion) expExistente.predioVivienda.nombreODireccion = row.predio.nombre_o_direccion;
+            }
+          } else {
+            // 1.2 Si fue creado directamente en la base de datos Supabase, incorporarlo inmediatamente
+            const nuevoExp = mapearFilaSupabaseAExpediente(row);
+            inicializarRequisitosFase1(nuevoExp);
+            if (nuevoExp.faseActual >= 2) inicializarRequisitosFase2(nuevoExp);
+            if (nuevoExp.faseActual >= 4) inicializarFase4(nuevoExp);
+            if (nuevoExp.faseActual >= 5) inicializarFase5Licencia(nuevoExp);
+            if (nuevoExp.faseActual >= 6) inicializarFase6Postulacion(nuevoExp);
+            if (nuevoExp.faseActual >= 7) inicializarFase7(nuevoExp);
+            mockDb.expedientes.unshift(nuevoExp);
+          }
+        }
+
+        // 1.3 Sincronizar eliminaciones
+        mockDb.expedientes = mockDb.expedientes.filter((e) => {
+          if (!e) return false;
+          const esUuid = Boolean(e.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(e.id));
+          const vinoDeDb = Boolean((e as any)._persistidoEnSupabase);
+          if (esUuid || vinoDeDb) {
+            return idsEnDb.has(e.id) || (e.codigoVisible && codigosEnDb.has(e.codigoVisible));
+          }
+          return Boolean(e.id || e.codigoVisible);
+        });
+        lastExpedientesHydrationMs = Date.now();
+      }
+    } catch (dbErr: any) {
+      console.error("[EXPEDIENTES HIDRATACIÓN ERROR]:", dbErr?.message);
+    } finally {
+      isHydratingExpedientes = false;
+    }
+  };
+
+  // 3. LISTADO GENERAL Y CONSULTA UNIVERSAL DEL ESTADO (CON HIDRATACIÓN SWR DESDE SUPABASE)
   app.get("/api/expedientes", requireAuth(), async (req: AuthRequest, res: Response) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
-    // 1. Hidratación bidireccional desde Supabase si el servicio está activo
+
     if (supabaseAdmin) {
-      try {
-        const { data: dbRows, error: sbErr } = await supabaseAdmin
-          .from("expedientes")
-          .select(`
-            *,
-            postulante:personas!expedientes_postulante_id_fkey(*),
-            predio:predios!expedientes_predio_vivienda_id_fkey(*),
-            hogar:hogares!expedientes_hogar_id_fkey(
-              id,
-              observaciones,
-              integrantes:integrantes_hogar(
-                id,
-                parentesco,
-                es_postulante_principal,
-                persona:personas(*)
-              )
-            ),
-            comercial:perfiles_usuario!expedientes_comercial_origen_id_fkey(id, nombre_completo, username, rol),
-            responsable:perfiles_usuario!expedientes_responsable_general_id_fkey(id, nombre_completo, username, rol)
-          `)
-          .order("creado_en", { ascending: false });
-
-        if (!sbErr && Array.isArray(dbRows)) {
-          const idsEnDb = new Set(dbRows.map((r: any) => r.id));
-          const codigosEnDb = new Set(dbRows.map((r: any) => r.codigo_visible).filter(Boolean));
-
-          for (const row of dbRows) {
-            const index = mockDb.expedientes.findIndex(
-              (e) => e.id === row.id || (row.codigo_visible && e.codigoVisible === row.codigo_visible)
-            );
-            if (index !== -1) {
-              // 1.1 Si ya existe, sincronizar campos actualizados desde la base de datos
-              const expExistente = mockDb.expedientes[index];
-              const dbFase = Number(row.fase_actual);
-              if (dbFase) expExistente.faseActual = Math.max(expExistente.faseActual || 1, dbFase);
-              if (row.estado_general) expExistente.estadoGeneral = row.estado_general;
-              if (row.actualizado_en) expExistente.actualizadoEn = row.actualizado_en;
-              if (row.validacion_compensar) {
-                expExistente.validacionCompensar = row.validacion_compensar;
-                if (row.validacion_compensar.subsanacionFase3Activa !== undefined) {
-                  expExistente.subsanacionFase3Activa = Boolean(row.validacion_compensar.subsanacionFase3Activa);
-                }
-                if (row.validacion_compensar.subsanacionFase3Estado !== undefined) {
-                  expExistente.subsanacionFase3Estado = row.validacion_compensar.subsanacionFase3Estado;
-                }
-                if (row.validacion_compensar.subsanacionFase3ObservacionAnalista !== undefined) {
-                  expExistente.subsanacionFase3ObservacionAnalista = row.validacion_compensar.subsanacionFase3ObservacionAnalista;
-                }
-                if (row.validacion_compensar.subsanacionFase3DocumentosModificados !== undefined) {
-                  expExistente.subsanacionFase3DocumentosModificados = row.validacion_compensar.subsanacionFase3DocumentosModificados;
-                }
-              }
-              if (row.gestion_fase4) {
-                inicializarFase4(expExistente);
-                expExistente.gestionFase4 = {
-                  interventoria: {
-                    ...(row.gestion_fase4.interventoria || {}),
-                    ...(expExistente.gestionFase4?.interventoria || {})
-                  },
-                  arquitectura: {
-                    ...(row.gestion_fase4.arquitectura || {}),
-                    ...(expExistente.gestionFase4?.arquitectura || {})
-                  },
-                  estudioSuelos: {
-                    ...(row.gestion_fase4.estudioSuelos || {}),
-                    ...(expExistente.gestionFase4?.estudioSuelos || {})
-                  },
-                  informeVisitaFrancoOsorio: expExistente.gestionFase4?.informeVisitaFrancoOsorio || row.gestion_fase4.informeVisitaFrancoOsorio,
-                  actualizadoEn: expExistente.gestionFase4?.actualizadoEn || row.gestion_fase4.actualizadoEn || new Date().toISOString()
-                };
-              }
-              if (row.tramite_licencia) expExistente.tramiteLicencia = row.tramite_licencia;
-              if (row.postulacion_subsidio) expExistente.postulacionSubsidio = row.postulacion_subsidio;
-              if (row.gestion_fase7) expExistente.gestionFase7 = row.gestion_fase7;
-              if (row.bloqueado_por_revision !== undefined) expExistente.bloqueadoPorRevision = Boolean(row.bloqueado_por_revision);
-              if (row.estado_fase1) expExistente.estadoFase1 = row.estado_fase1;
-              if (row.estado_fase2) expExistente.estadoFase2 = row.estado_fase2;
-              if (row.motivo_devolucion_fase !== undefined) expExistente.motivoDevolucionFase = row.motivo_devolucion_fase || undefined;
-              if (row.observacion_devolucion_fase2 !== undefined) expExistente.observacionDevolucionFase2 = row.observacion_devolucion_fase2 || undefined;
-              if (row.revision_fases) expExistente.revisionFases = row.revision_fases;
-              if (expExistente.validacionCompensar?.estadoActual === "aprobado" && expExistente.faseActual < 4) {
-                expExistente.faseActual = 4;
-                expExistente.bloqueadoPorRevision = false;
-              }
-              if (row.postulante) {
-                if (row.postulante.telefono_principal) expExistente.postulante.telefonoPrincipal = row.postulante.telefono_principal;
-                if (row.postulante.telefono_secundario) expExistente.postulante.telefonoSecundario = row.postulante.telefono_secundario;
-                if (row.postulante.correo) expExistente.postulante.correo = row.postulante.correo;
-                if (row.postulante.nombres) expExistente.postulante.nombres = row.postulante.nombres;
-                if (row.postulante.primer_apellido) expExistente.postulante.primerApellido = row.postulante.primer_apellido;
-              }
-              if (row.predio) {
-                if (row.predio.vereda) expExistente.predioVivienda.vereda = row.predio.vereda;
-                if (row.predio.nombre_o_direccion) expExistente.predioVivienda.nombreODireccion = row.predio.nombre_o_direccion;
-              }
-            } else {
-              // 1.2 Si fue creado directamente en la base de datos Supabase, incorporarlo inmediatamente
-              const nuevoExp = mapearFilaSupabaseAExpediente(row);
-              inicializarRequisitosFase1(nuevoExp);
-              if (nuevoExp.faseActual >= 2) inicializarRequisitosFase2(nuevoExp);
-              if (nuevoExp.faseActual >= 4) inicializarFase4(nuevoExp);
-              if (nuevoExp.faseActual >= 5) inicializarFase5Licencia(nuevoExp);
-              if (nuevoExp.faseActual >= 6) inicializarFase6Postulacion(nuevoExp);
-              if (nuevoExp.faseActual >= 7) inicializarFase7(nuevoExp);
-              mockDb.expedientes.unshift(nuevoExp);
-            }
-          }
-
-          // 1.3 Sincronizar eliminaciones: Si Supabase retornó los registros de la base de datos,
-          // purgar de la memoria viva aquellos expedientes que fueron eliminados de Supabase
-          mockDb.expedientes = mockDb.expedientes.filter((e) => {
-            if (!e) return false;
-            const esUuid = Boolean(e.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(e.id));
-            const vinoDeDb = Boolean((e as any)._persistidoEnSupabase);
-            if (esUuid || vinoDeDb) {
-              return idsEnDb.has(e.id) || (e.codigoVisible && codigosEnDb.has(e.codigoVisible));
-            }
-            return Boolean(e.id || e.codigoVisible);
-          });
-        }
-      } catch (dbErr: any) {
-        console.error("[EXPEDIENTES HIDRATACIÓN ERROR]:", dbErr?.message);
+      const forceSync = req.query.force === "1" || mockDb.expedientes.length === 0;
+      const ttlExpired = Date.now() - lastExpedientesHydrationMs >= LIST_HYDRATION_TTL_MS;
+      if (forceSync) {
+        await ejecutarHidratacionExpedientes();
+      } else if (ttlExpired) {
+        void ejecutarHidratacionExpedientes();
       }
     }
 
@@ -3420,135 +3450,146 @@ export async function createApp(): Promise<express.Express> {
     res.json(listado);
   });
 
-  // 4. CAPTACIÓN: INTERESADOS (CON HIDRATACIÓN DESDE SUPABASE)
-  app.get("/api/interesados", requireAuth(["comercial", "asistente", "supervisor", "administrador", "planeacion"]), async (req: AuthRequest, res: Response) => {
-    // 1. Hidratación bidireccional desde Supabase si el servicio está activo
-    if (supabaseAdmin) {
-      try {
-        const { data: dbRows, error: sbErr } = await supabaseAdmin
-          .from("interesados")
-          .select(`*, contactos_apoyo(*)`)
-          .order("creado_en", { ascending: false });
+  const ejecutarHidratacionInteresados = async () => {
+    if (!supabaseAdmin || isHydratingInteresados) return;
+    isHydratingInteresados = true;
+    try {
+      const { data: dbRows, error: sbErr } = await supabaseAdmin
+        .from("interesados")
+        .select(`*, contactos_apoyo(*)`)
+        .order("creado_en", { ascending: false });
 
-        if (!sbErr && Array.isArray(dbRows)) {
-          const idsEnDb = new Set(dbRows.map((r: any) => r.id));
+      if (!sbErr && Array.isArray(dbRows)) {
+        const idsEnDb = new Set(dbRows.map((r: any) => r.id));
 
-          for (const row of dbRows) {
-            const index = mockDb.interesados.findIndex((i) => i.id === row.id);
-            if (index !== -1) {
-              // 1.1 Sincronizar campos actualizados directamente desde Supabase
-              const iExistente = mockDb.interesados[index];
-              const partesNombre = decodificarNombresMetadata(row.resumen_necesidad) || descomponerNombreCompleto(row.nombre_contacto);
-              if (row.nombre_contacto) {
-                iExistente.nombreContacto = row.nombre_contacto;
-                if (
-                  !iExistente.primerApellido ||
-                  iExistente.primerApellido === iExistente.segundoNombre ||
-                  (partesNombre.segundoNombre && iExistente.primerApellido === partesNombre.segundoNombre && partesNombre.primerApellido !== iExistente.primerApellido)
-                ) {
-                  iExistente.primerNombre = partesNombre.primerNombre;
-                  iExistente.segundoNombre = partesNombre.segundoNombre || undefined;
-                  iExistente.primerApellido = partesNombre.primerApellido;
-                  iExistente.segundoApellido = partesNombre.segundoApellido || undefined;
-                }
+        for (const row of dbRows) {
+          const index = mockDb.interesados.findIndex((i) => i.id === row.id);
+          if (index !== -1) {
+            const iExistente = mockDb.interesados[index];
+            const partesNombre = decodificarNombresMetadata(row.resumen_necesidad) || descomponerNombreCompleto(row.nombre_contacto);
+            if (row.nombre_contacto) {
+              iExistente.nombreContacto = row.nombre_contacto;
+              if (
+                !iExistente.primerApellido ||
+                iExistente.primerApellido === iExistente.segundoNombre ||
+                (partesNombre.segundoNombre && iExistente.primerApellido === partesNombre.segundoNombre && partesNombre.primerApellido !== iExistente.primerApellido)
+              ) {
+                iExistente.primerNombre = partesNombre.primerNombre;
+                iExistente.segundoNombre = partesNombre.segundoNombre || undefined;
+                iExistente.primerApellido = partesNombre.primerApellido;
+                iExistente.segundoApellido = partesNombre.segundoApellido || undefined;
               }
-              let cedulaRow = row.numero_identificacion || row.cedula || partesNombre.numeroIdentificacion || undefined;
-              let tipoIdRow = row.tipo_identificacion || partesNombre.tipoIdentificacion || "CC";
-              if (!cedulaRow) {
-                const telLimpio = String(row.telefono || "").replace(/\D/g, "");
-                const persMatch = mockDb.personas.find(
-                  (p) => (telLimpio && p.telefonoPrincipal?.replace(/\D/g, "") === telLimpio) ||
-                         (row.nombre_contacto && normalizarTextoNombre(row.nombre_contacto).includes(normalizarTextoNombre(p.primerApellido || "")))
-                );
-                if (persMatch?.numeroIdentificacion) {
-                  cedulaRow = persMatch.numeroIdentificacion;
-                  if (persMatch.tipoIdentificacion) tipoIdRow = persMatch.tipoIdentificacion as TipoIdentificacion;
-                }
-              }
-              if (cedulaRow) {
-                iExistente.numeroIdentificacion = cedulaRow;
-                iExistente.cedula = cedulaRow;
-              }
-              if (tipoIdRow) iExistente.tipoIdentificacion = tipoIdRow;
-              if (row.telefono) iExistente.telefono = row.telefono;
-              if (row.telefono_secundario || partesNombre.telefonoSecundario) iExistente.telefonoSecundario = row.telefono_secundario || partesNombre.telefonoSecundario;
-              if (row.tiene_whatsapp_secundario !== undefined) iExistente.tieneWhatsappSecundario = Boolean(row.tiene_whatsapp_secundario);
-              if (row.tiene_whatsapp !== undefined) iExistente.tieneWhatsapp = Boolean(row.tiene_whatsapp);
-              if (row.correo !== undefined) iExistente.correo = row.correo || undefined;
-              if (row.departamento_codigo) iExistente.departamentoCodigo = row.departamento_codigo;
-              if (row.municipio_codigo) iExistente.municipioCodigo = row.municipio_codigo;
-              if (row.vereda) iExistente.vereda = row.vereda;
-              if (row.origen_contacto) iExistente.origenContacto = row.origen_contacto;
-              if (row.resumen_necesidad !== undefined) iExistente.resumenNecesidad = limpiarTextoMetadata(row.resumen_necesidad);
-              if (row.estado_comercial) iExistente.estadoComercial = row.estado_comercial;
-              if (row.convertido_a_expediente_id) iExistente.convertidoAExpedienteId = row.convertido_a_expediente_id;
-            } else {
-              // 1.2 Insertar nuevo interesado creado directamente en Supabase
-              const fechaRegMs = new Date(row.creado_en).getTime();
-              const fechaCaducidad = new Date(fechaRegMs + 45 * 24 * 60 * 60 * 1000).toISOString();
-              const partesNombre = decodificarNombresMetadata(row.resumen_necesidad) || descomponerNombreCompleto(row.nombre_contacto);
-              let cedulaRow = row.numero_identificacion || row.cedula || partesNombre.numeroIdentificacion || undefined;
-              let tipoIdRow = row.tipo_identificacion || partesNombre.tipoIdentificacion || "CC";
-              if (!cedulaRow) {
-                const telLimpio = String(row.telefono || "").replace(/\D/g, "");
-                const persMatch = mockDb.personas.find(
-                  (p) => (telLimpio && p.telefonoPrincipal?.replace(/\D/g, "") === telLimpio) ||
-                         (row.nombre_contacto && normalizarTextoNombre(row.nombre_contacto).includes(normalizarTextoNombre(p.primerApellido || "")))
-                );
-                if (persMatch?.numeroIdentificacion) {
-                  cedulaRow = persMatch.numeroIdentificacion;
-                  if (persMatch.tipoIdentificacion) tipoIdRow = persMatch.tipoIdentificacion as TipoIdentificacion;
-                }
-              }
-              mockDb.interesados.unshift({
-                id: row.id,
-                tipoIdentificacion: tipoIdRow,
-                numeroIdentificacion: cedulaRow,
-                cedula: cedulaRow,
-                primerNombre: partesNombre.primerNombre,
-                segundoNombre: partesNombre.segundoNombre || undefined,
-                primerApellido: partesNombre.primerApellido,
-                segundoApellido: partesNombre.segundoApellido || undefined,
-                nombreContacto: row.nombre_contacto || "Sin Nombre",
-                telefono: row.telefono || "",
-                telefonoSecundario: row.telefono_secundario || partesNombre.telefonoSecundario || undefined,
-                tieneWhatsappSecundario: Boolean(row.tiene_whatsapp_secundario),
-                tieneWhatsapp: Boolean(row.tiene_whatsapp),
-                correo: row.correo || undefined,
-                departamentoCodigo: row.departamento_codigo || "25",
-                municipioCodigo: row.municipio_codigo || "25899",
-                vereda: row.vereda || "Rural",
-                origenContacto: row.origen_contacto || "Llamada",
-                resumenNecesidad: limpiarTextoMetadata(row.resumen_necesidad),
-                comercialAsignadoId: row.comercial_asignado_id || "usr-comercial-01",
-                estadoComercial: row.estado_comercial || "nuevo_contacto",
-                convertidoAExpedienteId: row.convertido_a_expediente_id || undefined,
-                creadoEn: row.creado_en,
-                fechaCaducidad,
-                diasExtension: 0,
-                contactosApoyo: Array.isArray(row.contactos_apoyo)
-                  ? row.contactos_apoyo.map((c: any) => ({
-                      id: c.id,
-                      interesadoId: c.interesado_id || row.id,
-                      nombreCompleto: c.nombre_completo,
-                      relacion: c.relacion || "Familiar",
-                      telefono: c.telefono,
-                      tieneWhatsapp: Boolean(c.tiene_whatsapp),
-                      correo: c.correo,
-                      preferenciaContacto: c.preferencia_contacto,
-                      creadoEn: c.creado_en || row.creado_en
-                    }))
-                  : [],
-                documentosAdjuntos: []
-              });
             }
+            let cedulaRow = row.numero_identificacion || row.cedula || partesNombre.numeroIdentificacion || undefined;
+            let tipoIdRow = row.tipo_identificacion || partesNombre.tipoIdentificacion || "CC";
+            if (!cedulaRow) {
+              const telLimpio = String(row.telefono || "").replace(/\D/g, "");
+              const persMatch = mockDb.personas.find(
+                (p) => (telLimpio && p.telefonoPrincipal?.replace(/\D/g, "") === telLimpio) ||
+                       (row.nombre_contacto && normalizarTextoNombre(row.nombre_contacto).includes(normalizarTextoNombre(p.primerApellido || "")))
+              );
+              if (persMatch?.numeroIdentificacion) {
+                cedulaRow = persMatch.numeroIdentificacion;
+                if (persMatch.tipoIdentificacion) tipoIdRow = persMatch.tipoIdentificacion as TipoIdentificacion;
+              }
+            }
+            if (cedulaRow) {
+              iExistente.numeroIdentificacion = cedulaRow;
+              iExistente.cedula = cedulaRow;
+            }
+            if (tipoIdRow) iExistente.tipoIdentificacion = tipoIdRow;
+            if (row.telefono) iExistente.telefono = row.telefono;
+            if (row.telefono_secundario || partesNombre.telefonoSecundario) iExistente.telefonoSecundario = row.telefono_secundario || partesNombre.telefonoSecundario;
+            if (row.tiene_whatsapp_secundario !== undefined) iExistente.tieneWhatsappSecundario = Boolean(row.tiene_whatsapp_secundario);
+            if (row.tiene_whatsapp !== undefined) iExistente.tieneWhatsapp = Boolean(row.tiene_whatsapp);
+            if (row.correo !== undefined) iExistente.correo = row.correo || undefined;
+            if (row.departamento_codigo) iExistente.departamentoCodigo = row.departamento_codigo;
+            if (row.municipio_codigo) iExistente.municipioCodigo = row.municipio_codigo;
+            if (row.vereda) iExistente.vereda = row.vereda;
+            if (row.origen_contacto) iExistente.origenContacto = row.origen_contacto;
+            if (row.resumen_necesidad !== undefined) iExistente.resumenNecesidad = limpiarTextoMetadata(row.resumen_necesidad);
+            if (row.estado_comercial) iExistente.estadoComercial = row.estado_comercial;
+            if (row.convertido_a_expediente_id) iExistente.convertidoAExpedienteId = row.convertido_a_expediente_id;
+          } else {
+            const fechaRegMs = new Date(row.creado_en).getTime();
+            const fechaCaducidad = new Date(fechaRegMs + 45 * 24 * 60 * 60 * 1000).toISOString();
+            const partesNombre = decodificarNombresMetadata(row.resumen_necesidad) || descomponerNombreCompleto(row.nombre_contacto);
+            let cedulaRow = row.numero_identificacion || row.cedula || partesNombre.numeroIdentificacion || undefined;
+            let tipoIdRow = row.tipo_identificacion || partesNombre.tipoIdentificacion || "CC";
+            if (!cedulaRow) {
+              const telLimpio = String(row.telefono || "").replace(/\D/g, "");
+              const persMatch = mockDb.personas.find(
+                (p) => (telLimpio && p.telefonoPrincipal?.replace(/\D/g, "") === telLimpio) ||
+                       (row.nombre_contacto && normalizarTextoNombre(row.nombre_contacto).includes(normalizarTextoNombre(p.primerApellido || "")))
+              );
+              if (persMatch?.numeroIdentificacion) {
+                cedulaRow = persMatch.numeroIdentificacion;
+                if (persMatch.tipoIdentificacion) tipoIdRow = persMatch.tipoIdentificacion as TipoIdentificacion;
+              }
+            }
+            mockDb.interesados.unshift({
+              id: row.id,
+              tipoIdentificacion: tipoIdRow,
+              numeroIdentificacion: cedulaRow,
+              cedula: cedulaRow,
+              primerNombre: partesNombre.primerNombre,
+              segundoNombre: partesNombre.segundoNombre || undefined,
+              primerApellido: partesNombre.primerApellido,
+              segundoApellido: partesNombre.segundoApellido || undefined,
+              nombreContacto: row.nombre_contacto || "Sin Nombre",
+              telefono: row.telefono || "",
+              telefonoSecundario: row.telefono_secundario || partesNombre.telefonoSecundario || undefined,
+              tieneWhatsappSecundario: Boolean(row.tiene_whatsapp_secundario),
+              tieneWhatsapp: Boolean(row.tiene_whatsapp),
+              correo: row.correo || undefined,
+              departamentoCodigo: row.departamento_codigo || "25",
+              municipioCodigo: row.municipio_codigo || "25899",
+              vereda: row.vereda || "Rural",
+              origenContacto: row.origen_contacto || "Llamada",
+              resumenNecesidad: limpiarTextoMetadata(row.resumen_necesidad),
+              comercialAsignadoId: row.comercial_asignado_id || "usr-comercial-01",
+              estadoComercial: row.estado_comercial || "nuevo_contacto",
+              convertidoAExpedienteId: row.convertido_a_expediente_id || undefined,
+              creadoEn: row.creado_en,
+              fechaCaducidad,
+              diasExtension: 0,
+              contactosApoyo: Array.isArray(row.contactos_apoyo)
+                ? row.contactos_apoyo.map((c: any) => ({
+                    id: c.id,
+                    interesadoId: c.interesado_id || row.id,
+                    nombreCompleto: c.nombre_completo,
+                    relacion: c.relacion || "Familiar",
+                    telefono: c.telefono,
+                    tieneWhatsapp: Boolean(c.tiene_whatsapp),
+                    correo: c.correo,
+                    preferenciaContacto: c.preferencia_contacto,
+                    creadoEn: c.creado_en || row.creado_en
+                  }))
+                : [],
+              documentosAdjuntos: []
+            });
           }
-
-          // 1.3 Eliminar interesados que ya no existan en Supabase
-          mockDb.interesados = mockDb.interesados.filter((i) => idsEnDb.has(i.id));
         }
-      } catch (dbErr: any) {
-        console.error("[INTERESADOS HIDRATACIÓN ERROR]:", dbErr?.message);
+
+        mockDb.interesados = mockDb.interesados.filter((i) => idsEnDb.has(i.id));
+        lastInteresadosHydrationMs = Date.now();
+      }
+    } catch (dbErr: any) {
+      console.error("[INTERESADOS HIDRATACIÓN ERROR]:", dbErr?.message);
+    } finally {
+      isHydratingInteresados = false;
+    }
+  };
+
+  // 4. CAPTACIÓN: INTERESADOS (CON HIDRATACIÓN SWR DESDE SUPABASE)
+  app.get("/api/interesados", requireAuth(["comercial", "asistente", "supervisor", "administrador", "planeacion"]), async (req: AuthRequest, res: Response) => {
+    if (supabaseAdmin) {
+      const forceSync = req.query.force === "1" || mockDb.interesados.length === 0;
+      const ttlExpired = Date.now() - lastInteresadosHydrationMs >= LIST_HYDRATION_TTL_MS;
+      if (forceSync) {
+        await ejecutarHidratacionInteresados();
+      } else if (ttlExpired) {
+        void ejecutarHidratacionInteresados();
       }
     }
     const ahora = Date.now();
@@ -4384,11 +4425,57 @@ export async function createApp(): Promise<express.Express> {
         }
 
         if (expUuid) {
-          const { data: dbExpRow } = await supabaseAdmin
-            .from("expedientes")
-            .select("*")
-            .eq("id", expUuid)
-            .maybeSingle();
+          // Ejecutar en paralelo la hidratación de expediente, documentos y requisitos para minimizar latencia
+          const [expRowRes, docsRes, reqsRes] = await Promise.all([
+            supabaseAdmin
+              .from("expedientes")
+              .select("*")
+              .eq("id", expUuid)
+              .maybeSingle(),
+            supabaseAdmin
+              .from("documentos")
+              .select(`
+                id,
+                titulo,
+                expediente_id,
+                persona_id,
+                versiones:versiones_documento(
+                  id,
+                  documento_id,
+                  version_numero,
+                  storage_path,
+                  nombre_archivo_original,
+                  mime_type,
+                  tamano_bytes,
+                  sha256_hash,
+                  subido_por,
+                  subido_en,
+                  url_publica
+                )
+              `)
+              .eq("expediente_id", expUuid),
+            supabaseAdmin
+              .from("requisitos_caso")
+              .select(`
+                id,
+                codigo_requisito,
+                nombre,
+                persona_id,
+                fase,
+                estado,
+                es_obligatorio,
+                evidencias:evidencias_requisito(
+                  id,
+                  version_documento_id
+                )
+              `)
+              .eq("expediente_id", expUuid)
+          ]);
+
+          const dbExpRow = expRowRes.data;
+          const dbDocs = docsRes.data;
+          const dbReqs = reqsRes.data;
+
           if (dbExpRow) {
             if (dbExpRow.fase_actual) exp.faseActual = Number(dbExpRow.fase_actual);
             if (dbExpRow.estado_general) exp.estadoGeneral = dbExpRow.estado_general;
@@ -4420,48 +4507,6 @@ export async function createApp(): Promise<express.Express> {
             if (dbExpRow.solicitud_rechazo) exp.solicitudRechazo = dbExpRow.solicitud_rechazo;
             if (dbExpRow.historial_solicitudes_rechazo) exp.historialSolicitudesRechazo = dbExpRow.historial_solicitudes_rechazo;
           }
-
-          // 1. Obtener documentos y sus versiones desde Supabase
-          const { data: dbDocs } = await supabaseAdmin
-            .from("documentos")
-            .select(`
-              id,
-              titulo,
-              expediente_id,
-              persona_id,
-              versiones:versiones_documento(
-                id,
-                documento_id,
-                version_numero,
-                storage_path,
-                nombre_archivo_original,
-                mime_type,
-                tamano_bytes,
-                sha256_hash,
-                subido_por,
-                subido_en,
-                url_publica
-              )
-            `)
-            .eq("expediente_id", expUuid);
-
-          // 2. Obtener requisitos_caso y evidencias desde Supabase
-          const { data: dbReqs } = await supabaseAdmin
-            .from("requisitos_caso")
-            .select(`
-              id,
-              codigo_requisito,
-              nombre,
-              persona_id,
-              fase,
-              estado,
-              es_obligatorio,
-              evidencias:evidencias_requisito(
-                id,
-                version_documento_id
-              )
-            `)
-            .eq("expediente_id", expUuid);
 
           if (Array.isArray(dbDocs) && dbDocs.length > 0) {
             dbDocs.forEach((dRow: any) => {
@@ -4984,7 +5029,7 @@ export async function createApp(): Promise<express.Express> {
           }
         }
 
-        const { nombreArchivo, mimeType, tamanoBytes, contenidoSimulado, archivoDataUrl, sha256Hash, fotos } = req.body || {};
+        const { nombreArchivo, mimeType, tamanoBytes, contenidoSimulado, archivoDataUrl, url: reqUrl, storagePath: reqStoragePath, sha256Hash, fotos } = req.body || {};
         if (!nombreArchivo && (!fotos || !fotos.length)) {
           res.status(400).json({ error: "Nombre de archivo o fotografías obligatorias." });
           return;
@@ -5096,10 +5141,18 @@ export async function createApp(): Promise<express.Express> {
           storagePath = `expedientes/${exp.id}/cedulas/${nombreEstandarizado}`;
         }
 
-        // 3. Persistir archivo de inmediato en almacenamiento resiliente (disco local + Supabase Storage)
+        if (reqStoragePath && typeof reqStoragePath === "string") {
+          storagePath = reqStoragePath;
+        }
+
+        // 3. Persistir archivo: Si ya se subió directamente desde el cliente a Supabase Storage (reqUrl), usar esa URL sin duplicar subida
         const tsBuster = `t=${Date.now()}`;
         let publicUrlFinal = `/uploads/${storagePath}?${tsBuster}`;
-        if (archivoDataUrl && typeof archivoDataUrl === "string") {
+        if (reqUrl && typeof reqUrl === "string" && (reqUrl.startsWith("http://") || reqUrl.startsWith("https://"))) {
+          publicUrlFinal = reqUrl.includes("t=")
+            ? reqUrl
+            : `${reqUrl}${reqUrl.includes("?") ? "&" : "?"}${tsBuster}`;
+        } else if (archivoDataUrl && typeof archivoDataUrl === "string") {
           const mimeFinal =
             mimeType ||
             (extFinal === "xlsx"
@@ -5124,20 +5177,21 @@ export async function createApp(): Promise<express.Express> {
           }
         }
 
-        // Si son fotos de registro predial en lote, persistir cada una
+        // Si son fotos de registro predial en lote, persistir en paralelo aquellas que aún vengan en base64
         if (fotosArr && fotosArr.length > 0) {
-          for (let i = 0; i < fotosArr.length; i++) {
-            const foto = fotosArr[i];
-            if (foto.url && typeof foto.url === "string" && foto.url.startsWith("data:")) {
-              const fotoPath = `expedientes/${exp.id}/fotos/${foto.id}_${(foto.nombre || `foto_${i+1}.jpg`).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-              const fotoUpload = await persistirArchivoEnStorage(fotoPath, foto.url, "image/jpeg");
-              if (fotoUpload.ok && fotoUpload.publicUrl) {
-                foto.url = fotoUpload.publicUrl.includes("t=")
-                  ? fotoUpload.publicUrl
-                  : `${fotoUpload.publicUrl}${fotoUpload.publicUrl.includes("?") ? "&" : "?"}${tsBuster}`;
+          await Promise.all(
+            fotosArr.map(async (foto: any, i: number) => {
+              if (foto.url && typeof foto.url === "string" && foto.url.startsWith("data:")) {
+                const fotoPath = `expedientes/${exp.id}/fotos/${foto.id}_${(foto.nombre || `foto_${i+1}.jpg`).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+                const fotoUpload = await persistirArchivoEnStorage(fotoPath, foto.url, "image/jpeg");
+                if (fotoUpload.ok && fotoUpload.publicUrl) {
+                  foto.url = fotoUpload.publicUrl.includes("t=")
+                    ? fotoUpload.publicUrl
+                    : `${fotoUpload.publicUrl}${fotoUpload.publicUrl.includes("?") ? "&" : "?"}${tsBuster}`;
+                }
               }
-            }
-          }
+            })
+          );
         }
 
         const nuevaVersion: DocVersion = {
@@ -5189,68 +5243,61 @@ export async function createApp(): Promise<express.Express> {
           exp.estadoFase2 = "en_preparacion";
         }
 
-        // Persistencia relacional garantizada en PostgreSQL (esperada antes de confirmar al cliente)
+        // Persistencia relacional optimizada en PostgreSQL (consultas paralelas Promise.all)
         if (supabaseAdmin) {
           try {
-            let subidoPorUuid: string | null = null;
-            if (req.user!.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.user!.id)) {
-              subidoPorUuid = req.user!.id;
-            } else {
-              const { data: usuarioDb } = await supabaseAdmin
+            const resolverUsuarioUuid = async (): Promise<string | null> => {
+              if (req.user!.id && esUuidValido(req.user!.id)) return req.user!.id;
+              const { data: usuarioDb } = await supabaseAdmin!
                 .from("perfiles_usuario")
                 .select("id")
                 .eq("username", String(req.user!.username || req.user!.id).toLowerCase())
                 .maybeSingle();
-              if (usuarioDb?.id) subidoPorUuid = usuarioDb.id;
-            }
-            if (!subidoPorUuid) {
-              const { data: fallbackUser } = await supabaseAdmin
+              if (usuarioDb?.id) return usuarioDb.id;
+              const { data: fallbackUser } = await supabaseAdmin!
                 .from("perfiles_usuario")
                 .select("id")
                 .in("rol", ["supervisor", "administrador", "asistente"])
                 .limit(1)
                 .maybeSingle();
-              if (fallbackUser?.id) subidoPorUuid = fallbackUser.id;
-            }
+              return fallbackUser?.id || null;
+            };
 
-            let expUuid: string | null = null;
-            if (exp.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(exp.id)) {
-              expUuid = exp.id;
-            } else {
-              const { data: expDb } = await supabaseAdmin
+            const resolverExpUuid = async (): Promise<string | null> => {
+              if (exp.id && esUuidValido(exp.id)) return exp.id;
+              const { data: expDb } = await supabaseAdmin!
                 .from("expedientes")
                 .select("id")
                 .eq("codigo_visible", exp.codigoVisible)
                 .maybeSingle();
-              if (expDb?.id) expUuid = expDb.id;
-            }
+              return expDb?.id || null;
+            };
+
+            const [subidoPorUuid, expUuid] = await Promise.all([resolverUsuarioUuid(), resolverExpUuid()]);
 
             if (expUuid && subidoPorUuid) {
-              // 1. Resolver o crear primero el requisito específico en requisitos_caso
-              let reqDbId: string | null = null;
-              if (reqCaso.id && esUuidValido(reqCaso.id)) {
-                const { data: reqPorId } = await supabaseAdmin
-                  .from("requisitos_caso")
-                  .select("id")
-                  .eq("id", reqCaso.id)
-                  .maybeSingle();
-                if (reqPorId?.id) reqDbId = reqPorId.id;
-              }
-
-              if (!reqDbId && reqCaso.personaId && esUuidValido(reqCaso.personaId)) {
-                const { data: reqPorPersona } = await supabaseAdmin
-                  .from("requisitos_caso")
-                  .select("id")
-                  .eq("expediente_id", expUuid)
-                  .eq("codigo_requisito", reqCaso.codigoRequisito)
-                  .eq("persona_id", reqCaso.personaId)
-                  .limit(1)
-                  .maybeSingle();
-                if (reqPorPersona?.id) reqDbId = reqPorPersona.id;
-              }
-
-              if (!reqDbId) {
-                const { data: reqPorNombre } = await supabaseAdmin
+              // Resolver en paralelo el Requisito en requisitos_caso y el Documento en documentos
+              const resolverReqDbId = async (): Promise<string | null> => {
+                if (reqCaso.id && esUuidValido(reqCaso.id)) {
+                  const { data: reqPorId } = await supabaseAdmin!
+                    .from("requisitos_caso")
+                    .select("id")
+                    .eq("id", reqCaso.id)
+                    .maybeSingle();
+                  if (reqPorId?.id) return reqPorId.id;
+                }
+                if (reqCaso.personaId && esUuidValido(reqCaso.personaId)) {
+                  const { data: reqPorPersona } = await supabaseAdmin!
+                    .from("requisitos_caso")
+                    .select("id")
+                    .eq("expediente_id", expUuid)
+                    .eq("codigo_requisito", reqCaso.codigoRequisito)
+                    .eq("persona_id", reqCaso.personaId)
+                    .limit(1)
+                    .maybeSingle();
+                  if (reqPorPersona?.id) return reqPorPersona.id;
+                }
+                const { data: reqPorNombre } = await supabaseAdmin!
                   .from("requisitos_caso")
                   .select("id")
                   .eq("expediente_id", expUuid)
@@ -5258,23 +5305,21 @@ export async function createApp(): Promise<express.Express> {
                   .eq("nombre", reqCaso.nombre)
                   .limit(1)
                   .maybeSingle();
-                if (reqPorNombre?.id) reqDbId = reqPorNombre.id;
-              }
+                if (reqPorNombre?.id) return reqPorNombre.id;
 
-              if (!reqDbId && reqCaso.codigoRequisito !== "F1-03") {
-                const { data: reqPorCodigo } = await supabaseAdmin
-                  .from("requisitos_caso")
-                  .select("id")
-                  .eq("expediente_id", expUuid)
-                  .eq("codigo_requisito", reqCaso.codigoRequisito)
-                  .limit(1)
-                  .maybeSingle();
-                if (reqPorCodigo?.id) reqDbId = reqPorCodigo.id;
-              }
+                if (reqCaso.codigoRequisito !== "F1-03") {
+                  const { data: reqPorCodigo } = await supabaseAdmin!
+                    .from("requisitos_caso")
+                    .select("id")
+                    .eq("expediente_id", expUuid)
+                    .eq("codigo_requisito", reqCaso.codigoRequisito)
+                    .limit(1)
+                    .maybeSingle();
+                  if (reqPorCodigo?.id) return reqPorCodigo.id;
+                }
 
-              if (!reqDbId) {
                 const faseNum = Math.min(Math.max(Number(reqCaso.fase) || 1, 1), 7);
-                const { data: nuevoReqDb } = await supabaseAdmin
+                const { data: nuevoReqDb } = await supabaseAdmin!
                   .from("requisitos_caso")
                   .insert([
                     {
@@ -5290,52 +5335,46 @@ export async function createApp(): Promise<express.Express> {
                   ])
                   .select("id")
                   .maybeSingle();
-                reqDbId = nuevoReqDb?.id || null;
-              }
+                return nuevoReqDb?.id || null;
+              };
 
-              if (reqDbId) {
-                reqCaso.id = reqDbId;
-              }
-
-              // 2. Resolver o crear el Documento exclusivo para este requisito en documentos
-              let docDbId: string | null = null;
-              if (doc.id && esUuidValido(doc.id)) {
-                const { data: docPorId } = await supabaseAdmin
-                  .from("documentos")
-                  .select("id")
-                  .eq("id", doc.id)
-                  .maybeSingle();
-                if (docPorId?.id) {
-                  docDbId = docPorId.id;
+              const resolverDocDbId = async (): Promise<string | null> => {
+                if (doc.id && esUuidValido(doc.id)) {
+                  const { data: docPorId } = await supabaseAdmin!
+                    .from("documentos")
+                    .select("id")
+                    .eq("id", doc.id)
+                    .maybeSingle();
+                  if (docPorId?.id) return docPorId.id;
                 }
-              }
-
-              if (!docDbId) {
-                const { data: docExistente } = await supabaseAdmin
+                const { data: docExistente } = await supabaseAdmin!
                   .from("documentos")
                   .select("id")
                   .eq("expediente_id", expUuid)
                   .eq("titulo", doc.titulo)
                   .limit(1)
                   .maybeSingle();
+                if (docExistente?.id) return docExistente.id;
 
-                if (docExistente?.id) {
-                  docDbId = docExistente.id;
-                } else {
-                  const { data: docDb } = await supabaseAdmin
-                    .from("documentos")
-                    .insert([
-                      {
-                        expediente_id: expUuid,
-                        titulo: doc.titulo,
-                        persona_id: doc.personaId && esUuidValido(doc.personaId) ? doc.personaId : null,
-                        predio_id: null
-                      }
-                    ])
-                    .select("id")
-                    .maybeSingle();
-                  docDbId = docDb?.id || null;
-                }
+                const { data: docDb } = await supabaseAdmin!
+                  .from("documentos")
+                  .insert([
+                    {
+                      expediente_id: expUuid,
+                      titulo: doc.titulo,
+                      persona_id: doc.personaId && esUuidValido(doc.personaId) ? doc.personaId : null,
+                      predio_id: null
+                    }
+                  ])
+                  .select("id")
+                  .maybeSingle();
+                return docDb?.id || null;
+              };
+
+              const [reqDbId, docDbId] = await Promise.all([resolverReqDbId(), resolverDocDbId()]);
+
+              if (reqDbId) {
+                reqCaso.id = reqDbId;
               }
 
               if (docDbId) {
@@ -5365,27 +5404,19 @@ export async function createApp(): Promise<express.Express> {
                 }
 
                 if (reqDbId && verDb?.id) {
-                  const { data: evExistente } = await supabaseAdmin
-                    .from("evidencias_requisito")
-                    .select("id")
-                    .eq("requisito_caso_id", reqDbId)
-                    .eq("version_documento_id", verDb.id)
-                    .maybeSingle();
-
-                  if (!evExistente?.id) {
-                    await supabaseAdmin.from("evidencias_requisito").insert([
+                  await Promise.all([
+                    supabaseAdmin.from("evidencias_requisito").insert([
                       {
                         requisito_caso_id: reqDbId,
                         version_documento_id: verDb.id,
                         vinculado_por: subidoPorUuid
                       }
-                    ]);
-                  }
-
-                  await supabaseAdmin
-                    .from("requisitos_caso")
-                    .update({ estado: reqCaso.estado, actualizado_en: new Date().toISOString() })
-                    .eq("id", reqDbId);
+                    ]),
+                    supabaseAdmin
+                      .from("requisitos_caso")
+                      .update({ estado: reqCaso.estado, actualizado_en: new Date().toISOString() })
+                      .eq("id", reqDbId)
+                  ]);
                 }
               }
             }
@@ -5394,8 +5425,8 @@ export async function createApp(): Promise<express.Express> {
           }
         }
 
-        // Sincronizar estado del expediente en Supabase (reflejando documentos modificados en subsanación Fase 3 y timestamps)
-        await sincronizarExpedienteEnSupabase(exp);
+        // Sincronizar estado general del expediente en segundo plano sin bloquear la respuesta HTTP
+        void sincronizarExpedienteEnSupabase(exp);
 
         res.status(201).json({
           success: true,
